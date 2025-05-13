@@ -1,0 +1,3 @@
+/Users/danielcho/Documents/Projects/temp/build/CMakeFiles/main.dir
+/Users/danielcho/Documents/Projects/temp/build/CMakeFiles/edit_cache.dir
+/Users/danielcho/Documents/Projects/temp/build/CMakeFiles/rebuild_cache.dir
