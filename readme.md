@@ -1,24 +1,14 @@
 
-### high level
-
-create a game engine
-- graphics system (cel shading)
-    - realtime rendering (little to no raytracing)
-- physics system (similar to havok)
-- input system (allow keyboard and controller inputs)
+## engine
+- graphics (realtime and path traced)
+- physics 
 
 ### considerations
 
-- mac/console optimizations?
+- mac optimizations?
     - opencl?, eigen
-    - MoltenVK, metal shader language
+    - metal shader language
 
-    - switch to vulkan rather than opengl... 
+### notes
 
-### todo
-
-todo
-- interface quickstart
-- opengl quickstart
-- basic structure
-- testing data orientation 
+- unit tests ... 
