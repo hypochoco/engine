@@ -1,4 +1,8 @@
 
+## dev
+`./compile.sh` to compile
+`./run.sh` to run
+
 ## engine
 - graphics
 - physics 
@@ -10,3 +14,7 @@
 
 ### notes
 - unit tests ... 
+
+
+- consider project directories and such...
+    - resources, libs, src, test, etc.
