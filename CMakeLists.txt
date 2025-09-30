@@ -8,16 +8,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # app
 if (!APPLE)
-    add_executable(main src/graphics/graphics.cpp)
+    add_executable(main src/application.cpp)
 else()
     # For macOS app bundle (optional) — create a .app so MoltenVK frameworks can be embedded
-    add_executable(main MACOSX_BUNDLE src/graphics/graphics.cpp)
+    add_executable(main MACOSX_BUNDLE src/application.cpp)
     set_target_properties(main PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "EngineBundle"
         RESOURCE "${CMAKE_SOURCE_DIR}/resources"
     )
 endif()
+
+# potentially consolidate these packages ... 
 
 # glm
 find_package(glm REQUIRED)
