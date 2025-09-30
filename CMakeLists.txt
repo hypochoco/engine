@@ -21,14 +21,8 @@ endif()
 
 # glm
 find_package(glm REQUIRED)
-include_directories(
-    ${GLM_INCLUDE_DIRS}
-)
-if (APPLE)
-    target_link_libraries(main PRIVATE glm::glm)
-else()
-    target_link_libraries(main PRIVATE glm::glm ${Vulkan_LIBRARIES})
-endif()
+target_link_libraries(main PRIVATE glm::glm)
+target_include_directories(main PRIVATE ${GLM_INCLUDE_DIRS})
 
 # glfw 
 add_subdirectory(external/glfw)
@@ -46,5 +40,8 @@ include_directories(
 target_link_libraries(main PRIVATE Vulkan::Vulkan)
 
 # tiny obj loader
-target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/external/tinyobjloader)
+add_subdirectory(external/tinyobjloader)
 target_link_libraries(main PRIVATE tinyobjloader)
+
+# stb
+target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
