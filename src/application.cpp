@@ -12,8 +12,11 @@
 #include <stdexcept>
 #include <iostream>
 
+// note on memory management here ... 
+
 Application::Application() {
     // constructor
+    graphics = Graphics();
 }
 
 Application::~Application() {
@@ -22,6 +25,7 @@ Application::~Application() {
 
 void Application::run() {
     std::cout << "hello world!" << std::endl;
+    graphics.run();
 }
 
 int main() { // simple application runner

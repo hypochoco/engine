@@ -10,7 +10,12 @@
 
 #pragma once
 
+#include "graphics/graphics.h"
+
 class Application {
+    
+private:
+    Graphics graphics;
     
 public:
     Application();
