@@ -5,22 +5,24 @@
 //  Created by Daniel Cho on 9/30/25.
 //
 
-// note that an runnable app exists here, but this should be abstract
-
 #include "engine/application.h"
 
 #include <stdexcept>
 #include <iostream>
 
-// note on memory management here ... 
+// mvp for graphics
+    // take inputs
+    // render any number of objects (speed depending ...)
 
-Application::Application() {
-    // constructor
+    // going to have to dig into the grapihcs code a little more ...
+
+
+Application::Application() { // constructor
     graphics = Graphics();
 }
 
-Application::~Application() {
-    // destructor
+Application::~Application() { // destructor
+    // cleanup here
 }
 
 void Application::run() {
