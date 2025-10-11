@@ -7,8 +7,34 @@
 // //  minimal vulkan app header
 // //
 
-// notes:
-    // create a camera class eventually
+
+// todo !!!:
+    // pull out object loading elsewhere, multiple objects ... 
+
+// object loading strategies:
+    // (short term) vertex buffer -> pipeline
+    // (long term) staging buffer -> vertex buffer -> pipeline
+
+// todo:
+    // // Pseudocode for deferred deletion
+    //struct PendingDeletion {
+    //    VkBuffer buffer;
+    //    VkDeviceMemory memory;
+    //    VkFence fence;
+    //};
+    //
+    //std::vector<PendingDeletion> deletions;
+    //
+    // // Each frame:
+    //for (auto it = deletions.begin(); it != deletions.end(); ) {
+    //    if (vkGetFenceStatus(device, it->fence) == VK_SUCCESS) {
+    //        vkDestroyBuffer(device, it->buffer, nullptr);
+    //        vkFreeMemory(device, it->memory, nullptr);
+    //        it = deletions.erase(it);
+    //    } else {
+    //        ++it;
+    //    }
+    //}
 
 #pragma once
 

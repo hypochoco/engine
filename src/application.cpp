@@ -10,13 +10,6 @@
 #include <stdexcept>
 #include <iostream>
 
-// mvp for graphics
-    // take inputs
-    // render any number of objects (speed depending ...)
-
-    // going to have to dig into the grapihcs code a little more ...
-
-
 Application::Application() { // constructor
     graphics = Graphics();
 }
