@@ -8,33 +8,33 @@
 // //
 
 
-// todo !!!:
-    // pull out object loading elsewhere, multiple objects ... 
-
-// object loading strategies:
-    // (short term) vertex buffer -> pipeline
-    // (long term) staging buffer -> vertex buffer -> pipeline
-
 // todo:
-    // // Pseudocode for deferred deletion
-    //struct PendingDeletion {
-    //    VkBuffer buffer;
-    //    VkDeviceMemory memory;
-    //    VkFence fence;
-    //};
-    //
-    //std::vector<PendingDeletion> deletions;
-    //
-    // // Each frame:
-    //for (auto it = deletions.begin(); it != deletions.end(); ) {
-    //    if (vkGetFenceStatus(device, it->fence) == VK_SUCCESS) {
-    //        vkDestroyBuffer(device, it->buffer, nullptr);
-    //        vkFreeMemory(device, it->memory, nullptr);
-    //        it = deletions.erase(it);
-    //    } else {
-    //        ++it;
-    //    }
-    //}
+
+    // object loading strategies:
+        // (short term) vertex buffer -> pipeline
+        // (long term) staging buffer -> vertex buffer -> pipeline
+
+    // todo:
+        // // Pseudocode for deferred deletion
+        //struct PendingDeletion {
+        //    VkBuffer buffer;
+        //    VkDeviceMemory memory;
+        //    VkFence fence;
+        //};
+        //
+        //std::vector<PendingDeletion> deletions;
+        //
+        // // Each frame:
+        //for (auto it = deletions.begin(); it != deletions.end(); ) {
+        //    if (vkGetFenceStatus(device, it->fence) == VK_SUCCESS) {
+        //        vkDestroyBuffer(device, it->buffer, nullptr);
+        //        vkFreeMemory(device, it->memory, nullptr);
+        //        it = deletions.erase(it);
+        //    } else {
+        //        ++it;
+        //    }
+        //}
+
 
 #pragma once
 
@@ -62,6 +62,7 @@
 #include <optional>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 // structs
 
@@ -128,11 +129,38 @@ namespace std {
     };
 }
 
+struct Material {
+    std::string name;
+    uint32_t textureIndex;
+};
+
+struct ObjData {
+    std::vector<Material> modelMaterials;
+    std::unordered_map<int, std::vector<Vertex>> uniqueVerticesMap;
+    std::unordered_map<int, std::vector<uint32_t>> uniqueIndicesMap;
+};
+
+struct Submesh {
+    uint32_t firstIndex;
+    uint32_t indexCount;
+    uint32_t firstVertex;
+    uint32_t vertexCount;
+    uint32_t materialIndex;
+};
+
+struct Model {
+    uint32_t firstMaterialIndex;
+    uint32_t materialCount;
+    std::vector<Submesh> submeshes;
+};
+
 struct UniformBufferObject {
     alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
 };
+
+// todo: instance struct - contains ubo and model index
 
 // graphics class
 
@@ -171,7 +199,7 @@ private:
     VkPipeline graphicsPipeline;
 
     VkCommandPool commandPool;
-
+    
     VkImage colorImage;
     VkDeviceMemory colorImageMemory;
     VkImageView colorImageView;
@@ -179,15 +207,18 @@ private:
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
-
-    uint32_t mipLevels;
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
-    VkSampler textureSampler;
-
+    
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
+    
+    VkSampler textureSampler; // only need one for now
+    std::vector<VkImage> textureImages;
+    std::vector<VkDeviceMemory> textureImageMemories;
+    std::vector<VkImageView> textureImageViews;
+    
+    std::vector<Model> models;
+    std::vector<Material> materials;
+    
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     VkBuffer indexBuffer;
@@ -233,19 +264,46 @@ private:
     void createCommandPool();
     void createColorResources();
     void createDepthResources();
-    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
+                                 VkImageTiling tiling,
+                                 VkFormatFeatureFlags features);
     VkFormat findDepthFormat();
     bool hasStencilComponent(VkFormat format);
-    void createTextureImage();
-    void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
+    void createTextureImage(const std::string& texturePath,
+                            uint32_t& mipLevels,
+                            VkImage& textureImage,
+                            VkDeviceMemory& textureImageMemory,
+                            VkImageView& textureImageView);
+    void generateMipmaps(VkImage image,
+                         VkFormat imageFormat,
+                         int32_t texWidth,
+                         int32_t texHeight,
+                         uint32_t mipLevels);
     VkSampleCountFlagBits getMaxUsableSampleCount();
-    void createTextureImageView();
+    void createTextureImageView(const uint32_t& mipLevels,
+                                VkImage& textureImage,
+                                VkImageView& textureImageView);
     void createTextureSampler();
-    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels);
-    void createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
+    VkImageView createImageView(VkImage image,
+                                VkFormat format,
+                                VkImageAspectFlags aspectFlags,
+                                uint32_t mipLevels);
+    void createImage(uint32_t width,
+                     uint32_t height,
+                     uint32_t mipLevels,
+                     VkSampleCountFlagBits numSamples,
+                     VkFormat format,
+                     VkImageTiling tiling,
+                     VkImageUsageFlags usage,
+                     VkMemoryPropertyFlags properties,
+                     VkImage& image,
+                     VkDeviceMemory& imageMemory);
     void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels);
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
-    void loadModel();
+    ObjData loadObj(const std::string& modelPath);
+    uint32_t loadTexture(const std::string& texturePath);
+    void pushModel(ObjData& objData);
+    void loadModels();
     void createVertexBuffer();
     void createIndexBuffer();
     void createUniformBuffers();

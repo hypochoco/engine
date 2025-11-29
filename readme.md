@@ -1,6 +1,34 @@
 
 ## Developer Notes
 
+
+
+
+
+
+
+
+
+memory leaks
+
+```
+Steps:
+Compile your program with debugging symbols:
+g++ -g -o myprogram myprogram.cpp
+Run the program under Valgrind:
+valgrind --leak-check=full --show-leak-kinds=all ./myprogram
+Analyze the output:
+definitely lost → memory that was allocated but never freed.
+indirectly lost → memory lost because something else pointing to it was lost.
+still reachable → memory that wasn’t freed but is still accessible at exit (usually less serious).
+Valgrind also reports invalid reads/writes, use-after-free, and uninitialized memory usage.
+```
+
+
+
+
+
+
 General build
 - `./scripts/compile.sh` to compile
 - `./scripts/compile_shaders.sh` to compile shaders
@@ -8,6 +36,14 @@ General build
 
 For Xcode, run `cmake -G Xcode ..` in the build directory and open Xcode project file.
 - For macOS, turn on macOS flag / bool in graphics (look into putting this in a config somewhere...)
+
+Add files into Xcode, then add to build stuff ... 
+
+
+
+
+
+
 
 ## High Level Goals
 - Graphics engine (additional shader code, compute shaders?)
@@ -34,6 +70,7 @@ For Xcode, run `cmake -G Xcode ..` in the build directory and open Xcode project
 
 ## Notes on project structure
 
+```
 2. Folder Structure for Libraries
 project/
 ├─ include/
@@ -98,3 +135,4 @@ Then any target linking physics automatically gets graphics too.
 Faster incremental builds: changing Renderer.cpp only rebuilds the graphics library, not everything.
 Clear API boundaries: only headers in include/project/... are public.
 Modular testing: you can write unit tests per library.
+```
