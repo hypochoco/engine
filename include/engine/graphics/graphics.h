@@ -10,6 +10,11 @@
 
 // todo:
 
+    // ubo's and instancing
+
+
+// backlog:
+
     // object loading strategies:
         // (short term) vertex buffer -> pipeline
         // (long term) staging buffer -> vertex buffer -> pipeline
@@ -154,10 +159,14 @@ struct Model {
     std::vector<Submesh> submeshes;
 };
 
-struct UniformBufferObject {
-    alignas(16) glm::mat4 model;
+struct GlobalUBO {
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+    // todo: lights
+};
+
+struct InstanceSSBO {
+    alignas(16) glm::mat4 model;
 };
 
 // todo: instance struct - contains ubo and model index
@@ -224,10 +233,14 @@ private:
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
 
-    std::vector<VkBuffer> uniformBuffers;
-    std::vector<VkDeviceMemory> uniformBuffersMemory;
-    std::vector<void*> uniformBuffersMapped;
+    std::vector<VkBuffer> globalUniformBuffers;
+    std::vector<VkDeviceMemory> globalUniformBuffersMemory;
+    std::vector<void*> globalUniformBuffersMapped;
 
+    std::vector<VkBuffer> instanceStorageBuffers;
+    std::vector<VkDeviceMemory> instanceStorageBuffersMemory;
+    std::vector<void*> instanceStorageBuffersMapped;
+    
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
 
@@ -298,7 +311,11 @@ private:
                      VkMemoryPropertyFlags properties,
                      VkImage& image,
                      VkDeviceMemory& imageMemory);
-    void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels);
+    void transitionImageLayout(VkImage image,
+                               VkFormat format,
+                               VkImageLayout oldLayout,
+                               VkImageLayout newLayout,
+                               uint32_t mipLevels);
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
     ObjData loadObj(const std::string& modelPath);
     uint32_t loadTexture(const std::string& texturePath);
@@ -309,7 +326,11 @@ private:
     void createUniformBuffers();
     void createDescriptorPool();
     void createDescriptorSets();
-    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+    void createBuffer(VkDeviceSize size,
+                      VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags properties,
+                      VkBuffer& buffer,
+                      VkDeviceMemory& bufferMemory);
     VkCommandBuffer beginSingleTimeCommands();
     void endSingleTimeCommands(VkCommandBuffer commandBuffer);
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
@@ -331,5 +352,8 @@ private:
     bool checkValidationLayerSupport();
     
     static std::vector<char> readFile(const std::string& filename);
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
+    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                                        VkDebugUtilsMessageTypeFlagsEXT messageType,
+                                                        const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                                                        void* pUserData);
 };

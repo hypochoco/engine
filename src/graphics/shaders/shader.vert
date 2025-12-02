@@ -1,10 +1,13 @@
 #version 450
 
-layout(binding = 0) uniform UniformBufferObject {
-    mat4 model;
+layout(binding = 0) uniform GlobalUBO {
     mat4 view;
     mat4 proj;
-} ubo;
+} globalUBO;
+
+layout(set = 0, binding = 1) buffer InstanceSSBO {
+    mat4 model[];
+} instanceSSBO;
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inColor;
@@ -18,7 +21,7 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 void main() {
-    gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 1.0);
+    gl_Position = globalUBO.proj * globalUBO.view * instanceSSBO.model[gl_InstanceIndex] * vec4(inPosition, 1.0);
     fragColor = inColor;
     fragTexCoord = inTexCoord;
 }

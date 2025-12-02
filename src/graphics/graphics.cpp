@@ -47,6 +47,7 @@ const std::vector<std::pair<std::string, std::string>> MODEL_PATHS = {
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
 const int NUM_TEXTURES = 64;
+const int MAX_ENTITIES = 64;
 
 const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
@@ -1076,12 +1077,10 @@ void Graphics::initVulkan() {
     createColorResources();
     createDepthResources();
     createFramebuffers();
-    
     loadModels();
     createVertexBuffer();
     createIndexBuffer();
-    createUniformBuffers(); // todo: per instance
-    
+    createUniformBuffers();
     createDescriptorPool();
     createDescriptorSets();
     createCommandBuffers();
@@ -1143,8 +1142,11 @@ void Graphics::cleanup() {
     vkDestroyRenderPass(device, renderPass, nullptr);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-        vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+        vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
+        vkFreeMemory(device, globalUniformBuffersMemory[i], nullptr);
+        
+        vkDestroyBuffer(device, instanceStorageBuffers[i], nullptr);
+        vkFreeMemory(device, instanceStorageBuffersMemory[i], nullptr);
     }
 
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
@@ -1520,6 +1522,8 @@ void Graphics::loadModels() {
     pushModel(objData0);
 
     // second model ...
+        // function to induct models, textures, etc. ...
+        // map out an api
     
 }
 
@@ -1616,28 +1620,60 @@ void Graphics::createIndexBuffer() {
 }
 
 void Graphics::createUniformBuffers() {
-    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-
-    uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-    uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
-
+    
+    VkDeviceSize globalBufferSize = sizeof(GlobalUBO);
+    VkDeviceSize instanceBufferSize = sizeof(InstanceSSBO) * MAX_ENTITIES;
+    
+    globalUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+    
+    instanceStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+    
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        createBuffer(bufferSize,
+        
+        createBuffer(globalBufferSize,
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     uniformBuffers[i],
-                     uniformBuffersMemory[i]);
-        vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+                     globalUniformBuffers[i],
+                     globalUniformBuffersMemory[i]);
+        vkMapMemory(device,
+                    globalUniformBuffersMemory[i],
+                    0,
+                    globalBufferSize,
+                    0,
+                    &globalUniformBuffersMapped[i]);
+        
+        createBuffer(instanceBufferSize,
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     instanceStorageBuffers[i],
+                     instanceStorageBuffersMemory[i]);
+        vkMapMemory(device,
+                    instanceStorageBuffersMemory[i],
+                    0,
+                    instanceBufferSize,
+                    0,
+                    &instanceStorageBuffersMapped[i]);
+        
     }
+    
 }
 
 void Graphics::createDescriptorPool() {
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * NUM_TEXTURES);
+    std::array<VkDescriptorPoolSize, 3> poolSizes{};
+
+    poolSizes[0] = VkDescriptorPoolSize{
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) };
+    poolSizes[1] = VkDescriptorPoolSize{
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) };
+    poolSizes[2] = VkDescriptorPoolSize{
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * NUM_TEXTURES) };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1651,21 +1687,35 @@ void Graphics::createDescriptorPool() {
 }
 
 void Graphics::createDescriptorSetLayout() {
-    VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboLayoutBinding.pImmutableSamplers = nullptr;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    
+    // Binding 0: Global UBO
+    VkDescriptorSetLayoutBinding globalUBOLayoutBinding{};
+    globalUBOLayoutBinding.binding = 0;
+    globalUBOLayoutBinding.descriptorCount = 1;
+    globalUBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    globalUBOLayoutBinding.pImmutableSamplers = nullptr;
+    globalUBOLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+    // Binding 1: Instance SSBO
+    VkDescriptorSetLayoutBinding instanceSSBOLayoutBinding{};
+    instanceSSBOLayoutBinding.binding = 1;
+    instanceSSBOLayoutBinding.descriptorCount = 1;
+    instanceSSBOLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    instanceSSBOLayoutBinding.pImmutableSamplers = nullptr;
+    instanceSSBOLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    // Binding 2: Texture array
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-    samplerLayoutBinding.binding = 1;
+    samplerLayoutBinding.binding = 2;
     samplerLayoutBinding.descriptorCount = NUM_TEXTURES;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {
+        globalUBOLayoutBinding, instanceSSBOLayoutBinding, samplerLayoutBinding
+    };
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -1674,10 +1724,13 @@ void Graphics::createDescriptorSetLayout() {
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor set layout!");
     }
+
 }
 
 void Graphics::createDescriptorSets() {
+    
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
@@ -1690,33 +1743,45 @@ void Graphics::createDescriptorSets() {
     }
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = uniformBuffers[i];
-        bufferInfo.offset = 0;
-        bufferInfo.range = sizeof(UniformBufferObject);
+        VkDescriptorBufferInfo globalInfo{};
+        globalInfo.buffer = globalUniformBuffers[i];
+        globalInfo.offset = 0;
+        globalInfo.range  = sizeof(GlobalUBO);
+
+        VkDescriptorBufferInfo instanceInfo{};
+        instanceInfo.buffer = instanceStorageBuffers[i];
+        instanceInfo.offset = 0;
+        instanceInfo.range  = sizeof(InstanceSSBO) * MAX_ENTITIES;
 
         std::vector<VkDescriptorImageInfo> imageInfos(NUM_TEXTURES);
-        for (size_t j = 0; j < NUM_TEXTURES; ++j) {
+        for (size_t j = 0; j < NUM_TEXTURES; j++) {
             imageInfos[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfos[j].imageView = textureImageViews[0]; // todo: image texture mapping
             imageInfos[j].sampler = textureSampler;
         }
 
-        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
-
+        std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+        
         descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[0].dstSet = descriptorSets[i];
         descriptorWrites[0].dstBinding = 0;
         descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &bufferInfo;
-
+        descriptorWrites[0].pBufferInfo = &globalInfo;
+        
         descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[1].dstSet = descriptorSets[i];
         descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[1].descriptorCount = static_cast<uint32_t>(imageInfos.size());
-        descriptorWrites[1].pImageInfo = imageInfos.data();
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[1].descriptorCount = 1;
+        descriptorWrites[1].pBufferInfo = &instanceInfo;
+        
+        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[2].dstSet = descriptorSets[i];
+        descriptorWrites[2].dstBinding = 2;
+        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[2].descriptorCount = static_cast<uint32_t>(imageInfos.size());
+        descriptorWrites[2].pImageInfo = imageInfos.data();
 
         vkUpdateDescriptorSets(device,
                                static_cast<uint32_t>(descriptorWrites.size()),
@@ -1724,26 +1789,43 @@ void Graphics::createDescriptorSets() {
                                0,
                                nullptr);
     }
+
 }
 
 // update functions below
 
 void Graphics::updateUniformBuffer(uint32_t currentImage) {
-    
-    // temp functionality
-    
+        
     static auto startTime = std::chrono::high_resolution_clock::now();
 
     auto currentTime = std::chrono::high_resolution_clock::now();
     float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    
+    // global ubo
 
-    UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
-    ubo.proj[1][1] *= -1;
+    GlobalUBO globalUBO{};
+    // globalUBO.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    globalUBO.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    globalUBO.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
+    globalUBO.proj[1][1] *= -1;
 
-    memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+    memcpy(globalUniformBuffersMapped[currentImage], &globalUBO, sizeof(globalUBO));
+    
+    // instance ssbo
+
+    std::vector<InstanceSSBO> instances(MAX_ENTITIES);
+    
+//    for (int i = 0; i < MAX_ENTITIES; i++) {
+//        instances[i].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+//    }
+    
+    instances[0].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    instances[1].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    memcpy(instanceStorageBuffersMapped[currentFrame],
+           instances.data(),
+           instances.size() * sizeof(InstanceSSBO));
+    
 }
 
 void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
@@ -1804,13 +1886,15 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
         nullptr
     );
     
+    // todo: handle instancing
+    
     for (const auto& model : models) {
         for (const auto& submesh : model.submeshes) {
             
-            const Material& mat = materials[submesh.materialIndex]; // todo: FIX THIS MAPPING NOW !!!
+            const Material& mat = materials[submesh.materialIndex];
             const uint32_t textureIndex = mat.textureIndex;
-
-            vkCmdPushConstants(
+            
+            vkCmdPushConstants( // texture index
                 commandBuffer,
                 pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1822,10 +1906,10 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
             vkCmdDrawIndexed(
                 commandBuffer,
                 submesh.indexCount,
-                1,
+                2, // instance count
                 submesh.firstIndex,
                 submesh.firstVertex,
-                0
+                0 // start instance index
             );
         }
     }
