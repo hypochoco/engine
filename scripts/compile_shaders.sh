@@ -1,6 +1,7 @@
 #!/bin/bash
 
-cd src/graphics/shaders
+rm resources/vert.spv
+rm resources/frag.spv
 
-/Users/danielcho/VulkanSDK/1.4.313.0/macOS/bin/glslc shader.vert -o vert.spv
-/Users/danielcho/VulkanSDK/1.4.313.0/macOS/bin/glslc shader.frag -o frag.spv
+/Users/danielcho/VulkanSDK/1.4.313.0/macOS/bin/glslc src/graphics/shaders/shader.vert -o resources/vert.spv
+/Users/danielcho/VulkanSDK/1.4.313.0/macOS/bin/glslc src/graphics/shaders/shader.frag -o resources/frag.spv

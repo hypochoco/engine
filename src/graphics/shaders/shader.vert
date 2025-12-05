@@ -5,7 +5,7 @@ layout(binding = 0) uniform GlobalUBO {
     mat4 proj;
 } globalUBO;
 
-layout(set = 0, binding = 1) buffer InstanceSSBO {
+layout(set = 0, binding = 1) readonly buffer InstanceSSBO {
     mat4 model[];
 } instanceSSBO;
 

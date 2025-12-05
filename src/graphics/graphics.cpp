@@ -1,53 +1,16 @@
+// //
+// //  graphics.cpp
+// //  engine
+// //
+// //  Created by Daniel Cho on 9/23/25.
+// //
+
 #include "engine/graphics/graphics.h"
-
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#define GLM_ENABLE_EXPERIMENTAL
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtx/hash.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#define TINYOBJLOADER_IMPLEMENTATION
-#include <tiny_obj_loader.h>
-
-#include <iostream>
-#include <fstream>
-#include <stdexcept>
-#include <algorithm>
-#include <chrono>
-#include <vector>
-#include <cstring>
-#include <cstdlib>
-#include <cstdint>
-#include <limits>
-#include <array>
-#include <optional>
-#include <set>
-#include <unordered_map>
-#include <utility>
-
-// constants
-
-const uint32_t WIDTH = 800;
-const uint32_t HEIGHT = 600;
-
-const std::string VERT_SHADER_PATH = "vert.spv";
-const std::string FRAG_SHADER_PATH = "frag.spv";
-
-const std::vector<std::pair<std::string, std::string>> MODEL_PATHS = {
-    std::make_pair("viking_room.obj", "viking_room.png")
-};
-
-const int MAX_FRAMES_IN_FLIGHT = 2;
-
-const int NUM_TEXTURES = 64;
-const int MAX_ENTITIES = 64;
+// vulkan constants
 
 const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
@@ -56,8 +19,6 @@ const std::vector<const char*> validationLayers = {
 std::vector<const char*> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
-
-const bool macOS = true;
 
 #ifdef NDEBUG
 const bool verbose = false;
@@ -193,7 +154,7 @@ std::vector<const char*> Graphics::getRequiredExtensions() {
 
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
     
-    if (macOS) {
+    if (config.graphicsConfig.macOS) {
         extensions.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
         extensions.emplace_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
         extensions.emplace_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
@@ -491,8 +452,10 @@ void Graphics::initWindow() {
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        
+    window = glfwCreateWindow(config.graphicsConfig.WIDTH,
+                              config.graphicsConfig.HEIGHT,
+                              "Vulkan", nullptr, nullptr);
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
@@ -515,7 +478,7 @@ void Graphics::createInstance() {
     createInfo.pApplicationInfo = &appInfo;
 
     auto extensions = getRequiredExtensions();
-    if (macOS) {
+    if (config.graphicsConfig.macOS) {
         createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
@@ -608,7 +571,7 @@ void Graphics::createLogicalDevice() {
 
     createInfo.pEnabledFeatures = &deviceFeatures;
 
-    if (macOS) {
+    if (config.graphicsConfig.macOS) {
         deviceExtensions.push_back("VK_KHR_portability_subset");
     }
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -801,8 +764,8 @@ void Graphics::createRenderPass() {
 }
 
 void Graphics::createGraphicsPipeline() {
-    auto vertShaderCode = readFile(VERT_SHADER_PATH);
-    auto fragShaderCode = readFile(FRAG_SHADER_PATH);
+    auto vertShaderCode = readFile(config.graphicsConfig.VERT_SHADER_PATH);
+    auto fragShaderCode = readFile(config.graphicsConfig.FRAG_SHADER_PATH);
 
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -1001,9 +964,9 @@ void Graphics::createDepthResources() {
 }
 
 void Graphics::createSyncObjects() {
-    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+    imageAvailableSemaphores.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    renderFinishedSemaphores.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    inFlightFences.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -1012,7 +975,7 @@ void Graphics::createSyncObjects() {
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
@@ -1022,7 +985,7 @@ void Graphics::createSyncObjects() {
 }
 
 void Graphics::createCommandBuffers() {
-    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    commandBuffers.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
 
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1141,7 +1104,7 @@ void Graphics::cleanup() {
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
         vkFreeMemory(device, globalUniformBuffersMemory[i], nullptr);
         
@@ -1170,7 +1133,7 @@ void Graphics::cleanup() {
     vkDestroyBuffer(device, vertexBuffer, nullptr);
     vkFreeMemory(device, vertexBufferMemory, nullptr);
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
         vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
         vkDestroyFence(device, inFlightFences[i], nullptr);
@@ -1357,76 +1320,6 @@ void Graphics::createTextureImage(const std::string& texturePath,
     generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
 }
 
-ObjData Graphics::loadObj(const std::string& modelPath) {
-    
-    // note: this currently does not handle normals
-    ObjData objData;
-        
-    // load obj
-    tinyobj::attrib_t attrib;
-    std::vector<tinyobj::shape_t> shapes;
-    std::vector<tinyobj::material_t> objMaterials;
-    std::string warn, err;
-    if (!tinyobj::LoadObj(&attrib, &shapes, &objMaterials, &warn, &err, modelPath.c_str())) {
-        throw std::runtime_error("OBJ load failed: " + err);
-    }
-    objData.modelMaterials.reserve(objMaterials.size());
-    for (const auto& m : objMaterials) { // note: actual material properties aren't used
-        objData.modelMaterials.emplace_back(Material{m.name, 0}); // note: textureIndex=0, should be fixed later
-    }
-    
-    // process vertices and indices
-    for (const auto& shape : shapes) {
-        
-        size_t indexOffset = 0;
-        const auto& mesh = shape.mesh;
-        
-        for (size_t face = 0; face < mesh.num_face_vertices.size(); ++face) {
-            
-            int fv = mesh.num_face_vertices[face];
-            int materialId = mesh.material_ids[face]; // -1 if no material
-            
-            for (int v = 0; v < fv; ++v) {
-                    
-                // pos
-                tinyobj::index_t idx = mesh.indices[indexOffset + v];
-                Vertex vertex{};
-                vertex.pos = {
-                    attrib.vertices[3 * idx.vertex_index + 0],
-                    attrib.vertices[3 * idx.vertex_index + 1],
-                    attrib.vertices[3 * idx.vertex_index + 2]
-                };
-                
-                // tex coord + color
-                if (idx.texcoord_index >= 0) {
-                    vertex.texCoord = {
-                        attrib.texcoords[2 * idx.texcoord_index + 0],
-                        1.f - attrib.texcoords[2 * idx.texcoord_index + 1]
-                    };
-                } else {
-                    vertex.texCoord = {0.f, 0.f};
-                }
-                vertex.color = {1.f, 1.f, 1.f}; // note: default material color
-                
-                // mapping
-                auto& uniqueVertices = objData.uniqueVerticesMap[materialId];
-                auto& uniqueIndices = objData.uniqueIndicesMap[materialId];
-
-                auto it = std::find(uniqueVertices.begin(), uniqueVertices.end(), vertex);
-                if (it != uniqueVertices.end()) {
-                    uniqueIndices.push_back(static_cast<uint32_t>(std::distance(uniqueVertices.begin(), it)));
-                } else {
-                    uniqueVertices.push_back(vertex);
-                    uniqueIndices.push_back(static_cast<uint32_t>(uniqueVertices.size() - 1));
-                }
-            }
-            indexOffset += fv;
-        }
-    }
-    
-    return objData;
-}
-
 void Graphics::pushModel(ObjData& objData) {
     
     // todo: better material construction and mapping (some global mapping)
@@ -1508,17 +1401,16 @@ void Graphics::loadModels() {
     createTextureSampler(); // currently, single texture sampler
     
     // first model
-    const auto& pair0 = MODEL_PATHS[0];
+    const auto& pair0 = config.graphicsConfig.MODEL_PATHS[0];
     const std::string modelPath0 = pair0.first.c_str();
     const std::string texturePath0 = pair0.second.c_str();
         
-    auto textureIndex0 = loadTexture(texturePath0);
-    auto objData0 = loadObj(modelPath0);
+    auto textureIndex0 = loadTexture(texturePath0); // leave alone for now
     
+    auto objData0 = ModelLoader::loadObj(modelPath0);
     for (auto& m : objData0.modelMaterials) { // manual material texture index mapping
         m.textureIndex = textureIndex0;
     }
-    
     pushModel(objData0);
 
     // second model ...
@@ -1622,17 +1514,17 @@ void Graphics::createIndexBuffer() {
 void Graphics::createUniformBuffers() {
     
     VkDeviceSize globalBufferSize = sizeof(GlobalUBO);
-    VkDeviceSize instanceBufferSize = sizeof(InstanceSSBO) * MAX_ENTITIES;
+    VkDeviceSize instanceBufferSize = sizeof(InstanceSSBO) * config.graphicsConfig.MAX_ENTITIES;
     
-    globalUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    globalUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-    globalUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffers.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffersMemory.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffersMapped.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
     
-    instanceStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    instanceStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-    instanceStorageBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffers.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffersMemory.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffersMapped.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
     
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         
         createBuffer(globalBufferSize,
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -1667,19 +1559,19 @@ void Graphics::createDescriptorPool() {
 
     poolSizes[0] = VkDescriptorPoolSize{
         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) };
+        static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT) };
     poolSizes[1] = VkDescriptorPoolSize{
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) };
+        static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT) };
     poolSizes[2] = VkDescriptorPoolSize{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * NUM_TEXTURES) };
+        static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT * config.graphicsConfig.NUM_TEXTURES) };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolInfo.maxSets = static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
@@ -1707,7 +1599,7 @@ void Graphics::createDescriptorSetLayout() {
     // Binding 2: Texture array
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 2;
-    samplerLayoutBinding.descriptorCount = NUM_TEXTURES;
+    samplerLayoutBinding.descriptorCount = config.graphicsConfig.NUM_TEXTURES;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1729,20 +1621,20 @@ void Graphics::createDescriptorSetLayout() {
 
 void Graphics::createDescriptorSets() {
     
-    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+    std::vector<VkDescriptorSetLayout> layouts(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
-    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
     allocInfo.pSetLayouts = layouts.data();
 
-    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    descriptorSets.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
     if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate descriptor sets!");
     }
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         VkDescriptorBufferInfo globalInfo{};
         globalInfo.buffer = globalUniformBuffers[i];
         globalInfo.offset = 0;
@@ -1751,10 +1643,10 @@ void Graphics::createDescriptorSets() {
         VkDescriptorBufferInfo instanceInfo{};
         instanceInfo.buffer = instanceStorageBuffers[i];
         instanceInfo.offset = 0;
-        instanceInfo.range  = sizeof(InstanceSSBO) * MAX_ENTITIES;
+        instanceInfo.range  = sizeof(InstanceSSBO) * config.graphicsConfig.MAX_ENTITIES;
 
-        std::vector<VkDescriptorImageInfo> imageInfos(NUM_TEXTURES);
-        for (size_t j = 0; j < NUM_TEXTURES; j++) {
+        std::vector<VkDescriptorImageInfo> imageInfos(config.graphicsConfig.NUM_TEXTURES);
+        for (size_t j = 0; j < config.graphicsConfig.NUM_TEXTURES; j++) {
             imageInfos[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfos[j].imageView = textureImageViews[0]; // todo: image texture mapping
             imageInfos[j].sampler = textureSampler;
@@ -1813,15 +1705,32 @@ void Graphics::updateUniformBuffer(uint32_t currentImage) {
     
     // instance ssbo
 
-    std::vector<InstanceSSBO> instances(MAX_ENTITIES);
+    std::vector<InstanceSSBO> instances(config.graphicsConfig.MAX_ENTITIES);
     
-//    for (int i = 0; i < MAX_ENTITIES; i++) {
+//    for (int i = 0; i < config.graphicsConfig.MAX_ENTITIES; i++) {
 //        instances[i].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 //    }
     
     instances[0].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     instances[1].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
+    
+    // only copy some or a range ...
+    
+//    for (size_t i = 0; i < instances.size(); ) {
+//        if (!dirty[i]) { i++; continue; }
+//
+//        size_t start = i;
+//        while (i < instances.size() && dirty[i]) i++;
+//        size_t count = i - start;
+//
+//        memcpy(
+//            (char*)instanceStorageBuffersMapped[currentFrame] + start * sizeof(InstanceSSBO),
+//            instances.data() + start,
+//            count * sizeof(InstanceSSBO)
+//        );
+
+    
     memcpy(instanceStorageBuffersMapped[currentFrame],
            instances.data(),
            instances.size() * sizeof(InstanceSSBO));
@@ -1982,5 +1891,5 @@ void Graphics::drawFrame() {
         throw std::runtime_error("failed to present swap chain image!");
     }
 
-    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    currentFrame = (currentFrame + 1) % config.graphicsConfig.MAX_FRAMES_IN_FLIGHT;
 }

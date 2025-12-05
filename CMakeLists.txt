@@ -19,8 +19,6 @@ else()
     )
 endif()
 
-# potentially consolidate these packages ... 
-
 # glm
 find_package(glm REQUIRED)
 target_link_libraries(main PRIVATE glm::glm)

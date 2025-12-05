@@ -7,40 +7,6 @@
 // //  minimal vulkan app header
 // //
 
-
-// todo:
-
-    // ubo's and instancing
-
-
-// backlog:
-
-    // object loading strategies:
-        // (short term) vertex buffer -> pipeline
-        // (long term) staging buffer -> vertex buffer -> pipeline
-
-    // todo:
-        // // Pseudocode for deferred deletion
-        //struct PendingDeletion {
-        //    VkBuffer buffer;
-        //    VkDeviceMemory memory;
-        //    VkFence fence;
-        //};
-        //
-        //std::vector<PendingDeletion> deletions;
-        //
-        // // Each frame:
-        //for (auto it = deletions.begin(); it != deletions.end(); ) {
-        //    if (vkGetFenceStatus(device, it->fence) == VK_SUCCESS) {
-        //        vkDestroyBuffer(device, it->buffer, nullptr);
-        //        vkFreeMemory(device, it->memory, nullptr);
-        //        it = deletions.erase(it);
-        //    } else {
-        //        ++it;
-        //    }
-        //}
-
-
 #pragma once
 
 #define GLFW_INCLUDE_VULKAN
@@ -69,6 +35,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "engine/config.h"
+#include "engine/graphics/model_loader.h"
+
 // structs
 
 struct SwapChainSupportDetails {
@@ -86,79 +55,6 @@ struct QueueFamilyIndices {
     }
 };
 
-struct Vertex {
-    glm::vec3 pos;
-    glm::vec3 color;
-    glm::vec2 texCoord;
-
-    static VkVertexInputBindingDescription getBindingDescription() {
-        VkVertexInputBindingDescription bindingDescription{};
-        bindingDescription.binding = 0;
-        bindingDescription.stride = sizeof(Vertex);
-        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-        return bindingDescription;
-    }
-
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
-
-        attributeDescriptions[0].binding = 0;
-        attributeDescriptions[0].location = 0;
-        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[0].offset = offsetof(Vertex, pos);
-
-        attributeDescriptions[1].binding = 0;
-        attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-        attributeDescriptions[2].binding = 0;
-        attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-
-        return attributeDescriptions;
-    }
-
-    bool operator==(const Vertex& other) const {
-        return pos == other.pos && color == other.color && texCoord == other.texCoord;
-    }
-};
-
-namespace std {
-    template<> struct hash<Vertex> {
-        size_t operator()(Vertex const& vertex) const {
-            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
-        }
-    };
-}
-
-struct Material {
-    std::string name;
-    uint32_t textureIndex;
-};
-
-struct ObjData {
-    std::vector<Material> modelMaterials;
-    std::unordered_map<int, std::vector<Vertex>> uniqueVerticesMap;
-    std::unordered_map<int, std::vector<uint32_t>> uniqueIndicesMap;
-};
-
-struct Submesh {
-    uint32_t firstIndex;
-    uint32_t indexCount;
-    uint32_t firstVertex;
-    uint32_t vertexCount;
-    uint32_t materialIndex;
-};
-
-struct Model {
-    uint32_t firstMaterialIndex;
-    uint32_t materialCount;
-    std::vector<Submesh> submeshes;
-};
-
 struct GlobalUBO {
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
@@ -169,19 +65,21 @@ struct InstanceSSBO {
     alignas(16) glm::mat4 model;
 };
 
-// todo: instance struct - contains ubo and model index
-
 // graphics class
 
 class Graphics {
     
 public:
+    Graphics() : config(AppConfig::instance()) {};
+    
     void run();
     
 private:
     
     // variables
     
+    AppConfig& config;
+        
     GLFWwindow* window;
 
     VkInstance instance;
@@ -317,7 +215,6 @@ private:
                                VkImageLayout newLayout,
                                uint32_t mipLevels);
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
-    ObjData loadObj(const std::string& modelPath);
     uint32_t loadTexture(const std::string& texturePath);
     void pushModel(ObjData& objData);
     void loadModels();

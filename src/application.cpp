@@ -11,7 +11,7 @@
 #include <iostream>
 
 Application::Application() { // constructor
-    graphics = Graphics();
+    // empty
 }
 
 Application::~Application() { // destructor

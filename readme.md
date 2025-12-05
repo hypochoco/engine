@@ -1,84 +1,204 @@
 
-## Developer Notes
+## Development Notes
 
-
-
-
-
-
-
-
-
-memory leaks
-
-```
-Steps:
-Compile your program with debugging symbols:
-g++ -g -o myprogram myprogram.cpp
-Run the program under Valgrind:
-valgrind --leak-check=full --show-leak-kinds=all ./myprogram
-Analyze the output:
-definitely lost → memory that was allocated but never freed.
-indirectly lost → memory lost because something else pointing to it was lost.
-still reachable → memory that wasn’t freed but is still accessible at exit (usually less serious).
-Valgrind also reports invalid reads/writes, use-after-free, and uninitialized memory usage.
-```
-
-
-
-
-
-
-General build
-- `./scripts/compile.sh` to compile
-- `./scripts/compile_shaders.sh` to compile shaders
-- `./scripts/run.sh` to run
+**General build:**
+- `./scripts/compile.sh` to compile (not meant for Xcode)
+- `./scripts/compile_shaders.sh` to compile shaders to resources dir
+- `./scripts/run.sh` to run program
 
 For Xcode, run `cmake -G Xcode ..` in the build directory and open Xcode project file.
-- For macOS, turn on macOS flag / bool in graphics (look into putting this in a config somewhere...)
+- For macOS, set macOS bool in `GraphicsConfig` in `config.h`
 
-Add files into Xcode, then add to build stuff ... 
-
-
-
-
-
-
-
+Xcode specific instructions:
+- In `Build Phases`, add compiled files into `Compile Sources`, and then shaders, textures, models, etc. into a `Copy Bundle Resource`
+- In `Build Settings`, add dir paths to `Header Search Paths`
+    - Note `stb` may have to be set as recursive, unsure
+    
 ## High Level Goals
-- Graphics engine (additional shader code, compute shaders?)
+- Graphics engine
 - Physics engine
-
-## Considerations
-- eigen over glm ?
 
 ## Todo
 - [ ] Restructure vulkan code
-    - [x] Add a header class 
-    - [ ] Allow additional arbitrary models / textures
-    - [ ] Temp class or config with file paths ... 
-
+    - [ ] Better model / texture / instance handling (dedicated systems / api)
 - [ ] Address these vulkan issues:
+    - [ ] Run your program now with optimization enabled (e.g. Release mode in Visual Studio and with the -O3 compiler flag for GCC`). This is necessary, because otherwise loading the model will be very slow. 
 
-    > It should be noted that in a real world application, you're not supposed to actually call vkAllocateMemory for every individual buffer. The maximum number of simultaneous memory allocations is limited by the maxMemoryAllocationCount physical device limit, which may be as low as 4096 even on high end hardware like an NVIDIA GTX 1080. The right way to allocate memory for a large number of objects at the same time is to create a custom allocator that splits up a single allocation among many different objects by using the offset parameters that we've seen in many functions.
-        - You can either implement such an allocator yourself, or use the VulkanMemoryAllocator library provided by the GPUOpen initiative. However, for this tutorial it's okay to use a separate allocation for every resource, because we won't come close to hitting any of these limits for now.
+---
 
-    > Using a UBO this way is not the most efficient way to pass frequently changing values to the shader. A more efficient way to pass a small buffer of data to shaders are push constants.
+## Notes
 
-    > Run your program now with optimization enabled (e.g. Release mode in Visual Studio and with the -O3 compiler flag for GCC`). This is necessary, because otherwise loading the model will be very slow. 
+### Graphics API
 
 
-## Notes on project structure
 
+
+
+
+
+vulkan features
+- select rendering pipelines ... 
+
+
+
+- save ... try out stuff to make a digital painting app ... 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+graphics api that can support both a game engine and digital painting program
+- select which render pipeline
+- select which draw command to run
+- select select render passes
+- etc. ... 
+
+- then use the graphics obj as an api, or whatever else ... 
+- any concerns about multithreading in this option ?? 
+
+
+
+worker stealing
+- each have a queue, owner pushes and pops from one end
+- theives take from the other side of the queue
+- keep everything lock free using an atomic queue or something ... 
+
+
+
+
+
+
+
+
+don't use indices, instead id's because if something was deleted, and we try the same index again it'll be an issue
+
+debug features like bounding boxes ... 
+
+consider parallel processes and a job system ... 
+
+internally thread physics as well ... 
+
+collection of workers, doing all the jobs, maybe dedicate stuff instead??
+    be able to support either method
+    multiple workers for different parts of physics ?? 
+    
+    dependency graph on tasks, even break into sub tasks?
+    
+    workers (optimize cache efficiency)
+        workers have a local queue of similar tasks, steal from each other if idle ... 
+        it matters what tasks there are (which frame, etc.)
+    
+
+
+
+
+
+
+
+
+
+
+add and remove lights
+
+change lights (colors, position, brightness, etc.)
+    types of lights, directional, point, etc.
+    
+render passes? turning this on or off?
+    
+    
+adding and removing models
+    load model
+        custom material definitions ...
+        return model id (position in vector)
+    remove model
+        input model id (vector position)
+        
+same model, but different materials?
+
+    
+adding and removing instances
+    add instance
+        input model id
+        return instance id (vector position? will depend on internal representation)
+    remove instance
+        input instance id
+        
+change instance model matrices
+    transform (rotate, scale, translate)
+        input instance id
+        
+getters (get all instances of a model, etc.)
+
+hierarchical instancing?
+
+cameras 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Debugging Memory leaks
+
+1. Compile your program with debugging symbols: `g++ -g -o myprogram myprogram.cpp`
+2. Run the program under Valgrind: `valgrind --leak-check=full --show-leak-kinds=all ./myprogram`
+
+Analyze the output:
 ```
-2. Folder Structure for Libraries
+definitely lost → memory that was allocated but never freed.
+indirectly lost → memory lost because something else pointing to it was lost.
+still reachable → memory that wasn’t freed but is still accessible at exit (usually less serious).
+```
+Valgrind also reports invalid reads/writes, use-after-free, and uninitialized memory usage.
+
+### Project structure
+
+**Folder structure for libraries**
+```
 project/
 ├─ include/
 │  └─ project/
 │      ├─ graphics/
-│      │   └─ Renderer.hpp
+│      │   └─ Renderer.h
 │      └─ physics/
-│          └─ PhysicsEngine.hpp
+│          └─ PhysicsEngine.h
 ├─ src/
 │  ├─ graphics/
 │  │   └─ Renderer.cpp
@@ -90,11 +210,13 @@ project/
 │  └─ CMakeLists.txt
 └─ physics/
    └─ CMakeLists.txt
+```
 
 Each library gets its own CMakeLists.txt inside its folder.
 The top-level CMakeLists.txt orchestrates everything.
 
-3. CMake Example
+**CMake example**
+```
 Top-level CMakeLists.txt
 cmake_minimum_required(VERSION 3.25)
 project(MyProject VERSION 0.1 LANGUAGES CXX)
@@ -120,19 +242,38 @@ add_library(physics STATIC
 )
 
 target_include_directories(physics PUBLIC ../include)
+```
 
-4. How This Works
+**Explanation**
 Static libraries (STATIC) compile code into .a or .lib files.
 Public include directories (target_include_directories(... PUBLIC ../include)) allow other libraries or the main executable to include headers like:
-`#include "project/graphics/Renderer.hpp"`
-`#include "project/physics/PhysicsEngine.hpp"`
+`#include "project/graphics/Renderer.h"`
+`#include "project/physics/PhysicsEngine.h"`
 
 Dependencies between libraries: If PhysicsEngine used Renderer, you’d do:
 target_link_libraries(physics PUBLIC graphics)
 Then any target linking physics automatically gets graphics too.
 
-✅ Benefits
-Faster incremental builds: changing Renderer.cpp only rebuilds the graphics library, not everything.
-Clear API boundaries: only headers in include/project/... are public.
-Modular testing: you can write unit tests per library.
+### Deferred deletion
+
+```
+    // pseudocode for deferred deletion
+        //struct PendingDeletion {
+        //    VkBuffer buffer;
+        //    VkDeviceMemory memory;
+        //    VkFence fence;
+        //};
+        //
+        //std::vector<PendingDeletion> deletions;
+        //
+        // // Each frame:
+        //for (auto it = deletions.begin(); it != deletions.end(); ) {
+        //    if (vkGetFenceStatus(device, it->fence) == VK_SUCCESS) {
+        //        vkDestroyBuffer(device, it->buffer, nullptr);
+        //        vkFreeMemory(device, it->memory, nullptr);
+        //        it = deletions.erase(it);
+        //    } else {
+        //        ++it;
+        //    }
+        //}
 ```
