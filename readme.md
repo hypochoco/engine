@@ -20,7 +20,7 @@ Xcode specific instructions:
 
 ## Todo
 - [ ] Restructure vulkan code
-    - [ ] Better model / texture / instance handling (dedicated systems / api)
+    - [ ] Defined API
 - [ ] Address these vulkan issues:
     - [ ] Run your program now with optimization enabled (e.g. Release mode in Visual Studio and with the -O3 compiler flag for GCC`). This is necessary, because otherwise loading the model will be very slow. 
 
@@ -29,6 +29,57 @@ Xcode specific instructions:
 ## Notes
 
 ### Graphics API
+
+
+
+
+
+
+
+converting to a digital painting app
+
+canvas (vkimage) - rendered to hardcoded model object or something
+
+saving and whatever else ... 
+
+so the model is actually a vkimage that gets written to (should just be an option or two)
+
+
+
+
+
+
+
+render brushes and stuff to canvas
+canvas to swapchain
+
+
+
+
+
+render brushes on demand 
+alpha blending to composite strokes onto canvas ... 
+
+
+
+
+
+
+
+
+
+
+
+reorganize the code a little more ... 
+separate things a little better ... 
+
+
+
+
+
+
+
+
 
 
 

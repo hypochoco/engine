@@ -11,8 +11,6 @@ struct Config {
 
 struct GraphicsConfig : public Config {
     
-    static constexpr bool macOS = true;
-
     static constexpr uint32_t WIDTH = 800;
     static constexpr uint32_t HEIGHT = 600;
 

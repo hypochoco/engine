@@ -4,8 +4,6 @@
 // //
 // //  Created by Daniel Cho on 9/23/25.
 // //
-// //  minimal vulkan app header
-// //
 
 #pragma once
 
@@ -37,6 +35,20 @@
 
 #include "engine/config.h"
 #include "engine/graphics/model_loader.h"
+
+// flags
+
+#ifdef NDEBUG
+#define ENABLE_VALIDATION_LAYERS false
+#else
+#define ENABLE_VALIDATION_LAYERS true
+#endif
+
+#if defined(__APPLE__) && defined(__MACH__) // macOS or iOS
+#define MACOS true
+#else
+#define MACOS false
+#endif
 
 // structs
 
@@ -179,7 +191,6 @@ private:
                                  VkImageTiling tiling,
                                  VkFormatFeatureFlags features);
     VkFormat findDepthFormat();
-    bool hasStencilComponent(VkFormat format);
     void createTextureImage(const std::string& texturePath,
                             uint32_t& mipLevels,
                             VkImage& textureImage,
