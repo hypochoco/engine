@@ -17,6 +17,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/hash.hpp>
 
+#include <stb_image.h>
+
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -35,6 +37,7 @@
 
 #include "engine/config.h"
 #include "engine/graphics/model_loader.h"
+#include "engine/input_system.h"
 
 // flags
 
@@ -93,6 +96,8 @@ private:
     AppConfig& config;
         
     GLFWwindow* window;
+    
+    InputSystem inputSystem;
 
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
@@ -111,12 +116,12 @@ private:
     VkExtent2D swapChainExtent;
     std::vector<VkImageView> swapChainImageViews;
     std::vector<VkFramebuffer> swapChainFramebuffers;
-
+    
     VkRenderPass renderPass;
     VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
-
+    
     VkCommandPool commandPool;
     
     VkImage colorImage;
@@ -191,11 +196,37 @@ private:
                                  VkImageTiling tiling,
                                  VkFormatFeatureFlags features);
     VkFormat findDepthFormat();
-    void createTextureImage(const std::string& texturePath,
+    
+    
+    void createImage(uint32_t width,
+                     uint32_t height,
+                     uint32_t mipLevels,
+                     VkSampleCountFlagBits numSamples,
+                     VkFormat format,
+                     VkImageTiling tiling,
+                     VkImageUsageFlags usage,
+                     VkMemoryPropertyFlags properties,
+                     VkImage& image,
+                     VkDeviceMemory& imageMemory);
+    void stageTextureImage(int texWidth,
+                           int texHeight,
+                           stbi_uc* pixels,
+                           uint32_t mipLevels,
+                           VkImage& textureImage,
+                           VkDeviceMemory& textureImageMemory,
+                           VkImageUsageFlags usage);
+    std::pair<int, int> createTextureImage(const std::string& texturePath,
+                            VkImage& textureImage,
+                            VkDeviceMemory& textureImageMemory);
+    std::pair<int, int> createTextureImage(const std::string& texturePath,
                             uint32_t& mipLevels,
                             VkImage& textureImage,
+                            VkDeviceMemory& textureImageMemory);
+    void createTextureImage(const int texWidth,
+                            const int texHeight,
+                            VkImage& textureImage,
                             VkDeviceMemory& textureImageMemory,
-                            VkImageView& textureImageView);
+                            VkImageUsageFlags usage);
     void generateMipmaps(VkImage image,
                          VkFormat imageFormat,
                          int32_t texWidth,
@@ -210,16 +241,12 @@ private:
                                 VkFormat format,
                                 VkImageAspectFlags aspectFlags,
                                 uint32_t mipLevels);
-    void createImage(uint32_t width,
-                     uint32_t height,
-                     uint32_t mipLevels,
-                     VkSampleCountFlagBits numSamples,
-                     VkFormat format,
-                     VkImageTiling tiling,
-                     VkImageUsageFlags usage,
-                     VkMemoryPropertyFlags properties,
-                     VkImage& image,
-                     VkDeviceMemory& imageMemory);
+    void transitionImageLayout(VkCommandBuffer& commandBuffer,
+                               VkImage image,
+                               VkFormat format,
+                               VkImageLayout oldLayout,
+                               VkImageLayout newLayout,
+                               uint32_t mipLevels);
     void transitionImageLayout(VkImage image,
                                VkFormat format,
                                VkImageLayout oldLayout,
@@ -227,6 +254,8 @@ private:
                                uint32_t mipLevels);
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
     uint32_t loadTexture(const std::string& texturePath);
+    uint32_t loadTexture(const int texWidth, const int texHeight);
+    
     void pushModel(ObjData& objData);
     void loadModels();
     void createVertexBuffer();
@@ -264,4 +293,41 @@ private:
                                                         VkDebugUtilsMessageTypeFlagsEXT messageType,
                                                         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                                                         void* pUserData);
+    
+    // paint variables
+    
+    VkImage brushTextureImage; // todo: vectors
+    VkDeviceMemory brushTextureImageMemory;
+    VkImageView brushTextureImageView;
+    
+    std::vector<VkImage> layerTextureImages;
+    std::vector<VkDeviceMemory> layerTextureImageMemories;
+    std::vector<VkImageView> layerTextureImageViews;
+    
+    VkFramebuffer paintFramebuffer;
+    VkRenderPass paintRenderPass;
+    
+    VkDescriptorSetLayout paintDescriptorSetLayout;
+    VkDescriptorPool paintDescriptorPool;
+    std::vector<VkDescriptorSet> paintDescriptorSets;
+    
+    VkPipelineLayout paintPipelineLayout;
+    VkPipeline paintPipeline;
+
+    // paint functions
+        
+    void loadBrushTexture(const std::string& texturePath);
+    void loadLayerTexture(const int texWidth, const int texHeight);
+    
+    void createPaintRenderPass();
+    void createPaintFramebuffers();
+    
+    void createPaintDescriptorSetLayout();
+    void createPaintDescriptorPool();
+    void createPaintDescriptorSets();
+    
+    void createPaintPipeline();
+    
+    void paint(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+        
 };

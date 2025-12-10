@@ -57,8 +57,12 @@ VKAPI_ATTR VkBool32 VKAPI_CALL Graphics::debugCallback(VkDebugUtilsMessageSeveri
 void Graphics::populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
     createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     createInfo.pfnUserCallback = debugCallback;
 }
 
@@ -560,32 +564,6 @@ void Graphics::createUniformBuffers() {
 
 // images and textures
 
-VkImageView Graphics::createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels) {
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = aspectFlags;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = mipLevels;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    VkImageView imageView;
-    if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create image view!");
-    }
-
-    return imageView;
-}
-
-void Graphics::createTextureImageView(const uint32_t& mipLevels,
-                                      VkImage& textureImage,
-                                      VkImageView& textureImageView) {
-    textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
-}
-
 void Graphics::createImage(uint32_t width,
                            uint32_t height,
                            uint32_t mipLevels,
@@ -630,9 +608,13 @@ void Graphics::createImage(uint32_t width,
     vkBindImageMemory(device, image, imageMemory, 0);
 }
 
-void Graphics::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
-
+void Graphics::transitionImageLayout(VkCommandBuffer& commandBuffer,
+                                     VkImage image,
+                                     VkFormat format,
+                                     VkImageLayout oldLayout,
+                                     VkImageLayout newLayout,
+                                     uint32_t mipLevels) {
+    
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = oldLayout;
@@ -649,49 +631,73 @@ void Graphics::transitionImageLayout(VkImage image, VkFormat format, VkImageLayo
     VkPipelineStageFlags sourceStage;
     VkPipelineStageFlags destinationStage;
 
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED
+        && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) { // undefined -> dst optimal
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
         sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        
+    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+               && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) { // dst optimal -> shader read only
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        
+    } else if (oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+               && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) { // color attachment -> shader read only
+        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        
+    } else if (oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+               && newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) { // shader read only -> color attachment
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        sourceStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        
     } else {
         throw std::invalid_argument("unsupported layout transition!");
     }
 
     vkCmdPipelineBarrier(
         commandBuffer,
-        sourceStage, destinationStage,
-        0,
-        0, nullptr,
-        0, nullptr,
-        1, &barrier
+        sourceStage,
+        destinationStage,
+        0, 0, nullptr, 0, nullptr, 1,
+        &barrier
     );
 
+}
+
+void Graphics::transitionImageLayout(VkImage image,
+                                     VkFormat format,
+                                     VkImageLayout oldLayout,
+                                     VkImageLayout newLayout,
+                                     uint32_t mipLevels) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+    transitionImageLayout(commandBuffer,
+                          image,
+                          format,
+                          oldLayout,
+                          newLayout,
+                          mipLevels);
     endSingleTimeCommands(commandBuffer);
 }
 
-void Graphics::createTextureImage(const std::string& texturePath,
-                                  uint32_t& mipLevels,
-                                  VkImage& textureImage,
-                                  VkDeviceMemory& textureImageMemory,
-                                  VkImageView& textureImageView) {
+void Graphics::stageTextureImage(int texWidth,
+                                 int texHeight,
+                                 stbi_uc* pixels,
+                                 uint32_t mipLevels,
+                                 VkImage& textureImage,
+                                 VkDeviceMemory& textureImageMemory,
+                                 VkImageUsageFlags usage) {
     
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     VkDeviceSize imageSize = texWidth * texHeight * 4;
-    mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
-
-    if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
-    }
-
+    
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
     createBuffer(imageSize,
@@ -705,27 +711,199 @@ void Graphics::createTextureImage(const std::string& texturePath,
         memcpy(data, pixels, static_cast<size_t>(imageSize));
     vkUnmapMemory(device, stagingBufferMemory);
 
-    stbi_image_free(pixels);
-
     createImage(texWidth,
                 texHeight,
                 mipLevels,
                 VK_SAMPLE_COUNT_1_BIT,
                 VK_FORMAT_R8G8B8A8_SRGB,
                 VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                usage,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 textureImage,
                 textureImageMemory);
 
-    transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
-    copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-    //transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
-
+    transitionImageLayout(textureImage,
+                          VK_FORMAT_R8G8B8A8_SRGB,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          mipLevels);
+    
+    copyBufferToImage(stagingBuffer,
+                      textureImage,
+                      static_cast<uint32_t>(texWidth),
+                      static_cast<uint32_t>(texHeight));
+    
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingBufferMemory, nullptr);
 
+}
+
+std::pair<int, int> Graphics::createTextureImage(const std::string& texturePath,
+                                  VkImage& textureImage,
+                                  VkDeviceMemory& textureImageMemory) {
+
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    
+    if (!pixels) {
+        throw std::runtime_error("failed to load texture image!");
+    }
+    
+    uint32_t mipLevels = 1;
+    
+    stageTextureImage(texWidth,
+                      texHeight,
+                      pixels,
+                      mipLevels,
+                      textureImage,
+                      textureImageMemory,
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    
+    stbi_image_free(pixels);
+    
+    return {texWidth, texHeight};
+        
+}
+
+std::pair<int, int> Graphics::createTextureImage(const std::string& texturePath,
+                                  uint32_t& mipLevels,
+                                  VkImage& textureImage,
+                                  VkDeviceMemory& textureImageMemory) {
+
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+    
+    if (!pixels) {
+        throw std::runtime_error("failed to load texture image!");
+    }
+        
+    stageTextureImage(texWidth,
+                      texHeight,
+                      pixels,
+                      mipLevels,
+                      textureImage,
+                      textureImageMemory,
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    
+    stbi_image_free(pixels);
+    
+    return {texWidth, texHeight};
+        
+}
+
+void Graphics::createTextureImage(const int texWidth,
+                                  const int texHeight,
+                                  VkImage& textureImage,
+                                  VkDeviceMemory& textureImageMemory,
+                                  VkImageUsageFlags usage) {
+    
+    uint32_t mipLevels = 1;
+    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
+    stbi_uc* pixels = new stbi_uc[imageSize];
+    std::fill(pixels, pixels + imageSize, 255); // fill white
+    
+    if (!pixels) {
+        throw std::runtime_error("failed to load texture image!");
+    }
+        
+    stageTextureImage(texWidth,
+                      texHeight,
+                      pixels,
+                      mipLevels,
+                      textureImage,
+                      textureImageMemory,
+                      usage);
+    
+    stbi_image_free(pixels);
+
+}
+
+VkImageView Graphics::createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels) {
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = aspectFlags;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = mipLevels;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VkImageView imageView;
+    if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create image view!");
+    }
+
+    return imageView;
+}
+
+void Graphics::createTextureImageView(const uint32_t& mipLevels,
+                                      VkImage& textureImage,
+                                      VkImageView& textureImageView) {
+    textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
+}
+
+uint32_t Graphics::loadTexture(const std::string& texturePath) {
+        
+    uint32_t mipLevels;
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+    
+    auto [texWidth, texHeight] = createTextureImage(texturePath,
+                                                    mipLevels,
+                                                    textureImage,
+                                                    textureImageMemory);
+    
+    // transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
     generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+    
+    createTextureImageView(mipLevels,
+                           textureImage,
+                           textureImageView);
+
+    textureImageViews.push_back(textureImageView);
+    textureImages.push_back(textureImage);
+    textureImageMemories.push_back(textureImageMemory);
+    
+    return static_cast<uint32_t>(textureImages.size()-1);
+    
+}
+
+uint32_t Graphics::loadTexture(const int texWidth, const int texHeight) {
+    
+    uint32_t mipLevels = 1;
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+    
+    createTextureImage(texWidth,
+                       texHeight,
+                       textureImage,
+                       textureImageMemory,
+                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                       | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                       | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                       | VK_IMAGE_USAGE_SAMPLED_BIT);
+        
+    transitionImageLayout(textureImage,
+                          VK_FORMAT_R8G8B8A8_SRGB,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          1);
+    
+    createTextureImageView(mipLevels,
+                           textureImage,
+                           textureImageView);
+
+    textureImageViews.push_back(textureImageView);
+    textureImages.push_back(textureImage);
+    textureImageMemories.push_back(textureImageMemory);
+    
+    return static_cast<uint32_t>(textureImages.size()-1);
+
 }
 
 // swap chain
@@ -1473,50 +1651,41 @@ void Graphics::pushModel(ObjData& objData) {
     
 }
 
-uint32_t Graphics::loadTexture(const std::string& texturePath) {
-    
-    uint32_t mipLevels;
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
-    
-    createTextureImage(texturePath,
-                       mipLevels,
-                       textureImage,
-                       textureImageMemory,
-                       textureImageView);
-    createTextureImageView(mipLevels,
-                           textureImage,
-                           textureImageView);
-
-    textureImageViews.push_back(textureImageView);
-    textureImages.push_back(textureImage);
-    textureImageMemories.push_back(textureImageMemory);
-    
-    return static_cast<uint32_t>(textureImages.size()-1);
-    
-}
-
 void Graphics::loadModels() {
-        
+    
     createTextureSampler(); // currently, single texture sampler
     
-    // first model
-    const auto& pair0 = config.graphicsConfig.MODEL_PATHS[0];
-    const std::string modelPath0 = pair0.first.c_str();
-    const std::string texturePath0 = pair0.second.c_str();
+    if (!config.paintConfig.ACTIVE) { // game engine
         
-    auto textureIndex0 = loadTexture(texturePath0); // leave alone for now
-    
-    auto objData0 = ModelLoader::loadObj(modelPath0);
-    for (auto& m : objData0.modelMaterials) { // manual material texture index mapping
-        m.textureIndex = textureIndex0;
-    }
-    pushModel(objData0);
+        // first model
+        const auto& pair0 = config.graphicsConfig.MODEL_PATHS[0];
+        const std::string modelPath0 = pair0.first.c_str();
+        const std::string texturePath0 = pair0.second.c_str();
+        
+        auto textureIndex0 = loadTexture(texturePath0); // leave alone for now
+        
+        auto objData0 = ModelLoader::loadObj(modelPath0);
+        for (auto& m : objData0.modelMaterials) { // manual material texture index mapping
+            m.textureIndex = textureIndex0;
+        }
+        pushModel(objData0);
 
-    // second model ...
-        // function to induct models, textures, etc. ...
-        // map out an api
+        // second model ...
+
+    } else { // for paint
+        
+        loadBrushTexture(config.paintConfig.BRUSH_PATH);
+        
+        loadTexture(config.paintConfig.CANVAS_WIDTH, // canvas texture
+                    config.paintConfig.CANVAS_HEIGHT);
+        
+        loadLayerTexture(config.paintConfig.CANVAS_WIDTH, // similar to canvas, but pushed to different vectors
+                         config.paintConfig.CANVAS_HEIGHT);
+        
+        auto canvas = ModelLoader::loadCanvasQuad();
+        pushModel(canvas);
+
+    }
     
 }
 
@@ -1546,12 +1715,11 @@ void Graphics::updateUniformBuffer(uint32_t currentImage) {
 //    for (int i = 0; i < config.graphicsConfig.MAX_ENTITIES; i++) {
 //        instances[i].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 //    }
+//    instances[1].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     
-    instances[0].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    instances[1].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-
+    instances[0].model = glm::mat4(1.0f);
     
-    // only copy some or a range ...
+    // todo: only copy some / range
     
 //    for (size_t i = 0; i < instances.size(); ) {
 //        if (!dirty[i]) { i++; continue; }
@@ -1565,7 +1733,6 @@ void Graphics::updateUniformBuffer(uint32_t currentImage) {
 //            instances.data() + start,
 //            count * sizeof(InstanceSSBO)
 //        );
-
     
     memcpy(instanceStorageBuffersMapped[currentFrame],
            instances.data(),
@@ -1581,6 +1748,26 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
 
     if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
+    }
+    
+    if (inputSystem.pressed) {
+        std::cout << "PAINT!!!" << std::endl;
+        
+        uint32_t mipLevels = 1;
+        transitionImageLayout(commandBuffer,
+                              textureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              mipLevels);
+        paint(commandBuffers[currentFrame], imageIndex);
+        transitionImageLayout(commandBuffer,
+                              textureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              mipLevels);
+
     }
 
     VkRenderPassBeginInfo renderPassInfo{};
@@ -1651,7 +1838,7 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
             vkCmdDrawIndexed(
                 commandBuffer,
                 submesh.indexCount,
-                2, // instance count
+                1, // instance count
                 submesh.firstIndex,
                 submesh.firstVertex,
                 0 // start instance index
@@ -1684,6 +1871,7 @@ void Graphics::drawFrame() {
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
     vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
+    
     recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
     VkSubmitInfo submitInfo{};
@@ -1741,9 +1929,11 @@ void Graphics::initVulkan() {
     createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
+    
     createSwapChain();
     createImageViews();
     createRenderPass();
+    
     createDescriptorSetLayout();
     
     createGraphicsPipeline();
@@ -1752,33 +1942,65 @@ void Graphics::initVulkan() {
     createColorResources();
     createDepthResources();
     createFramebuffers();
-    
+        
     loadModels();
+    
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
-    
     createDescriptorPool();
     createDescriptorSets();
     createCommandBuffers();
-    
     createSyncObjects();
     
+    // paint
+    
+    createPaintRenderPass();
+    createPaintFramebuffers();
+    createPaintDescriptorSetLayout();
+    createPaintPipeline();
+    createPaintDescriptorPool();
+    createPaintDescriptorSets();
+    
+}
+
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    InputSystem* inputSystem = static_cast<InputSystem*>(glfwGetWindowUserPointer(window));
+    if (!inputSystem) return;
+    inputSystem->mouse_button_callback(button, action, mods);
+}
+
+void mouse_position_callback(GLFWwindow* window, double xpos, double ypos) {
+    InputSystem* inputSystem = static_cast<InputSystem*>(glfwGetWindowUserPointer(window));
+    if (!inputSystem) return;
+    inputSystem->mouse_position_callback(xpos, ypos);
 }
 
 void Graphics::mainLoop() {
+    
+    glfwSetWindowUserPointer(window, &inputSystem);
+        
+    // register glwf input callbacks
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetCursorPosCallback(window, mouse_position_callback);
+    
+    drawFrame(); // first draw frame
+    
+    // actual main loop
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
-        drawFrame();
+        if (inputSystem.pressed) { // todo: better architecture
+            drawFrame();
+            inputSystem.reset();
+        }
     }
     vkDeviceWaitIdle(device);
-}
-
-void Graphics::run() {
-    initWindow();
-    initVulkan();
-    mainLoop();
-    cleanup();
+    
+    // add logging for average draw call timing ...
+        // start time
+        // count
+        // end time / count
+    
 }
 
 void Graphics::cleanup() {
@@ -1787,6 +2009,10 @@ void Graphics::cleanup() {
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
+
+    vkDestroyPipeline(device, paintPipeline, nullptr);
+    vkDestroyPipelineLayout(device, paintPipelineLayout, nullptr);
+    vkDestroyRenderPass(device, paintRenderPass, nullptr);
 
     for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
@@ -1797,6 +2023,7 @@ void Graphics::cleanup() {
     }
 
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+    vkDestroyDescriptorPool(device, paintDescriptorPool, nullptr);
 
     vkDestroySampler(device, textureSampler, nullptr);
     
@@ -1810,8 +2037,25 @@ void Graphics::cleanup() {
         vkFreeMemory(device, tim, nullptr);
     }
 
+    for (auto& tiv : layerTextureImageViews) {
+        vkDestroyImageView(device, tiv, nullptr);
+    }
+    for (auto& ti : layerTextureImages) {
+        vkDestroyImage(device, ti, nullptr);
+    }
+    for (auto& tim : layerTextureImageMemories) {
+        vkFreeMemory(device, tim, nullptr);
+    }
+    
+    vkDestroyFramebuffer(device, paintFramebuffer, nullptr);
+    
+    vkDestroyImageView(device, brushTextureImageView, nullptr);
+    vkDestroyImage(device, brushTextureImage, nullptr);
+    vkFreeMemory(device, brushTextureImageMemory, nullptr);
+    
     vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-
+    vkDestroyDescriptorSetLayout(device, paintDescriptorSetLayout, nullptr);
+    
     vkDestroyBuffer(device, indexBuffer, nullptr);
     vkFreeMemory(device, indexBufferMemory, nullptr);
     vkDestroyBuffer(device, vertexBuffer, nullptr);
@@ -1837,4 +2081,11 @@ void Graphics::cleanup() {
     glfwDestroyWindow(window);
 
     glfwTerminate();
+}
+
+void Graphics::run() {
+    initWindow();
+    initVulkan();
+    mainLoop();
+    cleanup();
 }

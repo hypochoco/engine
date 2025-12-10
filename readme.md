@@ -33,45 +33,12 @@ Xcode specific instructions:
 
 
 
+for now, config that can switch between 3d and painting
+- elect a single NUM_TEXTURES, separate list of layers and brushes
+- refactor image creation and texture loading, reduce code 
 
-
-
-converting to a digital painting app
-
-canvas (vkimage) - rendered to hardcoded model object or something
-
-saving and whatever else ... 
-
-so the model is actually a vkimage that gets written to (should just be an option or two)
-
-
-
-
-
-
-
-render brushes and stuff to canvas
-canvas to swapchain
-
-
-
-
-
-render brushes on demand 
-alpha blending to composite strokes onto canvas ... 
-
-
-
-
-
-
-
-
-
-
-
-reorganize the code a little more ... 
-separate things a little better ... 
+eventually split into library that supports different things ... 
+- abstract out the window for qt and others ... 
 
 
 
@@ -87,12 +54,6 @@ separate things a little better ...
 
 
 
-vulkan features
-- select rendering pipelines ... 
-
-
-
-- save ... try out stuff to make a digital painting app ... 
 
 
 

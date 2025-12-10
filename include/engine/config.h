@@ -9,6 +9,21 @@ struct Config {
     virtual ~Config() = default;
 };
 
+struct PaintConfig : public Config {
+    
+    static constexpr bool ACTIVE = true;
+    
+    static inline const std::string VERT_SHADER_PATH = "brush_vert.spv";
+    static inline const std::string FRAG_SHADER_PATH = "brush_frag.spv";
+    static inline const std::string BRUSH_PATH = "brush.png";
+    
+    static constexpr uint32_t CANVAS_WIDTH = 1024;
+    static constexpr uint32_t CANVAS_HEIGHT = 1024;
+    
+    // override num_textures = 1
+
+};
+
 struct GraphicsConfig : public Config {
     
     static constexpr uint32_t WIDTH = 800;
@@ -35,6 +50,7 @@ public:
     }
 
     GraphicsConfig graphicsConfig;
+    PaintConfig paintConfig;
 
 private:
     AppConfig() = default;

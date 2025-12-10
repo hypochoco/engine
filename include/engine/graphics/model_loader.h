@@ -99,5 +99,6 @@ struct Model {
 
 class ModelLoader{
 public:
-    static ObjData loadObj(const std::string& modelPath);;
+    static ObjData loadObj(const std::string& modelPath);
+    static ObjData loadCanvasQuad();
 };

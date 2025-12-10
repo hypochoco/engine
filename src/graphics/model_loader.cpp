@@ -79,3 +79,34 @@ ObjData ModelLoader::loadObj(const std::string& modelPath) {
     
     return objData;
 }
+
+ObjData ModelLoader::loadCanvasQuad() {
+    ObjData objData;
+
+    // Add one dummy material (since your engine expects it)
+    objData.modelMaterials.push_back(Material{"canvas", 0});
+
+    // Define 4 vertices
+    std::vector<Vertex> verts;
+    verts.reserve(4);
+
+    // Canvas quad in NDC-like local space (you will position it with your transform)
+    // If you want it in [0,1] space instead, I can change it.
+
+    verts.push_back(Vertex{ { -1.0f, -1.0f, 0.0f }, {1,1,1}, { 0.0f, 0.0f } }); // bottom-left
+    verts.push_back(Vertex{ {  1.0f, -1.0f, 0.0f }, {1,1,1}, { 1.0f, 0.0f } }); // bottom-right
+    verts.push_back(Vertex{ {  1.0f,  1.0f, 0.0f }, {1,1,1}, { 1.0f, 1.0f } }); // top-right
+    verts.push_back(Vertex{ { -1.0f,  1.0f, 0.0f }, {1,1,1}, { 0.0f, 1.0f } }); // top-left
+
+    // Indices for two triangles
+    std::vector<uint32_t> inds = {
+        0, 1, 2,
+        2, 3, 0
+    };
+
+    // Store in objData using materialId = 0
+    objData.uniqueVerticesMap[0] = verts;
+    objData.uniqueIndicesMap[0] = inds;
+
+    return objData;
+}
