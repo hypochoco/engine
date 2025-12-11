@@ -22,22 +22,24 @@ Xcode specific instructions:
 - [ ] Address these vulkan issues:
     - [ ] Run your program now with optimization enabled (e.g. Release mode in Visual Studio and with the -O3 compiler flag for GCC`). This is necessary, because otherwise loading the model will be very slow. 
     
-- [ ] mouse down vs pressed on painting
-    - [ ] configure brush scissor for optimization
 - [ ] layer into canvas ... 
     - [ ] layer visibility 
 
+    
+    
+- [ ] mouse down vs pressed on painting (brush functions / shaders?)
+    - [ ] configure brush scissor for optimization
 - [ ] fix the semaphore issue ... 
-
 - [ ] polishing into an app
     - [ ] image sizes, tools select and transform ... 
 - [ ] grinding out performance 
 - [ ] finally getting some better structure 
-
-
 - [ ] most of the vulkan is there, just need to clean up a little ... 
-
-
+- [ ] restructure for layers, canvas, etc. what is a good way to have structure here ... 
+    - different classes for digital painting stuff ?? swap chain stuff is pretty similar ... 
+    - different classes for different pipelines ?? 
+    - `graphics_paint` maybe a better name ... something that establishes the main pipeline into the swapchain, then something else ... 
+- [ ] clean up this readme a little ... 
 
 
 
