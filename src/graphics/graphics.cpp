@@ -1694,32 +1694,39 @@ void Graphics::loadModels() {
 void Graphics::updateUniformBuffer(uint32_t currentImage) {
         
     static auto startTime = std::chrono::high_resolution_clock::now();
-
     auto currentTime = std::chrono::high_resolution_clock::now();
     float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
     
-    // global ubo
-
-    GlobalUBO globalUBO{};
-    // globalUBO.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    globalUBO.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    globalUBO.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
-    globalUBO.proj[1][1] *= -1;
-
-    memcpy(globalUniformBuffersMapped[currentImage], &globalUBO, sizeof(globalUBO));
-    
-    // instance ssbo
-
     std::vector<InstanceSSBO> instances(config.graphicsConfig.MAX_ENTITIES);
     
-//    for (int i = 0; i < config.graphicsConfig.MAX_ENTITIES; i++) {
-//        instances[i].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-//    }
-//    instances[1].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    if (!config.paintConfig.ACTIVE) { // spinning instances
+        
+        globalUBO.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        globalUBO.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
+        globalUBO.proj[1][1] *= -1;
+        
+        for (int i = 0; i < config.graphicsConfig.MAX_ENTITIES; i++) {
+            instances[i].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f * i), glm::vec3(0.0f, 0.0f, 1.0f));
+        }
+
+    } else { // fixed paint
+                
+        depth = 3.0f;
+        globalUBO.view = glm::lookAt(glm::vec3(0.0f, 0.0f, depth), // camera pos
+                                     glm::vec3(0.0f, 0.0f, 0.0f), // look at
+                                     glm::vec3(0.0f, 1.0f, 0.0f)); // up
+        globalUBO.proj = glm::perspective(glm::radians(45.0f), // fovy
+                                          swapChainExtent.width / (float) swapChainExtent.height, // aspect
+                                          0.1f, // near
+                                          10.0f); // far
+        globalUBO.proj[1][1] *= -1; // strange projection fix
+        
+        // canvas model matrix
+        instances[0].model = glm::mat4(1.0f);
+        
+    }
     
-    instances[0].model = glm::mat4(1.0f);
-    
-    // todo: only copy some / range
+    // todo: only copy a range, group copy calls together ...
     
 //    for (size_t i = 0; i < instances.size(); ) {
 //        if (!dirty[i]) { i++; continue; }
@@ -1733,6 +1740,10 @@ void Graphics::updateUniformBuffer(uint32_t currentImage) {
 //            instances.data() + start,
 //            count * sizeof(InstanceSSBO)
 //        );
+    
+    // todo: only update if changed
+    
+    memcpy(globalUniformBuffersMapped[currentImage], &globalUBO, sizeof(globalUBO));
     
     memcpy(instanceStorageBuffersMapped[currentFrame],
            instances.data(),
@@ -1750,9 +1761,7 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
         throw std::runtime_error("failed to begin recording command buffer!");
     }
     
-    if (inputSystem.pressed) {
-        std::cout << "PAINT!!!" << std::endl;
-        
+    if (inputSystem.pressed) { // paint function 
         uint32_t mipLevels = 1;
         transitionImageLayout(commandBuffer,
                               textureImages[0],
@@ -1767,7 +1776,6 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               mipLevels);
-
     }
 
     VkRenderPassBeginInfo renderPassInfo{};
@@ -1976,6 +1984,12 @@ void mouse_position_callback(GLFWwindow* window, double xpos, double ypos) {
     inputSystem->mouse_position_callback(xpos, ypos);
 }
 
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    InputSystem* inputSystem = static_cast<InputSystem*>(glfwGetWindowUserPointer(window));
+    if (!inputSystem) return;
+    inputSystem->key_callback(key, action);
+}
+
 void Graphics::mainLoop() {
     
     glfwSetWindowUserPointer(window, &inputSystem);
@@ -1983,14 +1997,26 @@ void Graphics::mainLoop() {
     // register glwf input callbacks
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetCursorPosCallback(window, mouse_position_callback);
+    glfwSetKeyCallback(window, key_callback);
     
     drawFrame(); // first draw frame
+    
+    // random paint stuff
+    brushSize = 0.25f;
     
     // actual main loop
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         if (inputSystem.pressed) { // todo: better architecture
             drawFrame();
+            inputSystem.reset();
+        } else if (inputSystem.leftBracketPressed) {
+            brushSize += 0.01f;
+            inputSystem.reset();
+        } else if (inputSystem.rightBracketPressed) {
+            if (brushSize > 0.0f) {
+                brushSize -= 0.01f;
+            }
             inputSystem.reset();
         }
     }

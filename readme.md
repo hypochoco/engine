@@ -19,10 +19,27 @@ Xcode specific instructions:
 - Physics engine
 
 ## Todo
-- [ ] Restructure vulkan code
-    - [ ] Defined API
 - [ ] Address these vulkan issues:
     - [ ] Run your program now with optimization enabled (e.g. Release mode in Visual Studio and with the -O3 compiler flag for GCC`). This is necessary, because otherwise loading the model will be very slow. 
+    
+- [ ] mouse down vs pressed on painting
+    - [ ] configure brush scissor for optimization
+- [ ] layer into canvas ... 
+    - [ ] layer visibility 
+
+- [ ] fix the semaphore issue ... 
+
+- [ ] polishing into an app
+    - [ ] image sizes, tools select and transform ... 
+- [ ] grinding out performance 
+- [ ] finally getting some better structure 
+
+
+- [ ] most of the vulkan is there, just need to clean up a little ... 
+
+
+
+
 
 ---
 
@@ -31,69 +48,20 @@ Xcode specific instructions:
 ### Graphics API
 
 
-
-
-for now, config that can switch between 3d and painting
-- elect a single NUM_TEXTURES, separate list of layers and brushes
-- refactor image creation and texture loading, reduce code 
-
-eventually split into library that supports different things ... 
-- abstract out the window for qt and others ... 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 graphics api that can support both a game engine and digital painting program
-- select which render pipeline
-- select which draw command to run
+- select render pipelines
+- select draw commands
 - select select render passes
-- etc. ... 
+- etc.
 
-- then use the graphics obj as an api, or whatever else ... 
+- then use the graphics obj 
 - any concerns about multithreading in this option ?? 
-
-
+    - inner multi threading?
 
 worker stealing
 - each have a queue, owner pushes and pops from one end
 - theives take from the other side of the queue
 - keep everything lock free using an atomic queue or something ... 
-
-
-
-
-
-
-
-
-don't use indices, instead id's because if something was deleted, and we try the same index again it'll be an issue
 
 debug features like bounding boxes ... 
 
@@ -155,34 +123,6 @@ getters (get all instances of a model, etc.)
 hierarchical instancing?
 
 cameras 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

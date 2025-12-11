@@ -129,7 +129,8 @@ void Graphics::createPaintDescriptorPool() {
 
 void Graphics::createPaintDescriptorSets() {
     
-    std::vector<VkDescriptorSetLayout> layouts(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT, paintDescriptorSetLayout);
+    std::vector<VkDescriptorSetLayout> layouts(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT,
+                                               paintDescriptorSetLayout);
     
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -256,9 +257,9 @@ void Graphics::createPaintPipeline() {
     dynamicState.pDynamicStates = dynamicStates.data();
     
     VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(float) * 6; // pos(vec2) + size(vec2) + canvas(vec2) => 6 floats
+    pushConstantRange.size = sizeof(float) * 4; // pos(vec2) + size(vec2) => 4 floats
     
     // todo: does this optimize for tiling??
         // this is fine, but consider tiling using instances / ssbo's
@@ -319,7 +320,7 @@ void Graphics::paint(VkCommandBuffer commandBuffer,
     
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, paintPipeline);
     
-    VkViewport viewport{};
+    VkViewport viewport{}; // should be canvas size
     viewport.x = 0.0f;
     viewport.y = 0.0f;
     viewport.width = (float) config.paintConfig.CANVAS_WIDTH;
@@ -328,7 +329,7 @@ void Graphics::paint(VkCommandBuffer commandBuffer,
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
-    VkRect2D scissor{};
+    VkRect2D scissor{}; // todo: can be brush size + brush position, more optimized draw call
     scissor.offset = {0, 0};
     scissor.extent = { config.paintConfig.CANVAS_WIDTH, config.paintConfig.CANVAS_HEIGHT };
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
@@ -349,19 +350,27 @@ void Graphics::paint(VkCommandBuffer commandBuffer,
         nullptr
     );
     
-    std::cout << "xpos: " << inputSystem.xpos << ", ypos: " << inputSystem.ypos << std::endl;
+    // screen space to world space
     
-    struct BrushPC { float pos[2]; float size[2]; float canvas[2]; } pc;
-    pc.pos[0] = inputSystem.xpos;
-    pc.pos[1] = inputSystem.ypos;
-    pc.size[0] = 500;
-    pc.size[1] = 500;
-    pc.canvas[0] = (float) config.paintConfig.CANVAS_WIDTH; // not used ... remove
-    pc.canvas[1] = (float) config.paintConfig.CANVAS_HEIGHT;
-
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+    
+    float ndcX = (inputSystem.xpos / windowWidth) * 2.0f - 1.0f;
+    float ndcY = 1.0f - (inputSystem.ypos / windowHeight) * 2.0f;
+    
+    float aspect = (float) windowWidth / windowHeight;
+    float tanHalfFovy = 0.4142f; // hard coded for 45 deg
+    
+    struct BrushPC { float pos[2]; float size[2]; } pc;
+    pc.pos[0] = ndcX * depth * tanHalfFovy * aspect;
+    pc.pos[1] = ndcY * depth * tanHalfFovy;
+    
+    pc.size[0] = brushSize; // translate to px size
+    pc.size[1] = brushSize;
+    
     vkCmdPushConstants(commandBuffer,
                        paintPipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT,
                        0,
                        sizeof(pc),
                        &pc);
@@ -372,7 +381,3 @@ void Graphics::paint(VkCommandBuffer commandBuffer,
     vkCmdEndRenderPass(commandBuffer);
     
 }
-
-// looking way better now
-    // why are alphas not working?
-    // positioning on brush and canvas 

@@ -12,12 +12,15 @@
 
 class InputSystem {
 public:
-    bool pressed;
+    bool pressed; // mouse
     double xpos = 0;
     double ypos = 0;
+    bool leftBracketPressed;
+    bool rightBracketPressed;
     
     void reset();
     
     void mouse_button_callback(int button, int action, int mods);
     void mouse_position_callback(double xpos, double ypos);
+    void key_callback(int key, int action);
 };

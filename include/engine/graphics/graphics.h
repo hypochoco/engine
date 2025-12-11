@@ -94,6 +94,8 @@ private:
     // variables
     
     AppConfig& config;
+    
+    GlobalUBO globalUBO;
         
     GLFWwindow* window;
     
@@ -295,6 +297,9 @@ private:
                                                         void* pUserData);
     
     // paint variables
+    
+    float depth;
+    float brushSize;
     
     VkImage brushTextureImage; // todo: vectors
     VkDeviceMemory brushTextureImageMemory;
