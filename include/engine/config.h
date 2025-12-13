@@ -11,17 +11,19 @@ struct Config {
 
 struct PaintConfig : public Config {
     
-    static constexpr bool ACTIVE = true;
-    
-    static inline const std::string VERT_SHADER_PATH = "brush_vert.spv";
-    static inline const std::string FRAG_SHADER_PATH = "brush_frag.spv";
-    static inline const std::string BRUSH_PATH = "brush.png";
+    static constexpr bool ACTIVE = false;
     
     static constexpr uint32_t CANVAS_WIDTH = 1024;
     static constexpr uint32_t CANVAS_HEIGHT = 1024;
     
-    // override num_textures = 1
-
+    static inline const std::string BRUSH_PATH = "brush.png";
+    
+    static inline const std::string LAYER_VERT_SHADER_PATH = "layer_vert.spv";
+    static inline const std::string LAYER_FRAG_SHADER_PATH = "layer_frag.spv";
+    
+    static inline const std::string BRUSH_VERT_SHADER_PATH = "brush_vert.spv";
+    static inline const std::string BRUSH_FRAG_SHADER_PATH = "brush_frag.spv";
+    
 };
 
 struct GraphicsConfig : public Config {

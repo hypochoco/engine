@@ -639,6 +639,13 @@ void Graphics::transitionImageLayout(VkCommandBuffer& commandBuffer,
         destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         
     } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+               && newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) { // dst optimal -> color attachment
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        
+    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) { // dst optimal -> shader read only
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -660,7 +667,9 @@ void Graphics::transitionImageLayout(VkCommandBuffer& commandBuffer,
         destinationStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         
     } else {
-        throw std::invalid_argument("unsupported layout transition!");
+        throw std::invalid_argument("unsupported layout transition! "
+                                    + std::to_string(static_cast<int>(oldLayout))
+                                    + " to " + std::to_string(static_cast<int>(newLayout)));
     }
 
     vkCmdPipelineBarrier(
@@ -1230,7 +1239,7 @@ void Graphics::createRenderPass() {
 std::vector<char> Graphics::readFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        throw std::runtime_error("failed to open file!");
+        throw std::runtime_error("failed to open file! path: " + filename);
     }
     size_t fileSize = (size_t) file.tellg();
     std::vector<char> buffer(fileSize);
@@ -1674,14 +1683,14 @@ void Graphics::loadModels() {
 
     } else { // for paint
         
-        loadBrushTexture(config.paintConfig.BRUSH_PATH);
+        loadBrushTexture(config.paintConfig.BRUSH_PATH); // brush
+        
+        loadLayerTexture(config.paintConfig.CANVAS_WIDTH, // layer
+                         config.paintConfig.CANVAS_HEIGHT);
         
         loadTexture(config.paintConfig.CANVAS_WIDTH, // canvas texture
                     config.paintConfig.CANVAS_HEIGHT);
-        
-        loadLayerTexture(config.paintConfig.CANVAS_WIDTH, // similar to canvas, but pushed to different vectors
-                         config.paintConfig.CANVAS_HEIGHT);
-        
+                
         auto canvas = ModelLoader::loadCanvasQuad();
         pushModel(canvas);
 
@@ -1761,21 +1770,36 @@ void Graphics::recordCommandBuffer(VkCommandBuffer commandBuffer,
         throw std::runtime_error("failed to begin recording command buffer!");
     }
     
-    if (inputSystem.pressed) { // paint function 
+    if (inputSystem.pressed) { // paint function
+        
         uint32_t mipLevels = 1;
-        transitionImageLayout(commandBuffer,
+        paint(commandBuffer, imageIndex);
+        transitionImageLayout(commandBuffer, // layer to shader
+                              layerTextureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              mipLevels);
+        transitionImageLayout(commandBuffer, // canvas to target
                               textureImages[0],
                               VK_FORMAT_R8G8B8A8_SRGB,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                               mipLevels);
-        paint(commandBuffers[currentFrame], imageIndex);
-        transitionImageLayout(commandBuffer,
+        rasterizeLayer(commandBuffer, imageIndex);
+        transitionImageLayout(commandBuffer, // layer to color
+                              layerTextureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              mipLevels);
+        transitionImageLayout(commandBuffer, // canvas to shader
                               textureImages[0],
                               VK_FORMAT_R8G8B8A8_SRGB,
                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               mipLevels);
+        
     }
 
     VkRenderPassBeginInfo renderPassInfo{};
@@ -1970,6 +1994,13 @@ void Graphics::initVulkan() {
     createPaintDescriptorPool();
     createPaintDescriptorSets();
     
+    createLayerRenderPass();
+    createLayerFramebuffers();
+    createLayerDescriptorSetLayout();
+    createLayerPipeline();
+    createLayerDescriptorPool();
+    createLayerDescriptorSets();
+    
 }
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
@@ -2039,6 +2070,10 @@ void Graphics::cleanup() {
     vkDestroyPipeline(device, paintPipeline, nullptr);
     vkDestroyPipelineLayout(device, paintPipelineLayout, nullptr);
     vkDestroyRenderPass(device, paintRenderPass, nullptr);
+    
+    vkDestroyPipeline(device, layerPipeline, nullptr);
+    vkDestroyPipelineLayout(device, layerPipelineLayout, nullptr);
+    vkDestroyRenderPass(device, layerRenderPass, nullptr);
 
     for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
@@ -2050,6 +2085,7 @@ void Graphics::cleanup() {
 
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorPool(device, paintDescriptorPool, nullptr);
+    vkDestroyDescriptorPool(device, layerDescriptorPool, nullptr);
 
     vkDestroySampler(device, textureSampler, nullptr);
     
@@ -2073,14 +2109,16 @@ void Graphics::cleanup() {
         vkFreeMemory(device, tim, nullptr);
     }
     
-    vkDestroyFramebuffer(device, paintFramebuffer, nullptr);
-    
     vkDestroyImageView(device, brushTextureImageView, nullptr);
     vkDestroyImage(device, brushTextureImage, nullptr);
     vkFreeMemory(device, brushTextureImageMemory, nullptr);
     
+    vkDestroyFramebuffer(device, paintFramebuffer, nullptr);
+    vkDestroyFramebuffer(device, layerFramebuffer, nullptr);
+    
     vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, paintDescriptorSetLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, layerDescriptorSetLayout, nullptr);
     
     vkDestroyBuffer(device, indexBuffer, nullptr);
     vkFreeMemory(device, indexBufferMemory, nullptr);

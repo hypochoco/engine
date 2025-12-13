@@ -27,12 +27,6 @@ void Graphics::loadBrushTexture(const std::string& texturePath) {
 
 }
 
-void Graphics::loadLayerTexture(const int texWidth, const int texHeight)  {
-    
-    std::cout << "warning: not implemented" << std::endl;
-    
-}
-
 void Graphics::createPaintRenderPass() {
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -77,7 +71,7 @@ void Graphics::createPaintRenderPass() {
 
 void Graphics::createPaintFramebuffers() {
     
-    VkImageView attachments[] = { textureImageViews[0] }; // todo: canvas located in first slot
+    VkImageView attachments[] = { layerTextureImageViews[0] }; // todo: canvas located in first slot
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = paintRenderPass;
@@ -167,8 +161,8 @@ void Graphics::createPaintDescriptorSets() {
 
 void Graphics::createPaintPipeline() {
     
-    auto vertShaderCode = readFile(config.paintConfig.VERT_SHADER_PATH);
-    auto fragShaderCode = readFile(config.paintConfig.FRAG_SHADER_PATH);
+    auto vertShaderCode = readFile(config.paintConfig.BRUSH_VERT_SHADER_PATH);
+    auto fragShaderCode = readFile(config.paintConfig.BRUSH_FRAG_SHADER_PATH);
     
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);

@@ -305,10 +305,6 @@ private:
     VkDeviceMemory brushTextureImageMemory;
     VkImageView brushTextureImageView;
     
-    std::vector<VkImage> layerTextureImages;
-    std::vector<VkDeviceMemory> layerTextureImageMemories;
-    std::vector<VkImageView> layerTextureImageViews;
-    
     VkFramebuffer paintFramebuffer;
     VkRenderPass paintRenderPass;
     
@@ -319,10 +315,23 @@ private:
     VkPipelineLayout paintPipelineLayout;
     VkPipeline paintPipeline;
 
+    std::vector<VkImage> layerTextureImages;
+    std::vector<VkDeviceMemory> layerTextureImageMemories;
+    std::vector<VkImageView> layerTextureImageViews;
+    
+    VkFramebuffer layerFramebuffer;
+    VkRenderPass layerRenderPass;
+    
+    VkDescriptorSetLayout layerDescriptorSetLayout;
+    VkDescriptorPool layerDescriptorPool;
+    std::vector<VkDescriptorSet> layerDescriptorSets;
+    
+    VkPipelineLayout layerPipelineLayout;
+    VkPipeline layerPipeline;
+    
     // paint functions
         
     void loadBrushTexture(const std::string& texturePath);
-    void loadLayerTexture(const int texWidth, const int texHeight);
     
     void createPaintRenderPass();
     void createPaintFramebuffers();
@@ -334,5 +343,19 @@ private:
     void createPaintPipeline();
     
     void paint(VkCommandBuffer commandBuffer, uint32_t imageIndex);
-        
+    
+    void loadLayerTexture(const int texWidth, const int texHeight);
+    
+    void createLayerRenderPass();
+    void createLayerFramebuffers();
+    
+    void createLayerDescriptorSetLayout();
+    void createLayerDescriptorPool();
+    void createLayerDescriptorSets();
+    
+    void createLayerPipeline();
+    
+    void rasterizeLayer(VkCommandBuffer commandBuffer,
+                        uint32_t imageIndex);
+    
 };
