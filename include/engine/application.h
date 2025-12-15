@@ -13,6 +13,7 @@ class Application {
     
 private:
     Graphics graphics;
+    AppConfig& config;
     
 public:
     Application();

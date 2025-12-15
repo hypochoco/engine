@@ -5,6 +5,19 @@
 //  Created by Daniel Cho on 12/11/25.
 //
 
+
+
+// swap chain stuff, whatever, that all happens once ...
+// rendering things to the swapchain is whatever ...
+// then therer's rendering into to other images ... 
+
+
+
+
+
+
+
+
 #include "engine/graphics/graphics.h"
 
 void Graphics::loadLayerTexture(const int texWidth, const int texHeight)  {

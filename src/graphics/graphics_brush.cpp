@@ -375,3 +375,40 @@ void Graphics::paint(VkCommandBuffer commandBuffer,
     vkCmdEndRenderPass(commandBuffer);
     
 }
+
+void Graphics::recordPaintCommandBuffer(VkCommandBuffer commandBuffer,
+                                        uint32_t imageIndex) {
+    
+    if (inputSystem.pressed) { // paint function
+        
+        uint32_t mipLevels = 1;
+        paint(commandBuffer, imageIndex);
+        transitionImageLayout(commandBuffer, // layer to shader
+                              layerTextureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              mipLevels);
+        transitionImageLayout(commandBuffer, // canvas to target
+                              textureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              mipLevels);
+        rasterizeLayer(commandBuffer, imageIndex);
+        transitionImageLayout(commandBuffer, // layer to color
+                              layerTextureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              mipLevels);
+        transitionImageLayout(commandBuffer, // canvas to shader
+                              textureImages[0],
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              mipLevels);
+        
+    }
+    
+}

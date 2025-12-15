@@ -22,12 +22,16 @@ Xcode specific instructions:
 
 - [ ] Address these vulkan issues:
     - [ ] Run your program now with optimization enabled (e.g. Release mode with the -O3 compiler flag for GCC`)
-    - [ ] Fix semaphore warning
     
 - [ ] Generalize vulkan features
+
+    - [ ] Organize one time vs per draw ... 
+        - [ ] Establish place for bulk calls 
+
     - [ ] Automatic image layout transitions?
     - [ ] Rendering feature selection?
     - [ ] Fork and then develop separately, give general utils and then allow development
+    - [ ] Onboard onto QT
  
 - [ ] Application level
     - [ ] Layer visibility 

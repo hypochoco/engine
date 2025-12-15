@@ -36,8 +36,8 @@
 #include <unordered_set>
 
 #include "engine/config.h"
-#include "engine/graphics/model_loader.h"
 #include "engine/input_system.h"
+#include "engine/graphics/model_loader.h"
 
 // flags
 
@@ -89,6 +89,21 @@ public:
     
     void run();
     
+    uint32_t loadTexture(const std::string& texturePath);
+    uint32_t loadTexture(const int texWidth, const int texHeight);
+    void pushModel(ObjData& objData);
+    
+    void initWindow();
+    void initVulkan();
+    void initRender();
+    void mainLoop();
+    void cleanup();
+    
+    // public paint functions
+    
+    void loadBrushTexture(const std::string& texturePath);
+    void loadLayerTexture(const int texWidth, const int texHeight);
+
 private:
     
     // variables
@@ -172,12 +187,10 @@ private:
     
     // functions
     
-    void initWindow();
+    
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
-    void initVulkan();
-    void mainLoop();
     void cleanupSwapChain();
-    void cleanup();
+    
     void recreateSwapChain();
     void createInstance();
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
@@ -185,20 +198,22 @@ private:
     void createSurface();
     void pickPhysicalDevice();
     void createLogicalDevice();
+    
     void createSwapChain();
-    void createImageViews();
+    void createSwapChainImageViews();
+    void createSwapChainFramebuffers();
+    void createSwapChainColorResources();
+    void createSwapChainDepthResources();
+    
     void createRenderPass();
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
-    void createFramebuffers();
+    
     void createCommandPool();
-    void createColorResources();
-    void createDepthResources();
-    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
+        VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
                                  VkImageTiling tiling,
                                  VkFormatFeatureFlags features);
     VkFormat findDepthFormat();
-    
     
     void createImage(uint32_t width,
                      uint32_t height,
@@ -255,11 +270,7 @@ private:
                                VkImageLayout newLayout,
                                uint32_t mipLevels);
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
-    uint32_t loadTexture(const std::string& texturePath);
-    uint32_t loadTexture(const int texWidth, const int texHeight);
-    
-    void pushModel(ObjData& objData);
-    void loadModels();
+        
     void createVertexBuffer();
     void createIndexBuffer();
     void createUniformBuffers();
@@ -275,7 +286,8 @@ private:
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     void createCommandBuffers();
-    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+    void recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+    void recordPaintCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
     void createSyncObjects();
     void updateUniformBuffer(uint32_t currentImage);
     void drawFrame();
@@ -331,28 +343,20 @@ private:
     
     // paint functions
         
-    void loadBrushTexture(const std::string& texturePath);
-    
     void createPaintRenderPass();
     void createPaintFramebuffers();
-    
     void createPaintDescriptorSetLayout();
     void createPaintDescriptorPool();
     void createPaintDescriptorSets();
-    
     void createPaintPipeline();
     
     void paint(VkCommandBuffer commandBuffer, uint32_t imageIndex);
-    
-    void loadLayerTexture(const int texWidth, const int texHeight);
-    
+        
     void createLayerRenderPass();
     void createLayerFramebuffers();
-    
     void createLayerDescriptorSetLayout();
     void createLayerDescriptorPool();
     void createLayerDescriptorSets();
-    
     void createLayerPipeline();
     
     void rasterizeLayer(VkCommandBuffer commandBuffer,

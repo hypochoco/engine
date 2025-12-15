@@ -5,6 +5,8 @@
 //  Created by Daniel Cho on 12/2/25.
 //
 
+// todo: potentially move this elsewhere
+
 #include "engine/graphics/model_loader.h"
 
 #define TINYOBJLOADER_IMPLEMENTATION
