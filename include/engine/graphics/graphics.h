@@ -165,9 +165,6 @@ public:
     
     // public variables
     
-    float depth; // temp
-    float brushSize; // temp
-    
     GLFWwindow* window;
     VkDevice device;
         
@@ -232,8 +229,15 @@ public:
     void startFrame(uint32_t& imageIndex);
     void submitFrame(uint32_t& imageIndex);
     
-    void updateGlobalUBO();
-    void updateInstanceSSBOs();
+    void updateGlobalUBO(uint32_t currentFrame,
+                         glm::mat4& view,
+                         glm::mat4& proj);
+    void updateInstanceSSBOs(uint32_t currentFrame,
+                             std::vector<InstanceSSBO>& instances);
+    
+    void updateGlobalUBO(glm::mat4& view,
+                         glm::mat4& proj);
+    void updateInstanceSSBOs(std::vector<InstanceSSBO>& instances);
     
     void cleanup();
     
@@ -360,7 +364,7 @@ private:
     
     // external
     
-    AppConfig& config;
+    AppConfig& config; // todo: not needed
     
     // variables
         

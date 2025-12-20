@@ -40,6 +40,10 @@ Xcode specific instructions:
     - [ ] Brush functions / mouse down and released
     - [ ] Cut tool + transforms
     
+- [ ] Make another application for the spinning model, keep engine general enough to support both functions 
+    
+- [ ] Get rid of a lot of the configs for inputs instead 
+    
 ---
 
 ## Notes

@@ -18,24 +18,119 @@ Application::~Application() { // destructor
     // cleanup here
 }
 
-void Application::init() {
+// graphics application
+
+GraphicsApplication::GraphicsApplication() : Application() { // constructor
+    // currently empty
+}
+
+GraphicsApplication::~GraphicsApplication() { // destructor
+    // cleanup here
+}
+
+void GraphicsApplication::init() {
     
-    graphics.initWindow();
+    graphics.initWindow(); // todo: configurables here ? window size
     graphics.initVulkan();
     
-    //    // 3d model application
-    //
-    //    auto textureIndex = graphics.loadTexture("viking_room.png");
-    //    auto objData = ModelLoader::loadObj("viking_room.obj");
-    //    for (auto& m : objData.modelMaterials) {
-    //        m.textureIndex = textureIndex;
-    //    }
-    //    graphics.pushModel(objData);
+    // model texture
+            
+    graphics.loadTexture("viking_room.png",
+                         modelTextureImage,
+                         modelTextureImageMemory,
+                         modelTextureImageView,
+                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                         | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                         | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         1);
+    
+    graphics.transitionImageLayout(modelTextureImage,
+                                   VK_FORMAT_R8G8B8A8_SRGB,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   1);
+    
+    graphics.textureImages.push_back(modelTextureImage);
+    graphics.textureImageMemories.push_back(modelTextureImageMemory);
+    graphics.textureImageViews.push_back(modelTextureImageView);
+    
+    // load canvas quad
+    
+    auto model = Graphics::loadObj("viking_room.obj");
+    graphics.pushModel(model); // todo: which objs to draw, with which materials
+    
+    // finish rest of vulkan setup
+    
+    graphics.initRender(); // vertex buffers + swap chain pipeline
 
-    // ---
+}
+
+void GraphicsApplication::draw() {
     
-    // digital painting application
+    uint32_t imageIndex;
     
+    graphics.startFrame(imageIndex);
+    
+    static auto startTime = std::chrono::high_resolution_clock::now();
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(graphics.window, &windowWidth, &windowHeight);
+
+    glm::mat4 view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f),
+                                 glm::vec3(0.0f, 0.0f, 0.0f),
+                                 glm::vec3(0.0f, 0.0f, 1.0f));
+    
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f),
+                                      windowWidth / (float) windowHeight,
+                                      0.1f,
+                                      10.0f);
+    proj[1][1] *= -1;
+    
+    graphics.updateGlobalUBO(view, proj);
+    
+    std::vector<InstanceSSBO> instances(config.graphicsConfig.MAX_ENTITIES);
+    instances[0].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    graphics.updateInstanceSSBOs(instances);
+    
+    graphics.submitFrame(imageIndex);
+
+}
+
+void GraphicsApplication::run() {
+    
+    // actual main loop
+    while (!glfwWindowShouldClose(graphics.window)) {
+        glfwPollEvents();
+        draw();
+    }
+    vkDeviceWaitIdle(graphics.device);
+    
+}
+
+void GraphicsApplication::cleanup() {
+    
+    graphics.cleanup();
+    
+}
+
+// paint application
+
+PaintApplication::PaintApplication() : Application() { // constructor
+    // currently empty
+}
+
+PaintApplication::~PaintApplication() { // destructor
+    // cleanup here
+}
+
+void PaintApplication::init() {
+    
+    graphics.initWindow(); // todo: configurables here ? window size
+    graphics.initVulkan();
+        
     // brush
     
     graphics.loadTexture("brush.png",
@@ -221,20 +316,38 @@ void Application::init() {
     vkDestroyShaderModule(graphics.device, layerVertShaderModule, nullptr);
     vkDestroyShaderModule(graphics.device, layerFragShaderModule, nullptr);
     
-    // todo: move camera stuff here
+    // default camera
     
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(graphics.window, &windowWidth, &windowHeight);
     
+    depth = 3.0f;
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, depth), // camera pos
+                                 glm::vec3(0.0f, 0.0f, 0.0f), // look at
+                                 glm::vec3(0.0f, 1.0f, 0.0f)); // up
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), // fovy
+                                      windowWidth / (float) windowHeight, // aspect
+                                      0.1f, // near
+                                      10.0f); // far
+    proj[1][1] *= -1; // strange projection fix
+
+    std::vector<InstanceSSBO> instances(1);
+    instances[0].model = glm::mat4(1.0f);
+    
+    for (uint32_t i = 0; i < (uint32_t) config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
+        graphics.updateGlobalUBO(i, view, proj);
+        graphics.updateInstanceSSBOs(i, instances);
+    }
     
 }
 
-void Application::draw() {
+void PaintApplication::draw() {
     
     uint32_t imageIndex;
     
     graphics.startFrame(imageIndex);
     
-    graphics.updateGlobalUBO();
-    graphics.updateInstanceSSBOs();
+    // other globalubo + instancessbo updates here
     
     VkCommandBuffer& commandBuffer = graphics.commandBuffers[graphics.currentFrame];
     
@@ -252,11 +365,11 @@ void Application::draw() {
     float tanHalfFovy = 0.4142f; // hard coded for 45 deg
     
     struct BrushPC { float pos[2]; float size[2]; } pc;
-    pc.pos[0] = ndcX * graphics.depth * tanHalfFovy * aspect;
-    pc.pos[1] = ndcY * graphics.depth * tanHalfFovy;
+    pc.pos[0] = ndcX * depth * tanHalfFovy * aspect;
+    pc.pos[1] = ndcY * depth * tanHalfFovy;
     
-    pc.size[0] = graphics.brushSize; // translate to px size
-    pc.size[1] = graphics.brushSize;
+    pc.size[0] = brushSize; // translate to px size
+    pc.size[1] = brushSize;
     
     graphics.draw(commandBuffer,
                   brushRenderPass,
@@ -341,7 +454,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     inputSystem->key_callback(key, action);
 }
 
-void Application::run() {
+void PaintApplication::run() {
     
     // register inputs
         
@@ -354,9 +467,10 @@ void Application::run() {
     // main loop
     
     draw();
+    inputSystem.reset();
     
     // random paint stuff
-    graphics.brushSize = 0.25f;
+    brushSize = 0.25f;
     
     // actual main loop
     while (!glfwWindowShouldClose(graphics.window)) {
@@ -365,11 +479,11 @@ void Application::run() {
             draw();
             inputSystem.reset();
         } else if (inputSystem.leftBracketPressed) {
-            graphics.brushSize += 0.01f;
+            brushSize += 0.01f;
             inputSystem.reset();
         } else if (inputSystem.rightBracketPressed) {
-            if (graphics.brushSize > 0.0f) {
-                graphics.brushSize -= 0.01f;
+            if (brushSize > 0.0f) {
+                brushSize -= 0.01f;
             }
             inputSystem.reset();
         }
@@ -383,7 +497,7 @@ void Application::run() {
     
 }
 
-void Application::cleanup() {
+void PaintApplication::cleanup() {
     
     vkDestroyPipeline(graphics.device, brushPipeline, nullptr);
     vkDestroyPipelineLayout(graphics.device, brushPipelineLayout, nullptr);
@@ -417,7 +531,8 @@ void Application::cleanup() {
 
 int main() { // simple application runner
      try {
-         Application app;
+         PaintApplication app;
+//         GraphicsApplication app;
          app.init();
          app.run();
          app.cleanup();

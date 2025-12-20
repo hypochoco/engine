@@ -962,12 +962,6 @@ void Graphics::generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texW
     endSingleTimeCommands(commandBuffer);
 }
 
-
-
-
-
-
-
 // todo: only copy a range, group copy calls together
     
 //    for (size_t i = 0; i < instances.size(); ) {
@@ -983,31 +977,40 @@ void Graphics::generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texW
 //            count * sizeof(InstanceSSBO)
 //        );
 
-void Graphics::updateGlobalUBO() {
-        
-    depth = 3.0f;
-    globalUBO.view = glm::lookAt(glm::vec3(0.0f, 0.0f, depth), // camera pos
-                                 glm::vec3(0.0f, 0.0f, 0.0f), // look at
-                                 glm::vec3(0.0f, 1.0f, 0.0f)); // up
-    globalUBO.proj = glm::perspective(glm::radians(45.0f), // fovy
-                                      swapChainExtent.width / (float) swapChainExtent.height, // aspect
-                                      0.1f, // near
-                                      10.0f); // far
-    globalUBO.proj[1][1] *= -1; // strange projection fix
+void Graphics::updateGlobalUBO(uint32_t currentFrame,
+                               glm::mat4& view,
+                               glm::mat4& proj) {
+    
+    // todo: dirty flags
+    
+    globalUBO.view = view;
+    globalUBO.proj = proj;
     
     memcpy(globalUniformBuffersMapped[currentFrame], &globalUBO, sizeof(globalUBO));
 
 }
 
-void Graphics::updateInstanceSSBOs() {
+void Graphics::updateInstanceSSBOs(uint32_t currentFrame,
+                                   std::vector<InstanceSSBO>& instances) {
     
-    std::vector<InstanceSSBO> instances(1);
-    
-    instances[0].model = glm::mat4(1.0f);
-    
+    // todo: dirty flags
+
     memcpy(instanceStorageBuffersMapped[currentFrame],
            instances.data(),
            instances.size() * sizeof(InstanceSSBO));
+    
+}
+
+void Graphics::updateGlobalUBO(glm::mat4& view,
+                               glm::mat4& proj) {
+    
+    updateGlobalUBO(currentFrame, view, proj);
+    
+}
+
+void Graphics::updateInstanceSSBOs(std::vector<InstanceSSBO>& instances) {
+    
+    updateInstanceSSBOs(currentFrame, instances);
     
 }
 
@@ -1134,7 +1137,6 @@ void Graphics::initRender() {
     createSwapChainDescriptorSets(textureImageViews); // input textures
         
 }
-
 
 void Graphics::cleanup() {
     cleanupSwapChain();
