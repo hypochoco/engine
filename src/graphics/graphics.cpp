@@ -627,16 +627,47 @@ void Graphics::transitionImageLayout(VkImage image,
     endSingleTimeCommands(commandBuffer);
 }
 
+VkImageView Graphics::createImageView(VkImage image,
+                                      VkFormat format,
+                                      VkImageAspectFlags aspectFlags,
+                                      uint32_t mipLevels) {
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = aspectFlags;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = mipLevels;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VkImageView imageView;
+    if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create image view!");
+    }
+
+    return imageView;
+}
+
+void Graphics::createTextureImageView(uint32_t mipLevels,
+                                      VkImage& textureImage,
+                                      VkImageView& textureImageView) {
+    textureImageView = createImageView(textureImage,
+                                       VK_FORMAT_R8G8B8A8_SRGB,
+                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                       mipLevels);
+}
+
 void Graphics::stageTextureImage(int texWidth,
                                  int texHeight,
+                                 VkDeviceSize imageSize,
                                  stbi_uc* pixels,
                                  uint32_t mipLevels,
                                  VkImage& textureImage,
                                  VkDeviceMemory& textureImageMemory,
                                  VkImageUsageFlags usage) {
-    
-    VkDeviceSize imageSize = texWidth * texHeight * 4;
-    
+        
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
     createBuffer(imageSize,
@@ -677,417 +708,88 @@ void Graphics::stageTextureImage(int texWidth,
 
 }
 
-std::pair<int, int> Graphics::createTextureImage(const std::string& texturePath,
-                                  VkImage& textureImage,
-                                  VkDeviceMemory& textureImageMemory) {
+void Graphics::loadTexture(int texWidth,
+                           int texHeight,
+                           stbi_uc* pixels,
+                           VkImage& textureImage,
+                           VkDeviceMemory& textureImageMemory,
+                           VkImageView& textureImageView,
+                           VkImageUsageFlags usage,
+                           int mipLevels) {
 
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    
-    if (!pixels) {
-        throw std::runtime_error(stbi_failure_reason());
-//        throw std::runtime_error("failed to load texture image!");
-    }
-    
-    uint32_t mipLevels = 1;
-    
-    stageTextureImage(texWidth,
-                      texHeight,
-                      pixels,
-                      mipLevels,
-                      textureImage,
-                      textureImageMemory,
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-    
-    stbi_image_free(pixels);
-    
-    return {texWidth, texHeight};
-        
-}
-
-std::pair<int, int> Graphics::createTextureImage(const std::string& texturePath,
-                                  uint32_t& mipLevels,
-                                  VkImage& textureImage,
-                                  VkDeviceMemory& textureImageMemory) {
-
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
-    
-    if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
-    }
-        
-    stageTextureImage(texWidth,
-                      texHeight,
-                      pixels,
-                      mipLevels,
-                      textureImage,
-                      textureImageMemory,
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-    
-    stbi_image_free(pixels);
-    
-    return {texWidth, texHeight};
-        
-}
-
-void Graphics::createTextureImage(const int texWidth,
-                                  const int texHeight,
-                                  VkImage& textureImage,
-                                  VkDeviceMemory& textureImageMemory,
-                                  VkImageUsageFlags usage) {
-    
-    uint32_t mipLevels = 1;
     VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
-    stbi_uc* pixels = new stbi_uc[imageSize];
-    std::fill(pixels, pixels + imageSize, 255); // fill white
-    
-    if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
-    }
         
+    if (mipLevels == 0) {
+        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+    }
+
     stageTextureImage(texWidth,
                       texHeight,
+                      imageSize,
                       pixels,
                       mipLevels,
                       textureImage,
                       textureImageMemory,
                       usage);
-    
     stbi_image_free(pixels);
-
-}
-
-VkImageView Graphics::createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels) {
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = aspectFlags;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = mipLevels;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    VkImageView imageView;
-    if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create image view!");
+    
+    if (mipLevels != 1) { // note: transitions to shader read only, otherwise dst optimal
+        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
     }
-
-    return imageView;
-}
-
-void Graphics::createTextureImageView(const uint32_t& mipLevels,
-                                      VkImage& textureImage,
-                                      VkImageView& textureImageView) {
-    textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
-}
-
-uint32_t Graphics::loadTexture(const std::string& texturePath) {
-        
-    uint32_t mipLevels;
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
-    
-    auto [texWidth, texHeight] = createTextureImage(texturePath,
-                                                    mipLevels,
-                                                    textureImage,
-                                                    textureImageMemory);
-    
-    // transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
-    generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
     
     createTextureImageView(mipLevels,
                            textureImage,
                            textureImageView);
-
-    textureImageViews.push_back(textureImageView);
-    textureImages.push_back(textureImage);
-    textureImageMemories.push_back(textureImageMemory);
-    
-    return static_cast<uint32_t>(textureImages.size()-1);
     
 }
 
-uint32_t Graphics::loadTexture(const int texWidth, const int texHeight) {
+void Graphics::loadTexture(std::string texturePath,
+                           VkImage& textureImage,
+                           VkDeviceMemory& textureImageMemory,
+                           VkImageView& textureImageView,
+                           VkImageUsageFlags usage,
+                           int mipLevels) {
+
+    // load image
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        throw std::runtime_error(stbi_failure_reason());
+    }
     
-    uint32_t mipLevels = 1;
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
+    loadTexture(texWidth,
+                texHeight,
+                pixels,
+                textureImage,
+                textureImageMemory,
+                textureImageView,
+                usage,
+                mipLevels);
     
-    createTextureImage(texWidth,
-                       texHeight,
-                       textureImage,
-                       textureImageMemory,
-                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                       | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-                       | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-                       | VK_IMAGE_USAGE_SAMPLED_BIT);
-        
-    transitionImageLayout(textureImage,
-                          VK_FORMAT_R8G8B8A8_SRGB,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          1);
+}
+
+void Graphics::createTexture(int texWidth,
+                             int texHeight,
+                             VkImage& textureImage,
+                             VkDeviceMemory& textureImageMemory,
+                             VkImageView& textureImageView,
+                             VkImageUsageFlags usage,
+                             int mipLevels) {
     
-    createTextureImageView(mipLevels,
-                           textureImage,
-                           textureImageView);
+    // create image
+    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
+    stbi_uc* pixels = new stbi_uc[imageSize];
+    std::fill(pixels, pixels + imageSize, 255); // fill white
 
-    textureImageViews.push_back(textureImageView);
-    textureImages.push_back(textureImage);
-    textureImageMemories.push_back(textureImageMemory);
-    
-    return static_cast<uint32_t>(textureImages.size()-1);
+    loadTexture(texWidth,
+                texHeight,
+                pixels,
+                textureImage,
+                textureImageMemory,
+                textureImageView,
+                usage,
+                mipLevels);
 
-}
-
-// swap chain
-
-SwapChainSupportDetails Graphics::querySwapChainSupport(VkPhysicalDevice device) {
-    SwapChainSupportDetails details;
-
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
-
-    uint32_t formatCount;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
-
-    if (formatCount != 0) {
-        details.formats.resize(formatCount);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
-    }
-
-    uint32_t presentModeCount;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
-
-    if (presentModeCount != 0) {
-        details.presentModes.resize(presentModeCount);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
-    }
-
-    return details;
-}
-
-VkExtent2D Graphics::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
-    if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
-        return capabilities.currentExtent;
-    } else {
-        int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
-
-        VkExtent2D actualExtent = {
-            static_cast<uint32_t>(width),
-            static_cast<uint32_t>(height)
-        };
-
-        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
-
-        return actualExtent;
-    }
-}
-
-VkPresentModeKHR Graphics::chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
-    for (const auto& availablePresentMode : availablePresentModes) {
-        if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            return availablePresentMode;
-        }
-    }
-
-    return VK_PRESENT_MODE_FIFO_KHR;
-}
-
-VkSurfaceFormatKHR Graphics::chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
-    for (const auto& availableFormat : availableFormats) {
-        if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            return availableFormat;
-        }
-    }
-
-    return availableFormats[0];
-}
-
-void Graphics::createSwapChain() {
-    SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
-
-    VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
-    VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
-    VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
-
-    uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
-    if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
-        imageCount = swapChainSupport.capabilities.maxImageCount;
-    }
-
-    VkSwapchainCreateInfoKHR createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    createInfo.surface = surface;
-
-    createInfo.minImageCount = imageCount;
-    createInfo.imageFormat = surfaceFormat.format;
-    createInfo.imageColorSpace = surfaceFormat.colorSpace;
-    createInfo.imageExtent = extent;
-    createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-    uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
-
-    if (indices.graphicsFamily != indices.presentFamily) {
-        createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        createInfo.queueFamilyIndexCount = 2;
-        createInfo.pQueueFamilyIndices = queueFamilyIndices;
-    } else {
-        createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
-
-    createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
-    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    createInfo.presentMode = presentMode;
-    createInfo.clipped = VK_TRUE;
-
-    if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create swap chain!");
-    }
-
-    vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-    swapChainImages.resize(imageCount);
-    vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
-
-    swapChainImageFormat = surfaceFormat.format;
-    swapChainExtent = extent;
-}
-
-void Graphics::cleanupSwapChain() {
-    vkDestroyImageView(device, depthImageView, nullptr);
-    vkDestroyImage(device, depthImage, nullptr);
-    vkFreeMemory(device, depthImageMemory, nullptr);
-
-    vkDestroyImageView(device, colorImageView, nullptr);
-    vkDestroyImage(device, colorImage, nullptr);
-    vkFreeMemory(device, colorImageMemory, nullptr);
-
-    for (auto framebuffer : swapChainFramebuffers) {
-        vkDestroyFramebuffer(device, framebuffer, nullptr);
-    }
-
-    for (auto imageView : swapChainImageViews) {
-        vkDestroyImageView(device, imageView, nullptr);
-    }
-
-    vkDestroySwapchainKHR(device, swapChain, nullptr);
-}
-
-void Graphics::createSwapChainImageViews() {
-    swapChainImageViews.resize(swapChainImages.size());
-
-    for (uint32_t i = 0; i < swapChainImages.size(); i++) {
-        swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-    }
-}
-
-void Graphics::createSwapChainColorResources() {
-    VkFormat colorFormat = swapChainImageFormat;
-
-    createImage(swapChainExtent.width,
-                swapChainExtent.height,
-                1,
-                msaaSamples,
-                colorFormat,
-                VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                colorImage,
-                colorImageMemory);
-    colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-}
-
-VkFormat Graphics::findSupportedFormat(const std::vector<VkFormat>& candidates,
-                                       VkImageTiling tiling,
-                                       VkFormatFeatureFlags features) {
-    for (VkFormat format : candidates) {
-        VkFormatProperties props;
-        vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
-
-        if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features) {
-            return format;
-        } else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features) {
-            return format;
-        }
-    }
-
-    throw std::runtime_error("failed to find supported format!");
-}
-
-VkFormat Graphics::findDepthFormat() {
-    return findSupportedFormat(
-        {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
-        VK_IMAGE_TILING_OPTIMAL,
-        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
-    );
-}
-
-void Graphics::createSwapChainDepthResources() {
-    VkFormat depthFormat = findDepthFormat();
-
-    createImage(swapChainExtent.width,
-                swapChainExtent.height,
-                1,
-                msaaSamples,
-                depthFormat,
-                VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                depthImage,
-                depthImageMemory);
-    depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
-}
-
-void Graphics::createSwapChainFramebuffers() {
-    swapChainFramebuffers.resize(swapChainImageViews.size());
-
-    for (size_t i = 0; i < swapChainImageViews.size(); i++) {
-        std::array<VkImageView, 3> attachments = {
-            colorImageView,
-            depthImageView,
-            swapChainImageViews[i]
-        };
-
-        VkFramebufferCreateInfo framebufferInfo{};
-        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = renderPass;
-        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-        framebufferInfo.pAttachments = attachments.data();
-        framebufferInfo.width = swapChainExtent.width;
-        framebufferInfo.height = swapChainExtent.height;
-        framebufferInfo.layers = 1;
-
-        if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create framebuffer!");
-        }
-    }
-}
-
-void Graphics::recreateSwapChain() {
-    int width = 0, height = 0;
-    glfwGetFramebufferSize(window, &width, &height);
-    while (width == 0 || height == 0) {
-        glfwGetFramebufferSize(window, &width, &height);
-        glfwWaitEvents();
-    }
-
-    vkDeviceWaitIdle(device);
-
-    cleanupSwapChain();
-
-    createSwapChain();
-    createSwapChainImageViews();
-    createSwapChainColorResources();
-    createSwapChainDepthResources();
-    createSwapChainFramebuffers();
 }
 
 // misc graphics objects
@@ -1260,45 +962,13 @@ void Graphics::generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texW
     endSingleTimeCommands(commandBuffer);
 }
 
-// temp application specific code
-// todo: eventually api for update functions in transforms ...
 
-void Graphics::updateUniformBuffer(uint32_t currentImage) {
-        
-    static auto startTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-    
-    std::vector<InstanceSSBO> instances(config.graphicsConfig.MAX_ENTITIES);
-    
-    if (!config.paintConfig.ACTIVE) { // spinning instances
-        
-        globalUBO.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        globalUBO.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
-        globalUBO.proj[1][1] *= -1;
-        
-        for (int i = 0; i < config.graphicsConfig.MAX_ENTITIES; i++) {
-            instances[i].model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f * i), glm::vec3(0.0f, 0.0f, 1.0f));
-        }
 
-    } else { // fixed paint
-                
-        depth = 3.0f;
-        globalUBO.view = glm::lookAt(glm::vec3(0.0f, 0.0f, depth), // camera pos
-                                     glm::vec3(0.0f, 0.0f, 0.0f), // look at
-                                     glm::vec3(0.0f, 1.0f, 0.0f)); // up
-        globalUBO.proj = glm::perspective(glm::radians(45.0f), // fovy
-                                          swapChainExtent.width / (float) swapChainExtent.height, // aspect
-                                          0.1f, // near
-                                          10.0f); // far
-        globalUBO.proj[1][1] *= -1; // strange projection fix
-        
-        // canvas model matrix
-        instances[0].model = glm::mat4(1.0f);
-        
-    }
-    
-    // todo: only copy a range, group copy calls together ...
+
+
+
+
+// todo: only copy a range, group copy calls together
     
 //    for (size_t i = 0; i < instances.size(); ) {
 //        if (!dirty[i]) { i++; continue; }
@@ -1312,10 +982,28 @@ void Graphics::updateUniformBuffer(uint32_t currentImage) {
 //            instances.data() + start,
 //            count * sizeof(InstanceSSBO)
 //        );
+
+void Graphics::updateGlobalUBO() {
+        
+    depth = 3.0f;
+    globalUBO.view = glm::lookAt(glm::vec3(0.0f, 0.0f, depth), // camera pos
+                                 glm::vec3(0.0f, 0.0f, 0.0f), // look at
+                                 glm::vec3(0.0f, 1.0f, 0.0f)); // up
+    globalUBO.proj = glm::perspective(glm::radians(45.0f), // fovy
+                                      swapChainExtent.width / (float) swapChainExtent.height, // aspect
+                                      0.1f, // near
+                                      10.0f); // far
+    globalUBO.proj[1][1] *= -1; // strange projection fix
     
-    // todo: only update if changed
+    memcpy(globalUniformBuffersMapped[currentFrame], &globalUBO, sizeof(globalUBO));
+
+}
+
+void Graphics::updateInstanceSSBOs() {
     
-    memcpy(globalUniformBuffersMapped[currentImage], &globalUBO, sizeof(globalUBO));
+    std::vector<InstanceSSBO> instances(1);
+    
+    instances[0].model = glm::mat4(1.0f);
     
     memcpy(instanceStorageBuffersMapped[currentFrame],
            instances.data(),
@@ -1323,41 +1011,41 @@ void Graphics::updateUniformBuffer(uint32_t currentImage) {
     
 }
 
-void Graphics::drawFrame() {
+void Graphics::startFrame(uint32_t& imageIndex) {
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-
-    uint32_t imageIndex;
+    
     VkResult result = vkAcquireNextImageKHR(device,
                                             swapChain,
                                             UINT64_MAX,
                                             imageAvailableSemaphores[currentFrame],
                                             VK_NULL_HANDLE,
                                             &imageIndex);
-
+    
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapChain();
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
-
-    // updates
-    updateUniformBuffer(currentFrame); // multi threading ?
-
+        
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
     vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
     
     // record command buffer
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
+    
     if (vkBeginCommandBuffer(commandBuffers[currentFrame], &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
     
-    recordPaintCommandBuffer(commandBuffers[currentFrame], imageIndex);
-    recordSwapChainCommandBuffer(commandBuffers[currentFrame], imageIndex);
+}
 
+void Graphics::submitFrame(uint32_t& imageIndex) {
+    
+    // recordPaintCommandBuffer(commandBuffers[currentFrame], imageIndex);
+     recordSwapChainCommandBuffer(commandBuffers[currentFrame], imageIndex);
+    
     // submit to swapchain
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1389,7 +1077,7 @@ void Graphics::drawFrame() {
     presentInfo.pSwapchains = swapChains;
     presentInfo.pImageIndices = &imageIndex;
 
-    result = vkQueuePresentKHR(presentQueue, &presentInfo);
+    VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
         framebufferResized = false;
@@ -1399,6 +1087,7 @@ void Graphics::drawFrame() {
     }
 
     currentFrame = (currentFrame + 1) % config.graphicsConfig.MAX_FRAMES_IN_FLIGHT;
+    
 }
 
 // run functions
@@ -1418,111 +1107,34 @@ void Graphics::initVulkan() {
     createCommandBuffers();
     createSyncObjects();
     
+    createTextureSampler();
+    
 }
 
 void Graphics::initRender() {
     
-    // todo: abstract this all eventually
-    
-    // swapchain
-    
-    createSwapChain();
-    createSwapChainImageViews();
-    createRenderPass(); // swapchain
-    createDescriptorSetLayout(); // swapchain
-    createGraphicsPipeline(); // swapchain
-    createSwapChainColorResources();
-    createSwapChainDepthResources();
-    createSwapChainFramebuffers();
-    createDescriptorPool();
-        
-    // application specific
-    
-    createTextureSampler();
+    // after model loading
     
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
-    
-    createDescriptorSets();
-    
-    // paint
-    
-    createPaintRenderPass();
-    createPaintFramebuffers();
-    createPaintDescriptorSetLayout();
-    createPaintPipeline();
-    createPaintDescriptorPool();
-    createPaintDescriptorSets();
-    
-    createLayerRenderPass();
-    createLayerFramebuffers();
-    createLayerDescriptorSetLayout();
-    createLayerPipeline();
-    createLayerDescriptorPool();
-    createLayerDescriptorSets();
-    
-}
 
-// application specific
-// todo: move window creation to application
-
-void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
-    InputSystem* inputSystem = static_cast<InputSystem*>(glfwGetWindowUserPointer(window));
-    if (!inputSystem) return;
-    inputSystem->mouse_button_callback(button, action, mods);
-}
-
-void mouse_position_callback(GLFWwindow* window, double xpos, double ypos) {
-    InputSystem* inputSystem = static_cast<InputSystem*>(glfwGetWindowUserPointer(window));
-    if (!inputSystem) return;
-    inputSystem->mouse_position_callback(xpos, ypos);
-}
-
-void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    InputSystem* inputSystem = static_cast<InputSystem*>(glfwGetWindowUserPointer(window));
-    if (!inputSystem) return;
-    inputSystem->key_callback(key, action);
-}
-
-void Graphics::mainLoop() {
+    // swapchain
     
-    glfwSetWindowUserPointer(window, &inputSystem);
+    createSwapChain();
+    createSwapChainImageViews();
+    createSwapChainRenderPass();
+    createSwapChainDescriptorSetLayout();
+    createSwapChainGraphicsPipeline(config.graphicsConfig.VERT_SHADER_PATH,
+                                    config.graphicsConfig.FRAG_SHADER_PATH);
+    createSwapChainColorResources();
+    createSwapChainDepthResources();
+    createSwapChainFramebuffers();
+    createSwapChainDescriptorPool();
+    createSwapChainDescriptorSets(textureImageViews); // input textures
         
-    // register glwf input callbacks
-    glfwSetMouseButtonCallback(window, mouse_button_callback);
-    glfwSetCursorPosCallback(window, mouse_position_callback);
-    glfwSetKeyCallback(window, key_callback);
-    
-    drawFrame(); // first draw frame
-    
-    // random paint stuff
-    brushSize = 0.25f;
-    
-    // actual main loop
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
-        if (inputSystem.pressed) { // todo: better architecture
-            drawFrame();
-            inputSystem.reset();
-        } else if (inputSystem.leftBracketPressed) {
-            brushSize += 0.01f;
-            inputSystem.reset();
-        } else if (inputSystem.rightBracketPressed) {
-            if (brushSize > 0.0f) {
-                brushSize -= 0.01f;
-            }
-            inputSystem.reset();
-        }
-    }
-    vkDeviceWaitIdle(device);
-    
-    // add logging for average draw call timing
-        // start time
-        // count
-        // end time / count
-    
 }
+
 
 void Graphics::cleanup() {
     cleanupSwapChain();
@@ -1533,14 +1145,6 @@ void Graphics::cleanup() {
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
 
-    vkDestroyPipeline(device, paintPipeline, nullptr);
-    vkDestroyPipelineLayout(device, paintPipelineLayout, nullptr);
-    vkDestroyRenderPass(device, paintRenderPass, nullptr);
-    
-    vkDestroyPipeline(device, layerPipeline, nullptr);
-    vkDestroyPipelineLayout(device, layerPipelineLayout, nullptr);
-    vkDestroyRenderPass(device, layerRenderPass, nullptr);
-
     for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
         vkFreeMemory(device, globalUniformBuffersMemory[i], nullptr);
@@ -1550,8 +1154,6 @@ void Graphics::cleanup() {
     }
 
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-    vkDestroyDescriptorPool(device, paintDescriptorPool, nullptr);
-    vkDestroyDescriptorPool(device, layerDescriptorPool, nullptr);
 
     vkDestroySampler(device, textureSampler, nullptr);
     
@@ -1564,27 +1166,8 @@ void Graphics::cleanup() {
     for (auto& tim : textureImageMemories) {
         vkFreeMemory(device, tim, nullptr);
     }
-
-    for (auto& tiv : layerTextureImageViews) {
-        vkDestroyImageView(device, tiv, nullptr);
-    }
-    for (auto& ti : layerTextureImages) {
-        vkDestroyImage(device, ti, nullptr);
-    }
-    for (auto& tim : layerTextureImageMemories) {
-        vkFreeMemory(device, tim, nullptr);
-    }
-    
-    vkDestroyImageView(device, brushTextureImageView, nullptr);
-    vkDestroyImage(device, brushTextureImage, nullptr);
-    vkFreeMemory(device, brushTextureImageMemory, nullptr);
-    
-    vkDestroyFramebuffer(device, paintFramebuffer, nullptr);
-    vkDestroyFramebuffer(device, layerFramebuffer, nullptr);
     
     vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, paintDescriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, layerDescriptorSetLayout, nullptr);
     
     vkDestroyBuffer(device, indexBuffer, nullptr);
     vkFreeMemory(device, indexBufferMemory, nullptr);

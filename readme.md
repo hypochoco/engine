@@ -24,21 +24,20 @@ Xcode specific instructions:
     - [ ] Run your program now with optimization enabled (e.g. Release mode with the -O3 compiler flag for GCC`)
     
 - [ ] Generalize vulkan features
-
-    - [ ] Organize one time vs per draw ... 
-        - [ ] Establish place for bulk calls 
-
-    - [ ] Automatic image layout transitions?
-    - [ ] Rendering feature selection?
-    - [ ] Fork and then develop separately, give general utils and then allow development
     - [ ] Onboard onto QT
+    
+    - [ ] Move camera information into a class
+    - [ ] More API-like, external applications that use this should not be exposed to any vulkan?
+        - [ ] Potentially wrappers around everything 
+
+- [ ] Tiling for digital painting with dirty flags 
+    
+- [ ] (Bug) Window resizing requires two draw calls to fix  
  
 - [ ] Application level
     - [ ] Layer visibility 
     - [ ] Configure scissors
     - [ ] Brush functions / mouse down and released
-    
-    - [ ] Application resizing
     - [ ] Cut tool + transforms
     
 ---

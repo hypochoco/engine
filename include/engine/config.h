@@ -33,8 +33,8 @@ struct GraphicsConfig : public Config {
     static inline const std::string FRAG_SHADER_PATH = "frag.spv";
         
     static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
-    static constexpr int NUM_TEXTURES = 16;
-    static constexpr int MAX_ENTITIES = 64;
+    static constexpr int NUM_TEXTURES = 4;
+    static constexpr int MAX_ENTITIES = 8;
 };
 
 // more configs here
