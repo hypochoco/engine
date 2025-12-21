@@ -69,17 +69,17 @@ void Graphics::createIndexBuffer() {
 void Graphics::createUniformBuffers() {
     
     VkDeviceSize globalBufferSize = sizeof(GlobalUBO);
-    VkDeviceSize instanceBufferSize = sizeof(InstanceSSBO) * config.graphicsConfig.MAX_ENTITIES;
+    VkDeviceSize instanceBufferSize = sizeof(InstanceSSBO) * MAX_ENTITIES;
     
-    globalUniformBuffers.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
-    globalUniformBuffersMemory.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
-    globalUniformBuffersMapped.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    globalUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
     
-    instanceStorageBuffers.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
-    instanceStorageBuffersMemory.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
-    instanceStorageBuffersMapped.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+    instanceStorageBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
     
-    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         
         createBuffer(globalBufferSize,
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,

@@ -35,9 +35,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "engine/config.h"
-#include "engine/input_system.h"
-
 // flags
 
 #ifdef NDEBUG
@@ -174,11 +171,18 @@ public:
     
     std::vector<VkCommandBuffer> commandBuffers;
     uint32_t currentFrame = 0;
+
+    // constants 
+
+    static constexpr uint32_t WIDTH = 800;
+    static constexpr uint32_t HEIGHT = 600;
+
+    static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
+    static constexpr int NUM_TEXTURES = 4;
+    static constexpr int MAX_ENTITIES = 8;
     
     // public functions
-    
-    Graphics() : config(AppConfig::instance()) {};
-    
+        
     static std::vector<char> readFile(const std::string& filename);
     static ObjData loadObj(const std::string& modelPath);
     static ObjData loadCanvasQuad();
@@ -223,8 +227,8 @@ public:
     
     void initWindow();
     void initVulkan();
-    void initRender();
-    void run();
+    void initRender(const std::string& vertShaderPath,
+                    const std::string& fragShaderPath);
     
     void startFrame(uint32_t& imageIndex);
     void submitFrame(uint32_t& imageIndex);
@@ -361,10 +365,6 @@ public:
     }
 
 private:
-    
-    // external
-    
-    AppConfig& config; // todo: not needed
     
     // variables
         

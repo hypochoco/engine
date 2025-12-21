@@ -333,19 +333,19 @@ void Graphics::createSwapChainDescriptorPool() {
 
     poolSizes[0] = VkDescriptorPoolSize{
         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT) };
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) };
     poolSizes[1] = VkDescriptorPoolSize{
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT) };
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) };
     poolSizes[2] = VkDescriptorPoolSize{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT * config.graphicsConfig.NUM_TEXTURES) };
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * NUM_TEXTURES) };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
@@ -373,7 +373,7 @@ void Graphics::createSwapChainDescriptorSetLayout() {
     // Binding 2: Texture array
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 2;
-    samplerLayoutBinding.descriptorCount = config.graphicsConfig.NUM_TEXTURES;
+    samplerLayoutBinding.descriptorCount = NUM_TEXTURES;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -395,21 +395,21 @@ void Graphics::createSwapChainDescriptorSetLayout() {
 
 void Graphics::createSwapChainDescriptorSets(std::vector<VkImageView>& imageViews) {
     
-    std::vector<VkDescriptorSetLayout> layouts(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT,
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
                                                descriptorSetLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
-    allocInfo.descriptorSetCount = static_cast<uint32_t>(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     allocInfo.pSetLayouts = layouts.data();
 
-    descriptorSets.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate descriptor sets!");
     }
 
-    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         VkDescriptorBufferInfo globalInfo{};
         globalInfo.buffer = globalUniformBuffers[i];
         globalInfo.offset = 0;
@@ -418,11 +418,11 @@ void Graphics::createSwapChainDescriptorSets(std::vector<VkImageView>& imageView
         VkDescriptorBufferInfo instanceInfo{};
         instanceInfo.buffer = instanceStorageBuffers[i];
         instanceInfo.offset = 0;
-        instanceInfo.range  = sizeof(InstanceSSBO) * config.graphicsConfig.MAX_ENTITIES;
+        instanceInfo.range  = sizeof(InstanceSSBO) * MAX_ENTITIES;
 
-        std::vector<VkDescriptorImageInfo> imageInfos(config.graphicsConfig.NUM_TEXTURES);
+        std::vector<VkDescriptorImageInfo> imageInfos(NUM_TEXTURES);
         
-        for (size_t j = 0; j < config.graphicsConfig.NUM_TEXTURES; j++) {
+        for (size_t j = 0; j < NUM_TEXTURES; j++) {
             imageInfos[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfos[j].imageView = imageViews[std::min(j,imageViews.size()-1)];
             imageInfos[j].sampler = textureSampler;

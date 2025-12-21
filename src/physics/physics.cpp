@@ -5,13 +5,10 @@
 //  Created by Daniel Cho on 9/29/25.
 //
 
-// something about having a physcis engine here ...
-// how should this be structured ??
+#include "engine/physics/physics.h"
 
-// adding physics objects ...
-// physics components ...
-// whatever else that might be interesting ...
+#include <iostream>
 
-// keep things relatively simple ?? compared to vulkan code ... match some of the complexity ...
-
-
+void Physics::test() {
+    std::cout << "hello physics" << std::endl;
+}

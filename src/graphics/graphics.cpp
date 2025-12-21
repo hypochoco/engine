@@ -90,8 +90,8 @@ void Graphics::initWindow() {
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         
-    window = glfwCreateWindow(config.graphicsConfig.WIDTH,
-                              config.graphicsConfig.HEIGHT,
+    window = glfwCreateWindow(WIDTH,
+                              HEIGHT,
                               "Vulkan", nullptr, nullptr);
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
@@ -809,9 +809,9 @@ void Graphics::createCommandPool() {
 
 
 void Graphics::createSyncObjects() {
-    imageAvailableSemaphores.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
-    inFlightFences.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -820,7 +820,7 @@ void Graphics::createSyncObjects() {
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
@@ -830,7 +830,7 @@ void Graphics::createSyncObjects() {
 }
 
 void Graphics::createCommandBuffers() {
-    commandBuffers.resize(config.graphicsConfig.MAX_FRAMES_IN_FLIGHT);
+    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1089,7 +1089,7 @@ void Graphics::submitFrame(uint32_t& imageIndex) {
         throw std::runtime_error("failed to present swap chain image!");
     }
 
-    currentFrame = (currentFrame + 1) % config.graphicsConfig.MAX_FRAMES_IN_FLIGHT;
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     
 }
 
@@ -1114,7 +1114,8 @@ void Graphics::initVulkan() {
     
 }
 
-void Graphics::initRender() {
+void Graphics::initRender(const std::string& vertShaderPath,
+                          const std::string& fragShaderPath) {
     
     // after model loading
     
@@ -1128,8 +1129,8 @@ void Graphics::initRender() {
     createSwapChainImageViews();
     createSwapChainRenderPass();
     createSwapChainDescriptorSetLayout();
-    createSwapChainGraphicsPipeline(config.graphicsConfig.VERT_SHADER_PATH,
-                                    config.graphicsConfig.FRAG_SHADER_PATH);
+    createSwapChainGraphicsPipeline(vertShaderPath,
+                                    fragShaderPath);
     createSwapChainColorResources();
     createSwapChainDepthResources();
     createSwapChainFramebuffers();
@@ -1147,7 +1148,7 @@ void Graphics::cleanup() {
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
 
-    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
         vkFreeMemory(device, globalUniformBuffersMemory[i], nullptr);
         
@@ -1176,7 +1177,7 @@ void Graphics::cleanup() {
     vkDestroyBuffer(device, vertexBuffer, nullptr);
     vkFreeMemory(device, vertexBufferMemory, nullptr);
 
-    for (size_t i = 0; i < config.graphicsConfig.MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
         vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
         vkDestroyFence(device, inFlightFences[i], nullptr);
