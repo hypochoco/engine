@@ -393,7 +393,7 @@ void Graphics::createSwapChainDescriptorSetLayout() {
 
 }
 
-void Graphics::createSwapChainDescriptorSets(std::vector<VkImageView>& imageViews) {
+void Graphics::createSwapChainDescriptorSets() {
     
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
                                                descriptorSetLayout);
@@ -424,7 +424,7 @@ void Graphics::createSwapChainDescriptorSets(std::vector<VkImageView>& imageView
         
         for (size_t j = 0; j < NUM_TEXTURES; j++) {
             imageInfos[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfos[j].imageView = imageViews[std::min(j,imageViews.size()-1)];
+            imageInfos[j].imageView = textureImageViews[std::min(j, textureImageViews.size() - 1)];
             imageInfos[j].sampler = textureSampler;
         }
 
@@ -560,7 +560,7 @@ void Graphics::createSwapChainGraphicsPipeline(const std::string& vertShaderPath
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(uint32_t); // materialIndex is an int
+    pushConstantRange.size = sizeof(uint32_t) * 2; // first material index + count
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -633,8 +633,7 @@ void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer,
     scissor.extent = swapChainExtent;
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    // Bind the main vertex and index buffers
-    VkBuffer vertexBuffers[] = {vertexBuffer};
+    VkBuffer vertexBuffers[] = { vertexBuffer };
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
@@ -650,32 +649,32 @@ void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer,
         nullptr
     );
     
-    // todo: handle instancing
-    
-    for (const auto& model : models) {
-        for (const auto& submesh : model.submeshes) {
-            
-            const Material& mat = materials[submesh.materialIndex];
-            const uint32_t textureIndex = mat.textureIndex;
-            
-            vkCmdPushConstants( // texture index
-                commandBuffer,
-                pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0,
-                sizeof(uint32_t),
-                &textureIndex
-            );
+    for (const auto& drawJob : drawJobs) {
+        
+        struct MaterialPushConstant { uint32_t firstMaterial; uint32_t materialCount; } pc;
+        pc.firstMaterial = drawJob.firstMaterial;
+        pc.materialCount = drawJob.materialCount;
 
-            vkCmdDrawIndexed(
-                commandBuffer,
-                submesh.indexCount,
-                1, // instance count
-                submesh.firstIndex,
-                submesh.firstVertex,
-                0 // start instance index
-            );
-        }
+        vkCmdPushConstants(
+            commandBuffer,
+            pipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            sizeof(pc),
+            &pc
+        );
+        
+        const auto& mesh = meshes[drawJob.meshIndex];
+
+        vkCmdDrawIndexed(
+            commandBuffer,
+            mesh.indexCount,
+            drawJob.instanceCount,
+            mesh.firstIndex,
+            mesh.firstVertex,
+            drawJob.firstInstance
+        );
+
     }
 
     vkCmdEndRenderPass(commandBuffer);

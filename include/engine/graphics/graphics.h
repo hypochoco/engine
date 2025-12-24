@@ -99,32 +99,16 @@ namespace std {
     };
 }
 
-struct Material {
-    std::string name;
-    uint32_t textureIndex;
-};
-
-struct ObjData {
-    std::vector<Material> modelMaterials;
-    std::unordered_map<int, std::vector<Vertex>> uniqueVerticesMap;
-    std::unordered_map<int, std::vector<uint32_t>> uniqueIndicesMap;
-    
-    // todo: normals
-    
-};
-
-struct Submesh {
-    uint32_t firstIndex;
-    uint32_t indexCount;
+struct Mesh {
     uint32_t firstVertex;
     uint32_t vertexCount;
-    uint32_t materialIndex;
+    
+    uint32_t firstIndex;
+    uint32_t indexCount;
 };
 
-struct Model {
-    uint32_t firstMaterialIndex;
-    uint32_t materialCount;
-    std::vector<Submesh> submeshes;
+struct Material {
+    uint32_t textureIndex;
 };
 
 struct GlobalUBO {
@@ -135,6 +119,20 @@ struct GlobalUBO {
 
 struct InstanceSSBO {
     alignas(16) glm::mat4 model;
+};
+
+struct DrawJob {
+    
+    bool visible;
+    
+    uint32_t meshIndex;
+    
+    uint32_t firstMaterial;
+    uint32_t materialCount;
+    
+    uint32_t firstInstance;
+    uint32_t instanceCount;
+    
 };
 
 // vulkan structs
@@ -160,19 +158,7 @@ class Graphics {
     
 public:
     
-    // public variables
-    
-    GLFWwindow* window;
-    VkDevice device;
-        
-    std::vector<VkImage> textureImages;
-    std::vector<VkDeviceMemory> textureImageMemories;
-    std::vector<VkImageView> textureImageViews;
-    
-    std::vector<VkCommandBuffer> commandBuffers;
-    uint32_t currentFrame = 0;
-
-    // constants 
+    // constants
 
     static constexpr uint32_t WIDTH = 800;
     static constexpr uint32_t HEIGHT = 600;
@@ -181,11 +167,26 @@ public:
     static constexpr int NUM_TEXTURES = 4;
     static constexpr int MAX_ENTITIES = 8;
     
-    // public functions
-        
+    // public graphics variables
+    
+    GLFWwindow* window;
+    VkDevice device; // todo: not a fan of exposing this
+    uint32_t currentFrame = 0;
+    std::vector<VkCommandBuffer> commandBuffers;
+    
+    // material variables
+    
+    std::vector<Material> materials;
+    
+    std::vector<VkImage> textureImages;
+    std::vector<VkDeviceMemory> textureImageMemories;
+    std::vector<VkImageView> textureImageViews;
+    
+    // helper functions
+    
     static std::vector<char> readFile(const std::string& filename);
-    static ObjData loadObj(const std::string& modelPath);
-    static ObjData loadCanvasQuad();
+    
+    VkShaderModule createShaderModule(const std::vector<char>& code);
     
     void transitionImageLayout(VkCommandBuffer& commandBuffer,
                                VkImage image,
@@ -198,50 +199,45 @@ public:
                                VkImageLayout oldLayout,
                                VkImageLayout newLayout,
                                uint32_t mipLevels);
-
-    VkShaderModule createShaderModule(const std::vector<char>& code);
     
-    void loadTexture(int texWidth,
-                     int texHeight,
-                     stbi_uc* pixels,
-                     VkImage& textureImage,
-                     VkDeviceMemory& textureImageMemory,
-                     VkImageView& textureImageView,
-                     VkImageUsageFlags usage,
-                     int mipLevels);
+    // material functions
+    
     void loadTexture(std::string texturePath,
-                     VkImage& textureImage,
-                     VkDeviceMemory& textureImageMemory,
-                     VkImageView& textureImageView,
                      VkImageUsageFlags usage,
                      int mipLevels = 0);
+    
     void createTexture(int texWidth,
                        int texHeight,
-                       VkImage& textureImage,
-                       VkDeviceMemory& textureImageMemory,
-                       VkImageView& textureImageView,
                        VkImageUsageFlags usage,
                        int mipLevels = 0);
+
+    // model functions
     
-    void pushModel(ObjData& objData);
+    void loadQuad();
     
+    void loadObj(const std::string& modelPath);
+    
+    // instance functions
+    
+    void updateGlobalUBO(uint32_t currentFrame,
+                         glm::mat4& view,
+                         glm::mat4& proj);
+    
+    void addDrawJob(uint32_t meshIndex,
+                    uint32_t firstMaterial,
+                    uint32_t materialCount,
+                    std::vector<glm::mat4> modelMatrices);
+    void copyInstanceToBuffer(uint32_t currentFrame);
+    
+    // public graphics functions
+        
     void initWindow();
     void initVulkan();
     void initRender(const std::string& vertShaderPath,
                     const std::string& fragShaderPath);
     
-    void startFrame(uint32_t& imageIndex);
-    void submitFrame(uint32_t& imageIndex);
-    
-    void updateGlobalUBO(uint32_t currentFrame,
-                         glm::mat4& view,
-                         glm::mat4& proj);
-    void updateInstanceSSBOs(uint32_t currentFrame,
-                             std::vector<InstanceSSBO>& instances);
-    
-    void updateGlobalUBO(glm::mat4& view,
-                         glm::mat4& proj);
-    void updateInstanceSSBOs(std::vector<InstanceSSBO>& instances);
+    void startFrame(uint32_t& imageIndex); // todo: not a fan of this
+    void submitFrame(uint32_t& imageIndex); // todo: not a fan of this
     
     void cleanup();
     
@@ -278,33 +274,33 @@ public:
                         VkPipelineShaderStageCreateInfo* shaderStages,
                         VkPushConstantRange& pushConstantRange);
     
-    void draw(VkCommandBuffer& commandBuffer,
-              VkRenderPass& renderPass,
-              VkFramebuffer& frameBuffer,
-              int renderAreaWidth,
-              int renderAreaHeight,
-              VkPipeline& pipeline,
-              int viewportWidth,
-              int viewportHeight,
-              int scissorWidth,
-              int scissorHeight,
-              VkPipelineLayout& pipelineLayout,
-              std::vector<VkDescriptorSet>& descriptorSets);
+    void recordCommandBuffer(VkCommandBuffer& commandBuffer,
+                             VkRenderPass& renderPass,
+                             VkFramebuffer& frameBuffer,
+                             int renderAreaWidth,
+                             int renderAreaHeight,
+                             VkPipeline& pipeline,
+                             int viewportWidth,
+                             int viewportHeight,
+                             int scissorWidth,
+                             int scissorHeight,
+                             VkPipelineLayout& pipelineLayout,
+                             std::vector<VkDescriptorSet>& descriptorSets);
     
-    template<typename T>
-    void draw(VkCommandBuffer& commandBuffer,
-                        VkRenderPass& renderPass,
-                        VkFramebuffer& frameBuffer,
-                        int renderAreaWidth,
-                        int renderAreaHeight,
-                        VkPipeline& pipeline,
-                        int viewportWidth,
-                        int viewportHeight,
-                        int scissorWidth,
-                        int scissorHeight,
-                        VkPipelineLayout& pipelineLayout,
-                        std::vector<VkDescriptorSet>& descriptorSets,
-                        T& pushConstant) {
+    template<typename T> // todo: not a fan of this
+    void recordCommandBuffer(VkCommandBuffer& commandBuffer,
+                             VkRenderPass& renderPass,
+                             VkFramebuffer& frameBuffer,
+                             int renderAreaWidth,
+                             int renderAreaHeight,
+                             VkPipeline& pipeline,
+                             int viewportWidth,
+                             int viewportHeight,
+                             int scissorWidth,
+                             int scissorHeight,
+                             VkPipelineLayout& pipelineLayout,
+                             std::vector<VkDescriptorSet>& descriptorSets,
+                             T& pushConstant) {
         
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -363,10 +359,10 @@ public:
         vkCmdEndRenderPass(commandBuffer);
         
     }
-
+    
 private:
     
-    // variables
+    // graphics variables
         
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
@@ -377,20 +373,23 @@ private:
 
     VkQueue graphicsQueue;
     VkQueue presentQueue;
-
-    VkSwapchainKHR swapChain;
-    std::vector<VkImage> swapChainImages;
-    VkFormat swapChainImageFormat;
-    VkExtent2D swapChainExtent;
-    std::vector<VkImageView> swapChainImageViews;
-    std::vector<VkFramebuffer> swapChainFramebuffers;
-    
-    VkRenderPass renderPass;
-    VkDescriptorSetLayout descriptorSetLayout;
-    VkPipelineLayout pipelineLayout;
-    VkPipeline graphicsPipeline;
     
     VkCommandPool commandPool;
+    
+    VkSampler textureSampler;
+    
+    std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
+    std::vector<VkFence> inFlightFences;
+
+    bool framebufferResized = false;
+    
+    GlobalUBO globalUBO;
+    std::vector<VkBuffer> globalUniformBuffers;
+    std::vector<VkDeviceMemory> globalUniformBuffersMemory;
+    std::vector<void*> globalUniformBuffersMapped;
+
+    // swap chain graphics variables
     
     VkImage colorImage;
     VkDeviceMemory colorImageMemory;
@@ -400,45 +399,48 @@ private:
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
     
-    VkSampler textureSampler; // only need one for now
+    VkSwapchainKHR swapChain;
+    VkFormat swapChainImageFormat;
+    VkExtent2D swapChainExtent;
+    std::vector<VkImage> swapChainImages;
+    std::vector<VkImageView> swapChainImageViews;
+    std::vector<VkFramebuffer> swapChainFramebuffers;
+
+    VkRenderPass renderPass;
+    VkDescriptorSetLayout descriptorSetLayout;
+    VkPipelineLayout pipelineLayout;
+    VkPipeline graphicsPipeline;
+    
+    VkDescriptorPool descriptorPool;
+    std::vector<VkDescriptorSet> descriptorSets;
+    
+    // mesh variables
+    
+    std::vector<Mesh> meshes;
     
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    std::vector<Model> models;
-    std::vector<Material> materials;
-    
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
     
-    GlobalUBO globalUBO;
-
-    std::vector<VkBuffer> globalUniformBuffers;
-    std::vector<VkDeviceMemory> globalUniformBuffersMemory;
-    std::vector<void*> globalUniformBuffersMapped;
-
     std::vector<VkBuffer> instanceStorageBuffers;
     std::vector<VkDeviceMemory> instanceStorageBuffersMemory;
     std::vector<void*> instanceStorageBuffersMapped;
     
-    VkDescriptorPool descriptorPool;
-    std::vector<VkDescriptorSet> descriptorSets;
-
-    std::vector<VkSemaphore> imageAvailableSemaphores;
-    std::vector<VkSemaphore> renderFinishedSemaphores;
-    std::vector<VkFence> inFlightFences;
-
-    bool framebufferResized = false;
+    // instance variables
     
-    // functions
+    std::vector<DrawJob> drawJobs;
+    std::vector<glm::mat4> instanceModelMatrices;
+        
+    // graphics functions
     
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                                         VkDebugUtilsMessageTypeFlagsEXT messageType,
                                                         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                                                         void* pUserData);
-    
     void createBuffer(VkDeviceSize size,
                       VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags properties,
@@ -488,6 +490,11 @@ private:
                          int32_t texWidth,
                          int32_t texHeight,
                          uint32_t mipLevels);
+    void loadTexture(int texWidth,
+                     int texHeight,
+                     stbi_uc* pixels,
+                     VkImageUsageFlags usage,
+                     int mipLevels = 0);
     VkSampleCountFlagBits getMaxUsableSampleCount();
     void createTextureImageView(uint32_t mipLevels,
                                 VkImage& textureImage,
@@ -497,10 +504,6 @@ private:
                                 VkImageAspectFlags aspectFlags,
                                 uint32_t mipLevels);
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
-    
-    void createVertexBuffer();
-    void createIndexBuffer();
-    void createUniformBuffers();
     
     VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
     VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
@@ -521,7 +524,7 @@ private:
     void createSwapChainGraphicsPipeline(const std::string& vertShaderPath,
                                          const std::string& fragShaderPath);
     void createSwapChainDescriptorPool();
-    void createSwapChainDescriptorSets(std::vector<VkImageView>& imageViews);
+    void createSwapChainDescriptorSets();
     
     void createCommandPool();
         VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
@@ -530,6 +533,11 @@ private:
     void createCommandBuffers();
             
     void recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
-    void recordPaintCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+    
+    // model functions
+    
+    void createVertexBuffer();
+    void createIndexBuffer();
+    void createUniformBuffers();
         
 };

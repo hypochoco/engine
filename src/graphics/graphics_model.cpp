@@ -10,6 +10,8 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+// vulkan functions
+
 void Graphics::createVertexBuffer() {
     
     VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -109,10 +111,36 @@ void Graphics::createUniformBuffers() {
     
 }
 
-ObjData Graphics::loadObj(const std::string& modelPath) {
+// mesh and material functions
+
+void Graphics::loadQuad() {
     
-    // note: this currently does not handle normals
-    ObjData objData;
+    Mesh mesh;
+    mesh.firstVertex = static_cast<uint32_t>(vertices.size());
+    mesh.vertexCount = static_cast<uint32_t>(vertices.size() + 4);
+    mesh.firstIndex = static_cast<uint32_t>(indices.size());
+    mesh.indexCount = static_cast<uint32_t>(indices.size() + 6);
+    meshes.push_back(mesh);
+
+    vertices.reserve(vertices.size() + 4);
+
+    vertices.emplace_back( Vertex{ { -1.0f, -1.0f, 0.0f }, {1,1,1}, { 0.0f, 0.0f } } ); // bottom-left
+    vertices.emplace_back( Vertex{ {  1.0f, -1.0f, 0.0f }, {1,1,1}, { 1.0f, 0.0f } } ); // bottom-right
+    vertices.emplace_back( Vertex{ {  1.0f,  1.0f, 0.0f }, {1,1,1}, { 1.0f, 1.0f } } ); // top-right
+    vertices.emplace_back( Vertex{ { -1.0f,  1.0f, 0.0f }, {1,1,1}, { 0.0f, 1.0f } } ); // top-left
+
+    indices.insert(indices.end(), {
+        0, 1, 2,
+        2, 3, 0
+    });
+    
+}
+
+void Graphics::loadObj(const std::string& modelPath) {
+    
+    // note: assumes output references are empty
+    
+    // todo: normals
         
     // load obj
     tinyobj::attrib_t attrib;
@@ -122,12 +150,17 @@ ObjData Graphics::loadObj(const std::string& modelPath) {
     if (!tinyobj::LoadObj(&attrib, &shapes, &objMaterials, &warn, &err, modelPath.c_str())) {
         throw std::runtime_error("OBJ load failed: " + err);
     }
-    objData.modelMaterials.reserve(objMaterials.size());
-    for (const auto& m : objMaterials) { // note: actual material properties aren't used
-        objData.modelMaterials.emplace_back(Material{m.name, 0}); // note: textureIndex=0, should be fixed later
+    
+    // obj processing
+    
+    std::unordered_map<int, std::vector<Vertex>> uniqueVerticesMap;
+    std::unordered_map<int, std::vector<uint32_t>> uniqueIndicesMap;
+    
+    materials.reserve(objMaterials.size());
+    for (const auto& m : objMaterials) { // todo: real material properties
+        materials.emplace_back( Material{ 0 } );
     }
     
-    // process vertices and indices
     for (const auto& shape : shapes) {
         
         size_t indexOffset = 0;
@@ -135,13 +168,12 @@ ObjData Graphics::loadObj(const std::string& modelPath) {
         
         for (size_t face = 0; face < mesh.num_face_vertices.size(); ++face) {
             
-            int fv = mesh.num_face_vertices[face];
-            int materialId = mesh.material_ids[face]; // -1 if no material
+            const int fv = mesh.num_face_vertices[face];
+            const int materialId = mesh.material_ids[face]; // note: -1 if no material
             
             for (int v = 0; v < fv; ++v) {
                     
-                // pos
-                tinyobj::index_t idx = mesh.indices[indexOffset + v];
+                const tinyobj::index_t idx = mesh.indices[indexOffset + v];
                 Vertex vertex{};
                 vertex.pos = {
                     attrib.vertices[3 * idx.vertex_index + 0],
@@ -149,7 +181,6 @@ ObjData Graphics::loadObj(const std::string& modelPath) {
                     attrib.vertices[3 * idx.vertex_index + 2]
                 };
                 
-                // tex coord + color
                 if (idx.texcoord_index >= 0) {
                     vertex.texCoord = {
                         attrib.texcoords[2 * idx.texcoord_index + 0],
@@ -160,9 +191,8 @@ ObjData Graphics::loadObj(const std::string& modelPath) {
                 }
                 vertex.color = {1.f, 1.f, 1.f}; // note: default material color
                 
-                // mapping
-                auto& uniqueVertices = objData.uniqueVerticesMap[materialId];
-                auto& uniqueIndices = objData.uniqueIndicesMap[materialId];
+                auto& uniqueVertices = uniqueVerticesMap[materialId];
+                auto& uniqueIndices = uniqueIndicesMap[materialId];
 
                 auto it = std::find(uniqueVertices.begin(), uniqueVertices.end(), vertex);
                 if (it != uniqueVertices.end()) {
@@ -172,92 +202,33 @@ ObjData Graphics::loadObj(const std::string& modelPath) {
                     uniqueIndices.push_back(static_cast<uint32_t>(uniqueVertices.size() - 1));
                 }
             }
+            
             indexOffset += fv;
+            
         }
     }
     
-    return objData;
-}
-
-ObjData Graphics::loadCanvasQuad() {
-    ObjData objData;
-
-    // Add one dummy material (since your engine expects it)
-    objData.modelMaterials.push_back(Material{"canvas", 0});
-
-    // Define 4 vertices
-    std::vector<Vertex> verts;
-    verts.reserve(4);
-
-    // Canvas quad in NDC-like local space (you will position it with your transform)
-    // If you want it in [0,1] space instead, I can change it.
-
-    verts.push_back(Vertex{ { -1.0f, -1.0f, 0.0f }, {1,1,1}, { 0.0f, 0.0f } }); // bottom-left
-    verts.push_back(Vertex{ {  1.0f, -1.0f, 0.0f }, {1,1,1}, { 1.0f, 0.0f } }); // bottom-right
-    verts.push_back(Vertex{ {  1.0f,  1.0f, 0.0f }, {1,1,1}, { 1.0f, 1.0f } }); // top-right
-    verts.push_back(Vertex{ { -1.0f,  1.0f, 0.0f }, {1,1,1}, { 0.0f, 1.0f } }); // top-left
-
-    // Indices for two triangles
-    std::vector<uint32_t> inds = {
-        0, 1, 2,
-        2, 3, 0
-    };
-
-    // Store in objData using materialId = 0
-    objData.uniqueVerticesMap[0] = verts;
-    objData.uniqueIndicesMap[0] = inds;
-
-    return objData;
-}
-
-void Graphics::pushModel(ObjData& objData) {
+    // obj loading
     
-    // todo: better material mapping 
+    for (auto& [materialId, uniqueVertices] : uniqueVerticesMap) {
+        auto& modelIndices = uniqueIndicesMap[materialId];
         
-    Model model;
-    
-    // push materials
-    model.firstMaterialIndex = static_cast<uint32_t>(materials.size());
-    model.materialCount = static_cast<uint32_t>(objData.modelMaterials.size());
-    materials.reserve(materials.size() + model.materialCount);
-    for (const auto& m : objData.modelMaterials) { // note: actual material properties aren't used
-        materials.push_back(m);
-    }
-    
-    uint32_t defaultMaterial = 0;
-    if (model.materialCount <= 0) { // temp: default material
-        defaultMaterial = static_cast<uint32_t>(materials.size());
-        materials.emplace_back(Material{"default", 0});
-        model.materialCount++;
-    }
-        
-    // convert maps into submeshes
-    for (auto& [materialId, uniqueVertices] : objData.uniqueVerticesMap) {
-        auto& modelIndices = objData.uniqueIndicesMap[materialId];
+        Mesh mesh;
+        mesh.firstVertex = static_cast<uint32_t>(vertices.size());
+        mesh.vertexCount = static_cast<uint32_t>(uniqueVertices.size());
+        mesh.firstIndex = static_cast<uint32_t>(indices.size());
+        mesh.indexCount = static_cast<uint32_t>(modelIndices.size());
+        meshes.push_back(mesh);
 
-        Submesh submesh;
-        submesh.firstIndex = static_cast<uint32_t>(indices.size());
-        submesh.indexCount = static_cast<uint32_t>(modelIndices.size());
-        submesh.firstVertex = static_cast<uint32_t>(vertices.size());
-        submesh.vertexCount = static_cast<uint32_t>(uniqueVertices.size());
-        
-        if (materialId < 0 || materialId >= model.materialCount) {
-            submesh.materialIndex = defaultMaterial;
-        } else {
-            submesh.materialIndex = model.firstMaterialIndex + materialId;
-        }
-        
-        model.submeshes.push_back(submesh);
-
-        // append indices and vertices to global buffers
         indices.insert(indices.end(),
                        std::make_move_iterator(modelIndices.begin()),
                        std::make_move_iterator(modelIndices.end()));
         vertices.insert(vertices.end(),
                         std::make_move_iterator(uniqueVertices.begin()),
                         std::make_move_iterator(uniqueVertices.end()));
+
     }
     
-    models.push_back(model);
+    // todo: material to mesh mapping
     
 }

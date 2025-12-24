@@ -711,12 +711,13 @@ void Graphics::stageTextureImage(int texWidth,
 void Graphics::loadTexture(int texWidth,
                            int texHeight,
                            stbi_uc* pixels,
-                           VkImage& textureImage,
-                           VkDeviceMemory& textureImageMemory,
-                           VkImageView& textureImageView,
                            VkImageUsageFlags usage,
                            int mipLevels) {
 
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+    
     VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
         
     if (mipLevels == 0) {
@@ -731,26 +732,32 @@ void Graphics::loadTexture(int texWidth,
                       textureImage,
                       textureImageMemory,
                       usage);
-    stbi_image_free(pixels);
     
     if (mipLevels != 1) { // note: transitions to shader read only, otherwise dst optimal
         generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+    } else { // transition to shader read only
+        transitionImageLayout(textureImage,
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              1);
     }
     
     createTextureImageView(mipLevels,
                            textureImage,
                            textureImageView);
     
+    textureImages.push_back(textureImage);
+    textureImageMemories.push_back(textureImageMemory);
+    textureImageViews.push_back(textureImageView);
+    
 }
 
 void Graphics::loadTexture(std::string texturePath,
-                           VkImage& textureImage,
-                           VkDeviceMemory& textureImageMemory,
-                           VkImageView& textureImageView,
                            VkImageUsageFlags usage,
                            int mipLevels) {
-
-    // load image
+    
+        
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     if (!pixels) {
@@ -760,23 +767,18 @@ void Graphics::loadTexture(std::string texturePath,
     loadTexture(texWidth,
                 texHeight,
                 pixels,
-                textureImage,
-                textureImageMemory,
-                textureImageView,
                 usage,
                 mipLevels);
     
+    stbi_image_free(pixels);
+
 }
 
 void Graphics::createTexture(int texWidth,
                              int texHeight,
-                             VkImage& textureImage,
-                             VkDeviceMemory& textureImageMemory,
-                             VkImageView& textureImageView,
                              VkImageUsageFlags usage,
                              int mipLevels) {
     
-    // create image
     VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
     stbi_uc* pixels = new stbi_uc[imageSize];
     std::fill(pixels, pixels + imageSize, 255); // fill white
@@ -784,12 +786,11 @@ void Graphics::createTexture(int texWidth,
     loadTexture(texWidth,
                 texHeight,
                 pixels,
-                textureImage,
-                textureImageMemory,
-                textureImageView,
                 usage,
                 mipLevels);
-
+    
+    stbi_image_free(pixels);
+    
 }
 
 // misc graphics objects
@@ -962,56 +963,15 @@ void Graphics::generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texW
     endSingleTimeCommands(commandBuffer);
 }
 
-// todo: only copy a range, group copy calls together
-    
-//    for (size_t i = 0; i < instances.size(); ) {
-//        if (!dirty[i]) { i++; continue; }
-//
-//        size_t start = i;
-//        while (i < instances.size() && dirty[i]) i++;
-//        size_t count = i - start;
-//
-//        memcpy(
-//            (char*)instanceStorageBuffersMapped[currentFrame] + start * sizeof(InstanceSSBO),
-//            instances.data() + start,
-//            count * sizeof(InstanceSSBO)
-//        );
-
 void Graphics::updateGlobalUBO(uint32_t currentFrame,
                                glm::mat4& view,
                                glm::mat4& proj) {
-    
-    // todo: dirty flags
     
     globalUBO.view = view;
     globalUBO.proj = proj;
     
     memcpy(globalUniformBuffersMapped[currentFrame], &globalUBO, sizeof(globalUBO));
 
-}
-
-void Graphics::updateInstanceSSBOs(uint32_t currentFrame,
-                                   std::vector<InstanceSSBO>& instances) {
-    
-    // todo: dirty flags
-
-    memcpy(instanceStorageBuffersMapped[currentFrame],
-           instances.data(),
-           instances.size() * sizeof(InstanceSSBO));
-    
-}
-
-void Graphics::updateGlobalUBO(glm::mat4& view,
-                               glm::mat4& proj) {
-    
-    updateGlobalUBO(currentFrame, view, proj);
-    
-}
-
-void Graphics::updateInstanceSSBOs(std::vector<InstanceSSBO>& instances) {
-    
-    updateInstanceSSBOs(currentFrame, instances);
-    
 }
 
 void Graphics::startFrame(uint32_t& imageIndex) {
@@ -1135,7 +1095,7 @@ void Graphics::initRender(const std::string& vertShaderPath,
     createSwapChainDepthResources();
     createSwapChainFramebuffers();
     createSwapChainDescriptorPool();
-    createSwapChainDescriptorSets(textureImageViews); // input textures
+    createSwapChainDescriptorSets(); // input textures
         
 }
 

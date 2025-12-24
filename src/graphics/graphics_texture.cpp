@@ -22,9 +22,9 @@ void Graphics::createRenderPass(VkRenderPass& renderPass,
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.finalLayout   = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    colorAttachment.finalLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    
     VkAttachmentReference colorRef{};
     colorRef.attachment = 0;
     colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -379,18 +379,18 @@ void Graphics::createPipeline(VkPipeline& pipeline,
 
 }
 
-void Graphics::draw(VkCommandBuffer& commandBuffer,
-                    VkRenderPass& renderPass,
-                    VkFramebuffer& frameBuffer,
-                    int renderAreaWidth,
-                    int renderAreaHeight,
-                    VkPipeline& pipeline,
-                    int viewportWidth,
-                    int viewportHeight,
-                    int scissorWidth,
-                    int scissorHeight,
-                    VkPipelineLayout& pipelineLayout,
-                    std::vector<VkDescriptorSet>& descriptorSets) {
+void Graphics::recordCommandBuffer(VkCommandBuffer& commandBuffer,
+                                   VkRenderPass& renderPass,
+                                   VkFramebuffer& frameBuffer,
+                                   int renderAreaWidth,
+                                   int renderAreaHeight,
+                                   VkPipeline& pipeline,
+                                   int viewportWidth,
+                                   int viewportHeight,
+                                   int scissorWidth,
+                                   int scissorHeight,
+                                   VkPipelineLayout& pipelineLayout,
+                                   std::vector<VkDescriptorSet>& descriptorSets) {
     
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
