@@ -164,8 +164,8 @@ public:
     static constexpr uint32_t HEIGHT = 600;
 
     static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
-    static constexpr int NUM_TEXTURES = 4;
-    static constexpr int MAX_ENTITIES = 8;
+    static constexpr int NUM_TEXTURES = 16;
+    static constexpr int MAX_ENTITIES = 16;
     
     // public graphics variables
     
@@ -260,6 +260,11 @@ public:
                               std::vector<VkDescriptorSet>& descriptorSets,
                               VkDescriptorSetLayout& descriptorSetLayout,
                               VkDescriptorPool& descriptorPool);
+    
+    void updateDescriptorSet(VkImageView& imageView,
+                             VkDescriptorSet& descriptorSet,
+                             VkDescriptorSetLayout& descriptorSetLayout,
+                             VkDescriptorPool& descriptorPool);
     
     void createPipeline(VkPipeline& pipeline,
                         VkDescriptorSetLayout& descriptorSetLayout,
