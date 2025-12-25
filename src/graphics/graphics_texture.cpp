@@ -97,18 +97,19 @@ void Graphics::createDescriptorSetLayout(VkDescriptorSetLayout& descriptorSetLay
     }
 }
 
-void Graphics::createDescriptorPool(VkDescriptorPool& descriptorPool) {
+void Graphics::createDescriptorPool(VkDescriptorPool& descriptorPool,
+                                    uint32_t allocation) {
         
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSize.descriptorCount = static_cast<uint32_t>(allocation * MAX_FRAMES_IN_FLIGHT);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     poolInfo.maxSets =
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        static_cast<uint32_t>(allocation * MAX_FRAMES_IN_FLIGHT);
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create paint descriptor pool");
@@ -118,24 +119,25 @@ void Graphics::createDescriptorPool(VkDescriptorPool& descriptorPool) {
 void Graphics::createDescriptorSets(VkImageView& imageView,
                                     std::vector<VkDescriptorSet>& descriptorSets,
                                     VkDescriptorSetLayout& descriptorSetLayout,
-                                    VkDescriptorPool& descriptorPool) {
+                                    VkDescriptorPool& descriptorPool,
+                                    uint32_t allocation) {
         
-    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+    std::vector<VkDescriptorSetLayout> layouts(allocation * MAX_FRAMES_IN_FLIGHT,
                                                descriptorSetLayout);
     
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
-    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(allocation * MAX_FRAMES_IN_FLIGHT );
     allocInfo.pSetLayouts = layouts.data();
     
-    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    descriptorSets.resize(allocation * MAX_FRAMES_IN_FLIGHT);
     
     if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate paint descriptor set");
     }
     
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < allocation * MAX_FRAMES_IN_FLIGHT; i++) {
         
         VkDescriptorImageInfo imageInfo{};
         imageInfo.sampler = textureSampler;

@@ -254,12 +254,14 @@ public:
     
     void createDescriptorSetLayout(VkDescriptorSetLayout& descriptorSetLayout);
     
-    void createDescriptorPool(VkDescriptorPool& descriptorPool);
+    void createDescriptorPool(VkDescriptorPool& descriptorPool,
+                              uint32_t allocation = 1);
     
     void createDescriptorSets(VkImageView& imageView,
                               std::vector<VkDescriptorSet>& descriptorSets,
                               VkDescriptorSetLayout& descriptorSetLayout,
-                              VkDescriptorPool& descriptorPool);
+                              VkDescriptorPool& descriptorPool,
+                              uint32_t allocation = 1);
     
     void updateDescriptorSet(VkImageView& imageView,
                              VkDescriptorSet& descriptorSet,
