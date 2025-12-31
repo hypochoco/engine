@@ -144,6 +144,12 @@ bool Graphics::checkValidationLayerSupport() {
     return true;
 }
 
+void Graphics::setInstance(const VkInstance& instance) {
+    
+    this->instance = instance;
+    
+}
+
 void Graphics::createInstance() {
     if (ENABLE_VALIDATION_LAYERS && !checkValidationLayerSupport()) {
         throw std::runtime_error("validation layers requested, but not available!");
@@ -172,12 +178,10 @@ void Graphics::createInstance() {
     if (ENABLE_VALIDATION_LAYERS) {
         createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();
-
         populateDebugMessengerCreateInfo(debugCreateInfo);
         createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
     } else {
         createInfo.enabledLayerCount = 0;
-
         createInfo.pNext = nullptr;
     }
 
@@ -187,6 +191,12 @@ void Graphics::createInstance() {
 }
 
 // create surface
+
+void Graphics::setSurface(const VkSurfaceKHR& surface) {
+    
+    this->surface = surface;
+    
+}
 
 void Graphics::createSurface() {
     if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
@@ -969,6 +979,12 @@ void Graphics::generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texW
     endSingleTimeCommands(commandBuffer);
 }
 
+VkExtent2D Graphics::getSwapChainExtent() {
+    
+    return swapChainExtent;
+    
+}
+
 void Graphics::updateGlobalUBO(uint32_t currentFrame,
                                glm::mat4& view,
                                glm::mat4& proj) {
@@ -980,26 +996,28 @@ void Graphics::updateGlobalUBO(uint32_t currentFrame,
 
 }
 
-void Graphics::startFrame(uint32_t& imageIndex) {
-    vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+void Graphics::startFrame() {
     
+    vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+        
     VkResult result = vkAcquireNextImageKHR(device,
                                             swapChain,
                                             UINT64_MAX,
                                             imageAvailableSemaphores[currentFrame],
                                             VK_NULL_HANDLE,
                                             &imageIndex);
-    
+        
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapChain();
+//        recreateSwapChain();
+        framebufferResized = true;
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
-        
+                        
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
     vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
-    
+        
     // record command buffer
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1010,10 +1028,10 @@ void Graphics::startFrame(uint32_t& imageIndex) {
     
 }
 
-void Graphics::submitFrame(uint32_t& imageIndex) {
+void Graphics::submitFrame() {
     
-    // recordPaintCommandBuffer(commandBuffers[currentFrame], imageIndex);
-     recordSwapChainCommandBuffer(commandBuffers[currentFrame], imageIndex);
+    // draw to swapchain
+    recordSwapChainCommandBuffer(commandBuffers[currentFrame]);
     
     // submit to swapchain
     VkSubmitInfo submitInfo{};
@@ -1049,8 +1067,9 @@ void Graphics::submitFrame(uint32_t& imageIndex) {
     VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-        framebufferResized = false;
-        recreateSwapChain();
+//        framebufferResized = false;
+//        recreateSwapChain();
+        framebufferResized = true;
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
@@ -1059,61 +1078,14 @@ void Graphics::submitFrame(uint32_t& imageIndex) {
     
 }
 
-// run functions
-
-void Graphics::initVulkan() {
+void Graphics::cleanupVulkan() {
     
-    // general vulkan
-    
-    createInstance();
-    
-    setupDebugMessenger();
-    
-    createSurface();
-    pickPhysicalDevice();
-    createLogicalDevice();
-    createCommandPool();
-    createCommandBuffers();
-    createSyncObjects();
-    
-    createTextureSampler();
-    
-}
-
-void Graphics::initRender(const std::string& vertShaderPath,
-                          const std::string& fragShaderPath) {
-    
-    // after model loading
-    
-    createVertexBuffer();
-    createIndexBuffer();
-    createUniformBuffers();
-
-    // swapchain
-    
-    createSwapChain();
-    createSwapChainImageViews();
-    createSwapChainRenderPass();
-    createSwapChainDescriptorSetLayout();
-    createSwapChainGraphicsPipeline(vertShaderPath,
-                                    fragShaderPath);
-    createSwapChainColorResources();
-    createSwapChainDepthResources();
-    createSwapChainFramebuffers();
-    createSwapChainDescriptorPool();
-    createSwapChainDescriptorSets(); // input textures
-        
-}
-
-void Graphics::cleanup() {
     cleanupSwapChain();
-    
-    // more generalized cleanup
-
+        
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
-
+    
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(device, globalUniformBuffers[i], nullptr);
         vkFreeMemory(device, globalUniformBuffersMemory[i], nullptr);
@@ -1121,9 +1093,9 @@ void Graphics::cleanup() {
         vkDestroyBuffer(device, instanceStorageBuffers[i], nullptr);
         vkFreeMemory(device, instanceStorageBuffersMemory[i], nullptr);
     }
-
+    
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-
+    
     vkDestroySampler(device, textureSampler, nullptr);
     
     for (auto& tiv : textureImageViews) {
@@ -1142,17 +1114,25 @@ void Graphics::cleanup() {
     vkFreeMemory(device, indexBufferMemory, nullptr);
     vkDestroyBuffer(device, vertexBuffer, nullptr);
     vkFreeMemory(device, vertexBufferMemory, nullptr);
-
+    
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
         vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
         vkDestroyFence(device, inFlightFences[i], nullptr);
     }
-
+    
     vkDestroyCommandPool(device, commandPool, nullptr);
-
+    
     vkDestroyDevice(device, nullptr);
+    
+}
 
+void Graphics::cleanup() {
+    
+    cleanupVulkan();
+    
+    // glfw specific cleanup
+    
     if (ENABLE_VALIDATION_LAYERS) {
         DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
     }

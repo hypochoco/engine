@@ -7,6 +7,22 @@
 
 #pragma once
 
+// flags
+
+#ifdef NDEBUG
+#define ENABLE_VALIDATION_LAYERS false
+#else
+#define ENABLE_VALIDATION_LAYERS true
+#endif
+
+#if defined(__APPLE__) && defined(__MACH__) // macOS or iOS
+#define MACOS true
+#else
+#define MACOS false
+#endif
+
+// imports
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
@@ -34,20 +50,6 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
-
-// flags
-
-#ifdef NDEBUG
-#define ENABLE_VALIDATION_LAYERS false
-#else
-#define ENABLE_VALIDATION_LAYERS true
-#endif
-
-#if defined(__APPLE__) && defined(__MACH__) // macOS or iOS
-#define MACOS true
-#else
-#define MACOS false
-#endif
 
 // model structs
 
@@ -174,6 +176,8 @@ public:
     uint32_t currentFrame = 0;
     std::vector<VkCommandBuffer> commandBuffers;
     
+    bool framebufferResized = false;
+    
     // material variables
     
     std::vector<Material> materials;
@@ -219,6 +223,8 @@ public:
     
     // instance functions
     
+    VkExtent2D getSwapChainExtent();
+    
     void updateGlobalUBO(uint32_t currentFrame,
                          glm::mat4& view,
                          glm::mat4& proj);
@@ -232,15 +238,44 @@ public:
     // public graphics functions
         
     void initWindow();
-    void initVulkan();
-    void initRender(const std::string& vertShaderPath,
-                    const std::string& fragShaderPath);
     
-    void startFrame(uint32_t& imageIndex); // todo: not a fan of this
-    void submitFrame(uint32_t& imageIndex); // todo: not a fan of this
+    void setInstance(const VkInstance& instance);
+    void createInstance();
+    void setSurface(const VkSurfaceKHR& surface);
+    void createSurface();
+    void pickPhysicalDevice();
+    void createLogicalDevice();
+    void createSyncObjects();
     
+    void createTextureSampler();
+    void createSwapChain();
+    void createSwapChainImageViews();
+    void createSwapChainFramebuffers();
+    void createSwapChainColorResources();
+    void createSwapChainDepthResources();
+    void cleanupSwapChain();
+    void recreateSwapChain();
+    
+    void createSwapChainRenderPass();
+    void createSwapChainDescriptorSetLayout();
+    void createSwapChainGraphicsPipeline(const std::string& vertShaderPath,
+                                         const std::string& fragShaderPath);
+    void createSwapChainDescriptorPool();
+    void createSwapChainDescriptorSets();
+    
+    void createCommandPool();
+    void createCommandBuffers();
+    
+    void createVertexBuffer();
+    void createIndexBuffer();
+    void createUniformBuffers();
+    
+    void startFrame();
+    void submitFrame();
+    
+    void cleanupVulkan();
     void cleanup();
-    
+        
     // custom render functions
     
     void createRenderPass(VkRenderPass& renderPass,
@@ -294,79 +329,6 @@ public:
                              VkPipelineLayout& pipelineLayout,
                              std::vector<VkDescriptorSet>& descriptorSets);
     
-    template<typename T> // todo: not a fan of this
-    void recordCommandBuffer(VkCommandBuffer& commandBuffer,
-                             VkRenderPass& renderPass,
-                             VkFramebuffer& frameBuffer,
-                             int renderAreaWidth,
-                             int renderAreaHeight,
-                             VkPipeline& pipeline,
-                             int viewportWidth,
-                             int viewportHeight,
-                             int scissorWidth,
-                             int scissorHeight,
-                             VkPipelineLayout& pipelineLayout,
-                             std::vector<VkDescriptorSet>& descriptorSets,
-                             T& pushConstant) {
-        
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = renderPass;
-        renderPassInfo.framebuffer = frameBuffer;
-        renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = { (uint32_t)renderAreaWidth, (uint32_t)renderAreaHeight };
-
-        VkClearValue clearPaint = { {0.0f, 0.0f, 0.0f, 0.0f} };
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearPaint;
-        
-        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-        
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = (float) viewportWidth;
-        viewport.height = (float) viewportHeight;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = { (uint32_t)scissorWidth, (uint32_t)scissorHeight };
-        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-        
-        VkBuffer vertexBuffers[] = { vertexBuffer };
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-        vkCmdBindDescriptorSets(
-            commandBuffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipelineLayout,
-            0,
-            1,
-            &descriptorSets[currentFrame],
-            0,
-            nullptr
-        );
-        
-        vkCmdPushConstants(commandBuffer,
-                           pipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT,
-                           0,
-                           sizeof(pushConstant),
-                           &pushConstant);
-        
-        vkCmdDrawIndexed(commandBuffer, 6, 1, 0, 0, 0);
-
-        vkCmdEndRenderPass(commandBuffer);
-        
-    }
-    
 private:
     
     // graphics variables
@@ -388,8 +350,6 @@ private:
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
-
-    bool framebufferResized = false;
     
     GlobalUBO globalUBO;
     std::vector<VkBuffer> globalUniformBuffers;
@@ -439,6 +399,8 @@ private:
     
     // instance variables
     
+    uint32_t imageIndex;
+    
     std::vector<DrawJob> drawJobs;
     std::vector<glm::mat4> instanceModelMatrices;
         
@@ -457,15 +419,10 @@ private:
     void endSingleTimeCommands(VkCommandBuffer commandBuffer);
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-    void createInstance();
+    
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
     void setupDebugMessenger();
-    void createSurface();
-    void pickPhysicalDevice();
-    void createLogicalDevice();
-    void createSyncObjects();
     
     bool isDeviceSuitable(VkPhysicalDevice device);
     bool checkDeviceExtensionSupport(VkPhysicalDevice device);
@@ -473,7 +430,6 @@ private:
     std::vector<const char*> getRequiredExtensions();
     bool checkValidationLayerSupport();
 
-    void createTextureSampler();
     void createImage(uint32_t width,
                      uint32_t height,
                      uint32_t mipLevels,
@@ -517,34 +473,12 @@ private:
     VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
     SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
     
-    void createSwapChain();
-    void createSwapChainImageViews();
-    void createSwapChainFramebuffers();
-    void createSwapChainColorResources();
     VkFormat findDepthFormat();
-    void createSwapChainDepthResources();
-    void cleanupSwapChain();
-    void recreateSwapChain();
     
-    void createSwapChainRenderPass();
-    void createSwapChainDescriptorSetLayout();
-    void createSwapChainGraphicsPipeline(const std::string& vertShaderPath,
-                                         const std::string& fragShaderPath);
-    void createSwapChainDescriptorPool();
-    void createSwapChainDescriptorSets();
-    
-    void createCommandPool();
-        VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
+    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates,
                                  VkImageTiling tiling,
                                  VkFormatFeatureFlags features);
-    void createCommandBuffers();
-            
-    void recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
     
-    // model functions
-    
-    void createVertexBuffer();
-    void createIndexBuffer();
-    void createUniformBuffers();
+    void recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer);
         
 };

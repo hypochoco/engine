@@ -124,6 +124,9 @@ void Graphics::createSwapChain() {
 }
 
 void Graphics::cleanupSwapChain() {
+    
+    vkDeviceWaitIdle(device);
+    
     vkDestroyImageView(device, depthImageView, nullptr);
     vkDestroyImage(device, depthImage, nullptr);
     vkFreeMemory(device, depthImageMemory, nullptr);
@@ -142,8 +145,6 @@ void Graphics::cleanupSwapChain() {
 
     vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
-
-
 
 void Graphics::createSwapChainImageViews() {
     swapChainImageViews.resize(swapChainImages.size());
@@ -235,14 +236,15 @@ void Graphics::createSwapChainFramebuffers() {
 }
 
 void Graphics::recreateSwapChain() {
-    int width = 0, height = 0;
-    glfwGetFramebufferSize(window, &width, &height);
-    while (width == 0 || height == 0) {
-        glfwGetFramebufferSize(window, &width, &height);
-        glfwWaitEvents();
-    }
-
-    vkDeviceWaitIdle(device);
+    
+    // todo: handle glfw case in application
+    
+//    int width = 0, height = 0;
+//    glfwGetFramebufferSize(window, &width, &height);
+//    while (width == 0 || height == 0) {
+//        glfwGetFramebufferSize(window, &width, &height);
+//        glfwWaitEvents();
+//    }
 
     cleanupSwapChain();
 
@@ -251,6 +253,7 @@ void Graphics::recreateSwapChain() {
     createSwapChainColorResources();
     createSwapChainDepthResources();
     createSwapChainFramebuffers();
+    
 }
 
 void Graphics::createSwapChainRenderPass() {
@@ -599,8 +602,7 @@ void Graphics::createSwapChainGraphicsPipeline(const std::string& vertShaderPath
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
 }
 
-void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer,
-                                            uint32_t imageIndex) {
+void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer) {
     
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -682,4 +684,5 @@ void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer,
     if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to record command buffer!");
     }
+    
 }

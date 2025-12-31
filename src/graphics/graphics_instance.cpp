@@ -65,6 +65,6 @@ void Graphics::copyInstanceToBuffer(uint32_t currentFrame) {
     
     memcpy(instanceStorageBuffersMapped[currentFrame],
            instanceModelMatrices.data(),
-           instanceModelMatrices.size() * sizeof(InstanceSSBO));
+           sizeof(InstanceSSBO) * MAX_ENTITIES);
     
 }
