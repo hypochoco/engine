@@ -72,7 +72,7 @@ void Graphics::createFramebuffer(VkFramebuffer& frameBuffer,
     framebufferInfo.width = width;
     framebufferInfo.height = height;
     framebufferInfo.layers = 1;
-
+    
     if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &frameBuffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to create framebuffer!");
     }
@@ -404,18 +404,21 @@ void Graphics::createPipeline(VkPipeline& pipeline,
 
 }
 
-void Graphics::recordCommandBuffer(VkCommandBuffer& commandBuffer,
-                                   VkRenderPass& renderPass,
-                                   VkFramebuffer& frameBuffer,
-                                   int renderAreaWidth,
-                                   int renderAreaHeight,
-                                   VkPipeline& pipeline,
-                                   int viewportWidth,
-                                   int viewportHeight,
-                                   int scissorWidth,
-                                   int scissorHeight,
-                                   VkPipelineLayout& pipelineLayout,
-                                   std::vector<VkDescriptorSet>& descriptorSets) {
+// ---
+
+// wip: record command buffer
+
+void Graphics::recordBeginRenderPass(VkCommandBuffer& commandBuffer,
+                                     VkRenderPass& renderPass,
+                                     VkFramebuffer& frameBuffer,
+                                     const int& renderAreaWidth,
+                                     const int& renderAreaHeight,
+                                     VkPipeline& pipeline) {
+    
+    // todo: render pass
+    // todo: pipeline
+    // todo: viewport
+    // todo: vertex / index buffers
     
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -432,25 +435,47 @@ void Graphics::recordCommandBuffer(VkCommandBuffer& commandBuffer,
     
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = (float) viewportWidth;
-    viewport.height = (float) viewportHeight;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = { (uint32_t)scissorWidth, (uint32_t)scissorHeight };
-    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    
     VkBuffer vertexBuffers[] = { vertexBuffer };
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+}
+
+void Graphics::recordSetViewport(VkCommandBuffer &commandBuffer,
+                                 const float& viewportX,
+                                 const float& viewportY,
+                                 const float& viewportWidth,
+                                 const float& viewportHeight) {
+    
+    VkViewport viewport{};
+    viewport.x = viewportX;
+    viewport.y = viewportY;
+    viewport.width = viewportWidth;
+    viewport.height = viewportHeight;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+    
+}
+
+void Graphics::recordSetScissor(VkCommandBuffer& commandBuffer,
+                                const int& scissorX,
+                                const int& scissorY,
+                                const uint32_t& scissorWidth,
+                                const uint32_t& scissorHeight) {
+    
+    VkRect2D scissor{};
+    scissor.offset = { scissorX, scissorY };
+    scissor.extent = { scissorWidth, scissorHeight };
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+}
+
+void Graphics::recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
+                                       VkPipelineLayout& pipelineLayout,
+                                       std::vector<VkDescriptorSet>& descriptorSets) {
+    
     vkCmdBindDescriptorSets(
         commandBuffer,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -461,9 +486,61 @@ void Graphics::recordCommandBuffer(VkCommandBuffer& commandBuffer,
         0,
         nullptr
     );
+
+}
+
+void Graphics::recordPushConstant(VkCommandBuffer& commandBuffer,
+                                  VkPipelineLayout& pipelineLayout,
+                                  uint32_t pushConstantSize,
+                                  void* pushConstant) {
+    
+    vkCmdPushConstants(commandBuffer,
+                       pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT,
+                       0,
+                       pushConstantSize,
+                       pushConstant);
+
+}
+
+void Graphics::recordDraw(VkCommandBuffer& commandBuffer) {
     
     vkCmdDrawIndexed(commandBuffer, 6, 1, 0, 0, 0);
+    
+}
 
+void Graphics::recordEndRenderPass(VkCommandBuffer& commandBuffer) {
+    
     vkCmdEndRenderPass(commandBuffer);
     
+}
+
+// ---
+
+void Graphics::deviceWaitIdle() {
+    vkDeviceWaitIdle(device);
+}
+
+void Graphics::destroyPipeline(VkPipeline& pipeline) {
+    vkDestroyPipeline(device, pipeline, nullptr);
+}
+
+void Graphics::destroyPipelineLayout(VkPipelineLayout& pipelineLayout) {
+    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+}
+
+void Graphics::destroyRenderPass(VkRenderPass& renderPass) {
+    vkDestroyRenderPass(device, renderPass, nullptr);
+}
+
+void Graphics::destroyFrameBuffer(VkFramebuffer& frameBuffer) {
+    vkDestroyFramebuffer(device, frameBuffer, nullptr);
+}
+
+void Graphics::destroyDescriptorPool(VkDescriptorPool& descriptorPool) {
+    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+}
+
+void Graphics::destroyDescriptorSetLayout(VkDescriptorSetLayout& descriptorSetLayout) {
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 }

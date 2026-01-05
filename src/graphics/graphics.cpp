@@ -390,6 +390,12 @@ VkShaderModule Graphics::createShaderModule(const std::vector<char>& code) {
     return shaderModule;
 }
 
+void Graphics::destroyShaderModule(VkShaderModule& shaderModule) {
+    
+    vkDestroyShaderModule(device, shaderModule, nullptr);
+    
+}
+
 // buffers
 
 VkCommandBuffer Graphics::beginSingleTimeCommands() {

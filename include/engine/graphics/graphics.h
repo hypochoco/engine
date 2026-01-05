@@ -191,6 +191,7 @@ public:
     static std::vector<char> readFile(const std::string& filename);
     
     VkShaderModule createShaderModule(const std::vector<char>& code);
+    void destroyShaderModule(VkShaderModule& shaderModule);
     
     void transitionImageLayout(VkCommandBuffer& commandBuffer,
                                VkImage image,
@@ -315,19 +316,40 @@ public:
                         VkRenderPass& renderPass,
                         VkPipelineShaderStageCreateInfo* shaderStages,
                         VkPushConstantRange& pushConstantRange);
+        
+    void recordBeginRenderPass(VkCommandBuffer& commandBuffer,
+                               VkRenderPass& renderPass,
+                               VkFramebuffer& frameBuffer,
+                               const int& renderAreaWidth,
+                               const int& renderAreaHeight,
+                               VkPipeline& pipeline);
+    void recordSetViewport(VkCommandBuffer& commandBuffer,
+                           const float& viewportX,
+                           const float& viewportY,
+                           const float& viewportWidth,
+                           const float& viewportHeight);
+    void recordSetScissor(VkCommandBuffer& commandBuffer,
+                          const int& scissorX,
+                          const int& scissorY,
+                          const uint32_t& scissorWidth,
+                          const uint32_t& scissorHeight);
+    void recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
+                                 VkPipelineLayout& pipelineLayout,
+                                 std::vector<VkDescriptorSet>& descriptorSets);
+    void recordPushConstant(VkCommandBuffer& commandBuffer,
+                            VkPipelineLayout& pipelineLayout,
+                            uint32_t pushConstantSize,
+                            void* pushConstant);
+    void recordDraw(VkCommandBuffer& commandBuffer);
+    void recordEndRenderPass(VkCommandBuffer& commandBuffer);
     
-    void recordCommandBuffer(VkCommandBuffer& commandBuffer,
-                             VkRenderPass& renderPass,
-                             VkFramebuffer& frameBuffer,
-                             int renderAreaWidth,
-                             int renderAreaHeight,
-                             VkPipeline& pipeline,
-                             int viewportWidth,
-                             int viewportHeight,
-                             int scissorWidth,
-                             int scissorHeight,
-                             VkPipelineLayout& pipelineLayout,
-                             std::vector<VkDescriptorSet>& descriptorSets);
+    void deviceWaitIdle();
+    void destroyPipeline(VkPipeline& pipeline);
+    void destroyPipelineLayout(VkPipelineLayout& pipelineLayout);
+    void destroyRenderPass(VkRenderPass& renderPass);
+    void destroyFrameBuffer(VkFramebuffer& frameBuffer);
+    void destroyDescriptorPool(VkDescriptorPool& descriptorPool);
+    void destroyDescriptorSetLayout(VkDescriptorSetLayout& descriptorSetLayout);
     
 private:
     
