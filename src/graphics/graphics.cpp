@@ -1002,44 +1002,55 @@ void Graphics::updateGlobalUBO(uint32_t currentFrame,
 
 }
 
-void Graphics::startFrame() {
+void Graphics::waitForFences() {
     
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-        
+    
+}
+
+bool Graphics::aquireNextImage() {
+    
     VkResult result = vkAcquireNextImageKHR(device,
                                             swapChain,
                                             UINT64_MAX,
                                             imageAvailableSemaphores[currentFrame],
                                             VK_NULL_HANDLE,
                                             &imageIndex);
-        
+
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-//        recreateSwapChain();
-        framebufferResized = true;
-        return;
+        return true;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
-                        
+
+}
+
+void Graphics::beginCommandBuffer(uint32_t currentFrame) {
+    
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
     vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
-        
-    // record command buffer
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    
+
     if (vkBeginCommandBuffer(commandBuffers[currentFrame], &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
-    
+
 }
 
-void Graphics::submitFrame() {
+void Graphics::endCommandBuffer(uint32_t currentFrame) {
     
-    // draw to swapchain
-    recordSwapChainCommandBuffer(commandBuffers[currentFrame]);
-    
+    if (vkEndCommandBuffer(commandBuffers[currentFrame]) != VK_SUCCESS) {
+        throw std::runtime_error("failed to record command buffer!");
+    }
+
+}
+
+void Graphics::queueSubmit(uint32_t currentFrame) {
+        
     // submit to swapchain
+        
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -1059,7 +1070,14 @@ void Graphics::submitFrame() {
     if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
         throw std::runtime_error("failed to submit draw command buffer!");
     }
+    
+}
 
+bool Graphics::queuePresent(uint32_t imageIndex,
+                            uint32_t currentFrame) {
+    
+    VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+    
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
@@ -1073,13 +1091,17 @@ void Graphics::submitFrame() {
     VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-//        framebufferResized = false;
-//        recreateSwapChain();
-        framebufferResized = true;
+        return true;
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
 
+    return false;
+    
+}
+
+void Graphics::advanceFrame() {
+    
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     
 }

@@ -602,7 +602,9 @@ void Graphics::createSwapChainGraphicsPipeline(const std::string& vertShaderPath
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
 }
 
-void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer) {
+void Graphics::recordSwapChainCommandBuffer(uint32_t currentFrame) {
+    
+    VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
     
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -681,8 +683,4 @@ void Graphics::recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer) {
 
     vkCmdEndRenderPass(commandBuffer);
 
-    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-        throw std::runtime_error("failed to record command buffer!");
-    }
-    
 }

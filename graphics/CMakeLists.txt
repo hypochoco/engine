@@ -4,7 +4,7 @@ add_library(engine_graphics STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/graphics/graphics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/graphics/graphics_model.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/graphics/graphics_swapchain.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/graphics/graphics_texture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/graphics/graphics_custom.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/graphics/graphics_instance.cpp
 )
 

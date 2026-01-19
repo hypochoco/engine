@@ -172,7 +172,8 @@ public:
     // public graphics variables
     
     GLFWwindow* window;
-    VkDevice device; // todo: not a fan of exposing this
+    VkDevice device;
+    uint32_t imageIndex = 0;
     uint32_t currentFrame = 0;
     std::vector<VkCommandBuffer> commandBuffers;
     
@@ -271,8 +272,15 @@ public:
     void createIndexBuffer();
     void createUniformBuffers();
     
-    void startFrame();
-    void submitFrame();
+    void waitForFences();
+    bool aquireNextImage();
+    void beginCommandBuffer(uint32_t currentFrame);
+    void endCommandBuffer(uint32_t currentFrame);
+    void recordSwapChainCommandBuffer(uint32_t currentFrame);
+    void queueSubmit(uint32_t currentFrame);
+    bool queuePresent(uint32_t imageIndex,
+                      uint32_t currentFrame);
+    void advanceFrame();
     
     void cleanupVulkan();
     void cleanup();
@@ -333,6 +341,11 @@ public:
                           const int& scissorY,
                           const uint32_t& scissorWidth,
                           const uint32_t& scissorHeight);
+    void recordClearAttachment(VkCommandBuffer& commandBuffer,
+                               const int& clearX,
+                               const int& clearY,
+                               const uint32_t& clearWidth,
+                               const uint32_t& clearHeight);
     void recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
                                  VkPipelineLayout& pipelineLayout,
                                  std::vector<VkDescriptorSet>& descriptorSets);
@@ -421,8 +434,6 @@ private:
     
     // instance variables
     
-    uint32_t imageIndex;
-    
     std::vector<DrawJob> drawJobs;
     std::vector<glm::mat4> instanceModelMatrices;
         
@@ -501,6 +512,4 @@ private:
                                  VkImageTiling tiling,
                                  VkFormatFeatureFlags features);
     
-    void recordSwapChainCommandBuffer(VkCommandBuffer commandBuffer);
-        
 };

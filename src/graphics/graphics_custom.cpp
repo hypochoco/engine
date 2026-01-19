@@ -404,22 +404,13 @@ void Graphics::createPipeline(VkPipeline& pipeline,
 
 }
 
-// ---
-
-// wip: record command buffer
-
 void Graphics::recordBeginRenderPass(VkCommandBuffer& commandBuffer,
                                      VkRenderPass& renderPass,
                                      VkFramebuffer& frameBuffer,
                                      const int& renderAreaWidth,
                                      const int& renderAreaHeight,
                                      VkPipeline& pipeline) {
-    
-    // todo: render pass
-    // todo: pipeline
-    // todo: viewport
-    // todo: vertex / index buffers
-    
+        
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = renderPass;
@@ -469,6 +460,34 @@ void Graphics::recordSetScissor(VkCommandBuffer& commandBuffer,
     scissor.offset = { scissorX, scissorY };
     scissor.extent = { scissorWidth, scissorHeight };
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+}
+
+void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
+                                     const int& clearX,
+                                     const int& clearY,
+                                     const uint32_t& clearWidth,
+                                     const uint32_t& clearHeight) {
+    
+    // todo: can handle multiple rects
+    
+    VkClearRect clearRect{};
+    clearRect.rect.offset = { clearX, clearY };
+    clearRect.rect.extent = { clearWidth, clearHeight };
+    clearRect.baseArrayLayer = 0;
+    clearRect.layerCount = 1;
+
+    VkClearAttachment clearAttachment{};
+    clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    clearAttachment.colorAttachment = 0;
+    clearAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+    vkCmdClearAttachments(commandBuffer,
+                          1,
+                          &clearAttachment,
+                          1,
+                          &clearRect
+    );
 
 }
 
