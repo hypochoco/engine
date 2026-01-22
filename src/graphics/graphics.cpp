@@ -1018,12 +1018,12 @@ bool Graphics::aquireNextImage() {
                                             &imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        return true;
+        return false;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
     
-    return false;
+    return true;
 
 }
 
@@ -1093,12 +1093,12 @@ bool Graphics::queuePresent(uint32_t imageIndex,
     VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-        return true;
+        return false;
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
 
-    return false;
+    return true;
     
 }
 
