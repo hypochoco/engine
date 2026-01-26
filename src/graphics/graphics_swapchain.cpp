@@ -58,6 +58,10 @@ VkPresentModeKHR Graphics::chooseSwapPresentMode(const std::vector<VkPresentMode
             return availablePresentMode;
         }
     }
+    
+    // note:
+        // fifo can cause issues on mac,
+        // use VK_PRESENT_MODE_IMMEDIATE_KHR, but can cause tearing
 
     return VK_PRESENT_MODE_FIFO_KHR;
 }
@@ -78,7 +82,7 @@ void Graphics::createSwapChain() {
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
     VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
     VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
-
+    
     uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
     if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
         imageCount = swapChainSupport.capabilities.maxImageCount;

@@ -1017,9 +1017,9 @@ bool Graphics::aquireNextImage() {
                                             VK_NULL_HANDLE,
                                             &imageIndex);
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         return false;
-    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+    } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
     
@@ -1091,6 +1091,10 @@ bool Graphics::queuePresent(uint32_t imageIndex,
     presentInfo.pImageIndices = &imageIndex;
 
     VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
+    
+#if defined(__APPLE__) && defined(__MACH__)
+    vkQueueWaitIdle(presentQueue); // causes halting on mac
+#endif
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
         return false;
