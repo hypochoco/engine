@@ -236,7 +236,7 @@ void Graphics::createPipeline(VkPipeline& pipeline,
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = VK_FALSE; // disable depth testing
-    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
@@ -490,7 +490,7 @@ void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
     VkClearAttachment clearAttachment{};
     clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     clearAttachment.colorAttachment = 0;
-    clearAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clearAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
     vkCmdClearAttachments(commandBuffer,
                           1,

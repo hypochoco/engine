@@ -867,7 +867,7 @@ void Graphics::createTexture(int texWidth,
     
     VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
     stbi_uc* pixels = new stbi_uc[imageSize];
-    std::fill(pixels, pixels + imageSize, 255); // fill white
+    std::fill(pixels, pixels + imageSize, alpha); // todo: filling it as alpha is a hack, should elect clear, white, etc.
     
     for (size_t i = 3; i < imageSize; i += 4) { // fill clear
         pixels[i] = alpha;
@@ -894,7 +894,7 @@ void Graphics::createTexture(VkImage& textureImage,
     
     VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
     stbi_uc* pixels = new stbi_uc[imageSize];
-    std::fill(pixels, pixels + imageSize, 255); // fill white
+    std::fill(pixels, pixels + imageSize, alpha); // todo: same here !!!
     
     for (size_t i = 3; i < imageSize; i += 4) { // fill clear
         pixels[i] = alpha;
