@@ -212,10 +212,36 @@ public:
                      VkImageUsageFlags usage,
                      int mipLevels = 0);
     
+    void loadTexture(std::string texturePath,
+                     VkImage& textureImage,
+                     VkDeviceMemory& textureImageMemory,
+                     VkImageView& textureImageView,
+                     VkImageUsageFlags usage,
+                     int mipLevels = 0);
+    
+    void loadTexture(VkImage& textureImage,
+                     VkDeviceMemory& textureImageMemory,
+                     VkImageView& textureImageView,
+                     int texWidth,
+                     int texHeight,
+                     stbi_uc* pixels,
+                     VkImageUsageFlags usage,
+                     int mipLevels);
+        
     void createTexture(int texWidth,
                        int texHeight,
                        VkImageUsageFlags usage,
-                       int mipLevels = 0);
+                       int mipLevels,
+                       int alpha);
+    
+    void createTexture(VkImage& textureImage,
+                       VkDeviceMemory& textureImageMemory,
+                       VkImageView& textureImageView,
+                       int texWidth,
+                       int texHeight,
+                       VkImageUsageFlags usage,
+                       int mipLevels,
+                       int alpha);
 
     // model functions
     
@@ -301,17 +327,17 @@ public:
     void createDescriptorPool(VkDescriptorPool& descriptorPool,
                               uint32_t allocation = 1);
     
+    void createDescriptorSet(VkImageView& imageView,
+                             VkDescriptorSet& descriptorSet,
+                             VkDescriptorSetLayout& descriptorSetLayout,
+                             VkDescriptorPool& descriptorPool);
+    
     void createDescriptorSets(VkImageView& imageView,
                               std::vector<VkDescriptorSet>& descriptorSets,
                               VkDescriptorSetLayout& descriptorSetLayout,
                               VkDescriptorPool& descriptorPool,
                               uint32_t allocation = 1);
-    
-    void updateDescriptorSet(VkImageView& imageView,
-                             VkDescriptorSet& descriptorSet,
-                             VkDescriptorSetLayout& descriptorSetLayout,
-                             VkDescriptorPool& descriptorPool);
-    
+        
     void createPipeline(VkPipeline& pipeline,
                         VkDescriptorSetLayout& descriptorSetLayout,
                         VkPipelineLayout& pipelineLayout,
@@ -348,7 +374,7 @@ public:
                                const uint32_t& clearHeight);
     void recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
                                  VkPipelineLayout& pipelineLayout,
-                                 std::vector<VkDescriptorSet>& descriptorSets);
+                                 VkDescriptorSet& descriptorSet);
     void recordPushConstant(VkCommandBuffer& commandBuffer,
                             VkPipelineLayout& pipelineLayout,
                             uint32_t pushConstantSize,
@@ -357,6 +383,9 @@ public:
     void recordEndRenderPass(VkCommandBuffer& commandBuffer);
     
     void deviceWaitIdle();
+    void destroyVkImageView(VkImageView& imageView);
+    void destroyVkImage(VkImage& image);
+    void destroyVkDeviceMemory(VkDeviceMemory memory);
     void destroyPipeline(VkPipeline& pipeline);
     void destroyPipelineLayout(VkPipelineLayout& pipelineLayout);
     void destroyRenderPass(VkRenderPass& renderPass);

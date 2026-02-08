@@ -769,6 +769,48 @@ void Graphics::loadTexture(int texWidth,
     
 }
 
+void Graphics::loadTexture(VkImage& textureImage,
+                           VkDeviceMemory& textureImageMemory,
+                           VkImageView& textureImageView,
+                           int texWidth,
+                           int texHeight,
+                           stbi_uc* pixels,
+                           VkImageUsageFlags usage,
+                           int mipLevels) {
+
+    
+    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
+        
+    if (mipLevels == 0) {
+        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+    }
+
+    stageTextureImage(texWidth,
+                      texHeight,
+                      imageSize,
+                      pixels,
+                      mipLevels,
+                      textureImage,
+                      textureImageMemory,
+                      usage);
+    
+    if (mipLevels != 1) { // note: transitions to shader read only, otherwise dst optimal
+        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+    } else { // transition to shader read only
+        transitionImageLayout(textureImage,
+                              VK_FORMAT_R8G8B8A8_SRGB,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              1);
+    }
+    
+    createTextureImageView(mipLevels,
+                           textureImage,
+                           textureImageView);
+        
+}
+
+
 void Graphics::loadTexture(std::string texturePath,
                            VkImageUsageFlags usage,
                            int mipLevels) {
@@ -790,14 +832,46 @@ void Graphics::loadTexture(std::string texturePath,
 
 }
 
+void Graphics::loadTexture(std::string texturePath,
+                           VkImage& textureImage,
+                           VkDeviceMemory& textureImageMemory,
+                           VkImageView& textureImageView,
+                           VkImageUsageFlags usage,
+                           int mipLevels) {
+    
+        
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        throw std::runtime_error(stbi_failure_reason());
+    }
+    
+    loadTexture(textureImage,
+                textureImageMemory,
+                textureImageView,
+                texWidth,
+                texHeight,
+                pixels,
+                usage,
+                mipLevels);
+    
+    stbi_image_free(pixels);
+
+}
+
 void Graphics::createTexture(int texWidth,
                              int texHeight,
                              VkImageUsageFlags usage,
-                             int mipLevels) {
+                             int mipLevels,
+                             int alpha) {
     
     VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
     stbi_uc* pixels = new stbi_uc[imageSize];
     std::fill(pixels, pixels + imageSize, 255); // fill white
+    
+    for (size_t i = 3; i < imageSize; i += 4) { // fill clear
+        pixels[i] = alpha;
+    }
 
     loadTexture(texWidth,
                 texHeight,
@@ -808,6 +882,37 @@ void Graphics::createTexture(int texWidth,
     stbi_image_free(pixels);
     
 }
+
+void Graphics::createTexture(VkImage& textureImage,
+                             VkDeviceMemory& textureImageMemory,
+                             VkImageView& textureImageView,
+                             int texWidth,
+                             int texHeight,
+                             VkImageUsageFlags usage,
+                             int mipLevels,
+                             int alpha) {
+    
+    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
+    stbi_uc* pixels = new stbi_uc[imageSize];
+    std::fill(pixels, pixels + imageSize, 255); // fill white
+    
+    for (size_t i = 3; i < imageSize; i += 4) { // fill clear
+        pixels[i] = alpha;
+    }
+
+    loadTexture(textureImage,
+                textureImageMemory,
+                textureImageView,
+                texWidth,
+                texHeight,
+                pixels,
+                usage,
+                mipLevels);
+    
+    stbi_image_free(pixels);
+    
+}
+
 
 // misc graphics objects
 

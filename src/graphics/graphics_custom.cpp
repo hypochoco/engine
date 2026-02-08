@@ -116,6 +116,39 @@ void Graphics::createDescriptorPool(VkDescriptorPool& descriptorPool,
     }
 }
 
+void Graphics::createDescriptorSet(VkImageView& imageView,
+                                   VkDescriptorSet& descriptorSet,
+                                   VkDescriptorSetLayout& descriptorSetLayout,
+                                   VkDescriptorPool& descriptorPool) {
+            
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &descriptorSetLayout;
+        
+    if (vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate paint descriptor set");
+    }
+    
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = textureSampler;
+    imageInfo.imageView = imageView;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+    
+    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+    
+}
+
 void Graphics::createDescriptorSets(VkImageView& imageView,
                                     std::vector<VkDescriptorSet>& descriptorSets,
                                     VkDescriptorSetLayout& descriptorSetLayout,
@@ -156,29 +189,6 @@ void Graphics::createDescriptorSets(VkImageView& imageView,
         vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
     }
     
-}
-
-void Graphics::updateDescriptorSet(VkImageView& imageView,
-                                   VkDescriptorSet& descriptorSet,
-                                   VkDescriptorSetLayout& descriptorSetLayout,
-                                   VkDescriptorPool& descriptorPool) {
-    
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = textureSampler;
-    imageInfo.imageView = imageView;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = descriptorSet;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.dstArrayElement = 0;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.pImageInfo = &imageInfo;
-    
-    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-
 }
 
 void Graphics::createPipeline(VkPipeline& pipeline,
@@ -336,7 +346,7 @@ void Graphics::createPipeline(VkPipeline& pipeline,
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = VK_FALSE; // disable depth testing
-    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
@@ -493,7 +503,7 @@ void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
 
 void Graphics::recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
                                        VkPipelineLayout& pipelineLayout,
-                                       std::vector<VkDescriptorSet>& descriptorSets) {
+                                       VkDescriptorSet& descriptorSet) {
     
     vkCmdBindDescriptorSets(
         commandBuffer,
@@ -501,7 +511,7 @@ void Graphics::recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
         pipelineLayout,
         0,
         1,
-        &descriptorSets[currentFrame],
+        &descriptorSet,
         0,
         nullptr
     );
@@ -538,6 +548,18 @@ void Graphics::recordEndRenderPass(VkCommandBuffer& commandBuffer) {
 
 void Graphics::deviceWaitIdle() {
     vkDeviceWaitIdle(device);
+}
+
+void Graphics::destroyVkImageView(VkImageView& imageView) {
+    vkDestroyImageView(device, imageView, nullptr);
+}
+
+void Graphics::destroyVkImage(VkImage& image) {
+    vkDestroyImage(device, image, nullptr);
+}
+
+void Graphics::destroyVkDeviceMemory(VkDeviceMemory memory) {
+    vkFreeMemory(device, memory, nullptr);
 }
 
 void Graphics::destroyPipeline(VkPipeline& pipeline) {
