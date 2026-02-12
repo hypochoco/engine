@@ -496,8 +496,7 @@ void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
                           1,
                           &clearAttachment,
                           1,
-                          &clearRect
-    );
+                          &clearRect);
 
 }
 
