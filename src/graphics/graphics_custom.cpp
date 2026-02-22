@@ -195,7 +195,8 @@ void Graphics::createPipeline(VkPipeline& pipeline,
                               VkDescriptorSetLayout& descriptorSetLayout,
                               VkPipelineLayout& pipelineLayout,
                               VkRenderPass& renderPass,
-                              VkPipelineShaderStageCreateInfo* shaderStages) {
+                              VkPipelineShaderStageCreateInfo* shaderStages,
+                              VkBlendFactor srcAlphaBlendFactor) {
     
     // variable push constants
     
@@ -246,7 +247,7 @@ void Graphics::createPipeline(VkPipeline& pipeline,
     colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.srcAlphaBlendFactor = srcAlphaBlendFactor;
     colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
     colorBlendAttachment.colorWriteMask =

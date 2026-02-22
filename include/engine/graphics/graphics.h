@@ -342,7 +342,8 @@ public:
                         VkDescriptorSetLayout& descriptorSetLayout,
                         VkPipelineLayout& pipelineLayout,
                         VkRenderPass& renderPass,
-                        VkPipelineShaderStageCreateInfo* shaderStages);
+                        VkPipelineShaderStageCreateInfo* shaderStages,
+                        VkBlendFactor srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE);
 
     void createPipeline(VkPipeline& pipeline,
                         VkDescriptorSetLayout& descriptorSetLayout,
