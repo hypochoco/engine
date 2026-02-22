@@ -208,40 +208,55 @@ public:
     
     // material functions
     
-    void loadTexture(std::string texturePath,
-                     VkImageUsageFlags usage,
-                     int mipLevels = 0);
+    void loadTexture(int texWidth,
+                     int texHeight,
+                     stbi_uc* pixels,
+                     VkImage& textureImage,
+                     VkDeviceMemory& textureImageMemory,
+                     VkImageView& textureImageView,
+                     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                     | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                     | VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
+                     int mipLevels = 1);
     
     void loadTexture(std::string texturePath,
                      VkImage& textureImage,
                      VkDeviceMemory& textureImageMemory,
                      VkImageView& textureImageView,
-                     VkImageUsageFlags usage,
-                     int mipLevels = 0);
+                     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                     | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                     | VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
+                     int mipLevels = 1);
     
-    void loadTexture(VkImage& textureImage,
-                     VkDeviceMemory& textureImageMemory,
-                     VkImageView& textureImageView,
-                     int texWidth,
-                     int texHeight,
-                     stbi_uc* pixels,
-                     VkImageUsageFlags usage,
-                     int mipLevels);
+    void loadTexture(std::string texturePath,
+                     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                     | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                     | VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
+                     int mipLevels = 1);
         
     void createTexture(int texWidth,
                        int texHeight,
-                       VkImageUsageFlags usage,
-                       int mipLevels,
-                       int alpha);
-    
-    void createTexture(VkImage& textureImage,
+                       glm::ivec4 color,
+                       VkImage& textureImage,
                        VkDeviceMemory& textureImageMemory,
                        VkImageView& textureImageView,
-                       int texWidth,
+                       VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                       | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                       | VK_IMAGE_USAGE_SAMPLED_BIT,
+                       VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
+                       int mipLevels = 1);
+    
+    void createTexture(int texWidth,
                        int texHeight,
-                       VkImageUsageFlags usage,
-                       int mipLevels,
-                       int alpha);
+                       glm::ivec4 color,
+                       VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                       | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                       | VK_IMAGE_USAGE_SAMPLED_BIT,
+                       VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
+                       int mipLevels = 1);
 
     // model functions
     
@@ -505,26 +520,23 @@ private:
                      VkDeviceMemory& imageMemory);
     void stageTextureImage(int texWidth,
                            int texHeight,
-                           VkDeviceSize imageSize,
                            stbi_uc* pixels,
-                           uint32_t mipLevels,
+                           VkDeviceSize imageSize,
                            VkImage& textureImage,
                            VkDeviceMemory& textureImageMemory,
-                           VkImageUsageFlags usage);
+                           VkImageUsageFlags usage,
+                           VkFormat format,
+                           uint32_t mipLevels);
     void generateMipmaps(VkImage image,
                          VkFormat imageFormat,
                          int32_t texWidth,
                          int32_t texHeight,
                          uint32_t mipLevels);
-    void loadTexture(int texWidth,
-                     int texHeight,
-                     stbi_uc* pixels,
-                     VkImageUsageFlags usage,
-                     int mipLevels = 0);
     VkSampleCountFlagBits getMaxUsableSampleCount();
-    void createTextureImageView(uint32_t mipLevels,
-                                VkImage& textureImage,
-                                VkImageView& textureImageView);
+    void createTextureImageView(VkImage& textureImage,
+                                VkImageView& textureImageView,
+                                VkFormat format,
+                                uint32_t mipLevels);
     VkImageView createImageView(VkImage image,
                                 VkFormat format,
                                 VkImageAspectFlags aspectFlags,

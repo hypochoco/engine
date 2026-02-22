@@ -666,24 +666,27 @@ VkImageView Graphics::createImageView(VkImage image,
     return imageView;
 }
 
-void Graphics::createTextureImageView(uint32_t mipLevels,
-                                      VkImage& textureImage,
-                                      VkImageView& textureImageView) {
+void Graphics::createTextureImageView(VkImage& textureImage,
+                                      VkImageView& textureImageView,
+                                      VkFormat format,
+                                      uint32_t mipLevels) {
+    
     textureImageView = createImageView(textureImage,
-                                       VK_FORMAT_R8G8B8A8_SRGB,
+                                       format,
                                        VK_IMAGE_ASPECT_COLOR_BIT,
                                        mipLevels);
 }
 
 void Graphics::stageTextureImage(int texWidth,
                                  int texHeight,
-                                 VkDeviceSize imageSize,
                                  stbi_uc* pixels,
-                                 uint32_t mipLevels,
+                                 VkDeviceSize imageSize,
                                  VkImage& textureImage,
                                  VkDeviceMemory& textureImageMemory,
-                                 VkImageUsageFlags usage) {
-        
+                                 VkImageUsageFlags usage,
+                                 VkFormat format,
+                                 uint32_t mipLevels) {
+    
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
     createBuffer(imageSize,
@@ -701,7 +704,7 @@ void Graphics::stageTextureImage(int texWidth,
                 texHeight,
                 mipLevels,
                 VK_SAMPLE_COUNT_1_BIT,
-                VK_FORMAT_R8G8B8A8_SRGB,
+                format,
                 VK_IMAGE_TILING_OPTIMAL,
                 usage,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -709,7 +712,7 @@ void Graphics::stageTextureImage(int texWidth,
                 textureImageMemory);
 
     transitionImageLayout(textureImage,
-                          VK_FORMAT_R8G8B8A8_SRGB,
+                          format,
                           VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           mipLevels);
@@ -727,109 +730,75 @@ void Graphics::stageTextureImage(int texWidth,
 void Graphics::loadTexture(int texWidth,
                            int texHeight,
                            stbi_uc* pixels,
-                           VkImageUsageFlags usage,
-                           int mipLevels) {
-
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
-    
-    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
-        
-    if (mipLevels == 0) {
-        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
-    }
-
-    stageTextureImage(texWidth,
-                      texHeight,
-                      imageSize,
-                      pixels,
-                      mipLevels,
-                      textureImage,
-                      textureImageMemory,
-                      usage);
-    
-    if (mipLevels != 1) { // note: transitions to shader read only, otherwise dst optimal
-        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
-    } else { // transition to shader read only
-        transitionImageLayout(textureImage,
-                              VK_FORMAT_R8G8B8A8_SRGB,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              1);
-    }
-    
-    createTextureImageView(mipLevels,
-                           textureImage,
-                           textureImageView);
-    
-    textureImages.push_back(textureImage);
-    textureImageMemories.push_back(textureImageMemory);
-    textureImageViews.push_back(textureImageView);
-    
-}
-
-void Graphics::loadTexture(VkImage& textureImage,
+                           VkImage& textureImage,
                            VkDeviceMemory& textureImageMemory,
                            VkImageView& textureImageView,
-                           int texWidth,
-                           int texHeight,
-                           stbi_uc* pixels,
                            VkImageUsageFlags usage,
+                           VkFormat format,
                            int mipLevels) {
-
     
-    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
-        
-    if (mipLevels == 0) {
+    if (mipLevels == 0) { // indicator value, 0 -> automatic
         mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
     }
-
-    stageTextureImage(texWidth,
-                      texHeight,
-                      imageSize,
-                      pixels,
-                      mipLevels,
-                      textureImage,
-                      textureImageMemory,
-                      usage);
     
+    VkDeviceSize imageSize;
+
+    if (format == VK_FORMAT_R8_UNORM) { // note: compact uniform into single channel
+        
+        imageSize = texWidth * texHeight;
+        stbi_uc* singleChannel = (stbi_uc*) malloc(imageSize);
+        for (int i = 0; i < imageSize; i++) { // note: careful on channel count
+            float r = pixels[i * 4 + 0] / 255.0f;
+            float g = pixels[i * 4 + 1] / 255.0f;
+            float b = pixels[i * 4 + 2] / 255.0f;
+            float a = pixels[i * 4 + 3] / 255.0f;
+            float luminance = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            singleChannel[i] = (stbi_uc) (luminance * a * 255.0f);
+        }
+        
+        stageTextureImage(texWidth,
+                          texHeight,
+                          singleChannel,
+                          imageSize,
+                          textureImage,
+                          textureImageMemory,
+                          usage,
+                          format,
+                          mipLevels);
+        
+        stbi_image_free(singleChannel);
+        
+    } else { // note: rgba
+        
+        imageSize = texWidth * texHeight * 4;
+        
+        stageTextureImage(texWidth,
+                          texHeight,
+                          pixels,
+                          imageSize,
+                          textureImage,
+                          textureImageMemory,
+                          usage,
+                          format,
+                          mipLevels);
+
+    }
+        
     if (mipLevels != 1) { // note: transitions to shader read only, otherwise dst optimal
-        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+        generateMipmaps(textureImage, format, texWidth, texHeight, mipLevels);
     } else { // transition to shader read only
         transitionImageLayout(textureImage,
-                              VK_FORMAT_R8G8B8A8_SRGB,
+                              format,
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              1);
+                              mipLevels);
     }
     
-    createTextureImageView(mipLevels,
-                           textureImage,
-                           textureImageView);
-        
-}
-
-
-void Graphics::loadTexture(std::string texturePath,
-                           VkImageUsageFlags usage,
-                           int mipLevels) {
+    createTextureImageView(textureImage,
+                           textureImageView,
+                           format,
+                           mipLevels);
     
-        
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    if (!pixels) {
-        throw std::runtime_error(stbi_failure_reason());
-    }
-    
-    loadTexture(texWidth,
-                texHeight,
-                pixels,
-                usage,
-                mipLevels);
-    
-    stbi_image_free(pixels);
-
 }
 
 void Graphics::loadTexture(std::string texturePath,
@@ -837,6 +806,7 @@ void Graphics::loadTexture(std::string texturePath,
                            VkDeviceMemory& textureImageMemory,
                            VkImageView& textureImageView,
                            VkImageUsageFlags usage,
+                           VkFormat format,
                            int mipLevels) {
     
         
@@ -846,73 +816,103 @@ void Graphics::loadTexture(std::string texturePath,
         throw std::runtime_error(stbi_failure_reason());
     }
     
-    loadTexture(textureImage,
-                textureImageMemory,
-                textureImageView,
-                texWidth,
+    loadTexture(texWidth,
                 texHeight,
                 pixels,
+                textureImage,
+                textureImageMemory,
+                textureImageView,
                 usage,
+                format,
                 mipLevels);
     
     stbi_image_free(pixels);
+
+}
+
+void Graphics::loadTexture(std::string texturePath,
+                           VkImageUsageFlags usage,
+                           VkFormat format,
+                           int mipLevels) {
+    
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+
+    loadTexture(texturePath,
+                textureImage,
+                textureImageMemory,
+                textureImageView,
+                usage,
+                format,
+                mipLevels);
+    
+    textureImages.push_back(textureImage);
+    textureImageMemories.push_back(textureImageMemory);
+    textureImageViews.push_back(textureImageView);
 
 }
 
 void Graphics::createTexture(int texWidth,
                              int texHeight,
+                             glm::ivec4 color,
+                             VkImage& textureImage,
+                             VkDeviceMemory& textureImageMemory,
+                             VkImageView& textureImageView,
                              VkImageUsageFlags usage,
-                             int mipLevels,
-                             int alpha) {
+                             VkFormat format,
+                             int mipLevels) {
     
-    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
-    stbi_uc* pixels = new stbi_uc[imageSize];
-    std::fill(pixels, pixels + imageSize, alpha); // todo: filling it as alpha is a hack, should elect clear, white, etc.
-    
-    for (size_t i = 3; i < imageSize; i += 4) { // fill clear
-        pixels[i] = alpha;
+    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels
+    stbi_uc* pixels = (stbi_uc*) malloc(imageSize);
+        
+    for (int i = 0; i < texWidth * texHeight; i++) {
+        pixels[i * 4 + 0] = (stbi_uc) color.r;
+        pixels[i * 4 + 1] = (stbi_uc) color.g;
+        pixels[i * 4 + 2] = (stbi_uc) color.b;
+        pixels[i * 4 + 3] = (stbi_uc) color.a;
     }
-
+    
     loadTexture(texWidth,
                 texHeight,
                 pixels,
-                usage,
-                mipLevels);
-    
-    stbi_image_free(pixels);
-    
-}
-
-void Graphics::createTexture(VkImage& textureImage,
-                             VkDeviceMemory& textureImageMemory,
-                             VkImageView& textureImageView,
-                             int texWidth,
-                             int texHeight,
-                             VkImageUsageFlags usage,
-                             int mipLevels,
-                             int alpha) {
-    
-    VkDeviceSize imageSize = texWidth * texHeight * 4; // 4 channels (RGBA)
-    stbi_uc* pixels = new stbi_uc[imageSize];
-    std::fill(pixels, pixels + imageSize, alpha); // todo: same here !!!
-    
-    for (size_t i = 3; i < imageSize; i += 4) { // fill clear
-        pixels[i] = alpha;
-    }
-
-    loadTexture(textureImage,
+                textureImage,
                 textureImageMemory,
                 textureImageView,
-                texWidth,
-                texHeight,
-                pixels,
                 usage,
+                format,
                 mipLevels);
     
     stbi_image_free(pixels);
     
 }
 
+void Graphics::createTexture(int texWidth,
+                             int texHeight,
+                             glm::ivec4 color,
+                             VkImageUsageFlags usage,
+                             VkFormat format,
+                             int mipLevels) {
+    
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+        
+    createTexture(texWidth,
+                  texHeight,
+                  color,
+                  textureImage,
+                  textureImageMemory,
+                  textureImageView,
+                  usage,
+                  format,
+                  mipLevels);
+    
+    textureImages.push_back(textureImage);
+    textureImageMemories.push_back(textureImageMemory);
+    textureImageViews.push_back(textureImageView);
+    
+}
 
 // misc graphics objects
 
