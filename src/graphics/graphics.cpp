@@ -180,6 +180,20 @@ void Graphics::createInstance() {
         createInfo.ppEnabledLayerNames = validationLayers.data();
         populateDebugMessengerCreateInfo(debugCreateInfo);
         createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
+        
+//        // note: enable sync validation
+//        VkValidationFeatureEnableEXT enabledFeatures[] = {
+//            VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+//            VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
+//        };
+//        VkValidationFeaturesEXT validationFeatures{};
+//        validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+//        validationFeatures.enabledValidationFeatureCount = 2;
+//        validationFeatures.pEnabledValidationFeatures = enabledFeatures;
+//
+//        validationFeatures.pNext = &debugCreateInfo;
+//        createInfo.pNext = &validationFeatures;
+
     } else {
         createInfo.enabledLayerCount = 0;
         createInfo.pNext = nullptr;

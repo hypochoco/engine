@@ -383,11 +383,15 @@ public:
                           const int& scissorY,
                           const uint32_t& scissorWidth,
                           const uint32_t& scissorHeight);
+    void recordSetScissor(VkCommandBuffer& commandBuffer,
+                          const glm::ivec4& rect);
     void recordClearAttachment(VkCommandBuffer& commandBuffer,
                                const int& clearX,
                                const int& clearY,
                                const uint32_t& clearWidth,
                                const uint32_t& clearHeight);
+    void recordClearAttachment(VkCommandBuffer& commandBuffer,
+                               const glm::ivec4& rect);
     void recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
                                  VkPipelineLayout& pipelineLayout,
                                  VkDescriptorSet& descriptorSet);

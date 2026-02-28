@@ -495,6 +495,18 @@ void Graphics::recordSetScissor(VkCommandBuffer& commandBuffer,
 
 }
 
+void Graphics::recordSetScissor(VkCommandBuffer& commandBuffer,
+                                const glm::ivec4& rect) {
+    
+    recordSetScissor(commandBuffer,
+                     rect.x,
+                     rect.y,
+                     rect.z,
+                     rect.w);
+
+}
+
+
 void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
                                      const int& clearX,
                                      const int& clearY,
@@ -520,6 +532,18 @@ void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
                           1,
                           &clearRect);
 
+}
+
+void Graphics::recordClearAttachment(VkCommandBuffer& commandBuffer,
+                                     const glm::ivec4& rect) {
+    
+    // todo: can handle multiple rects
+    
+    recordClearAttachment(commandBuffer,
+                          rect.x,
+                          rect.y,
+                          rect.z,
+                          rect.w);
 }
 
 void Graphics::recordBindDescriptorSet(VkCommandBuffer& commandBuffer,
