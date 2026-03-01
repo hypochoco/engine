@@ -1168,6 +1168,35 @@ void Graphics::endCommandBuffer(uint32_t currentFrame) {
 
 }
 
+void Graphics::transitionCanvasToShaderRead(uint32_t currentFrame,
+                                            VkImage& image) {
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        commandBuffers[currentFrame],
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // stamp pass just wrote here
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,         // swapchain pass will read here
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+}
+
+
 void Graphics::queueSubmit(uint32_t currentFrame) {
         
     // submit to swapchain

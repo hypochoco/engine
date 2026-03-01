@@ -614,7 +614,8 @@ void Graphics::createSwapChainGraphicsPipeline(const std::string& vertShaderPath
     vkDestroyShaderModule(device, vertShaderModule, nullptr);
 }
 
-void Graphics::recordSwapChainCommandBuffer(uint32_t currentFrame) {
+void Graphics::recordSwapChainCommandBuffer(uint32_t currentFrame,
+                                            uint32_t imageIndex) {
     
     VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
     

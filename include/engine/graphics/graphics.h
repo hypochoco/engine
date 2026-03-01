@@ -165,7 +165,7 @@ public:
     static constexpr uint32_t WIDTH = 800;
     static constexpr uint32_t HEIGHT = 600;
 
-    static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
+    static constexpr int MAX_FRAMES_IN_FLIGHT = 1;
     static constexpr int NUM_TEXTURES = 16;
     static constexpr int MAX_ENTITIES = 16;
     
@@ -317,7 +317,10 @@ public:
     bool aquireNextImage();
     void beginCommandBuffer(uint32_t currentFrame);
     void endCommandBuffer(uint32_t currentFrame);
-    void recordSwapChainCommandBuffer(uint32_t currentFrame);
+    void transitionCanvasToShaderRead(uint32_t currentFrame,
+                                      VkImage& image);
+    void recordSwapChainCommandBuffer(uint32_t currentFrame,
+                                      uint32_t imageIndex);
     void queueSubmit(uint32_t currentFrame);
     bool queuePresent(uint32_t imageIndex,
                       uint32_t currentFrame);
