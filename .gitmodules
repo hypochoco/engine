@@ -7,3 +7,9 @@
 [submodule "external/stb"]
 	path = external/stb
 	url = https://github.com/nothings/stb.git
+[submodule "external/glm"]
+	path = external/glm
+	url = https://github.com/g-truc/glm.git
+[submodule "external/metal-cpp"]
+	path = external/metal-cpp
+	url = https://github.com/apple/metal-cpp.git
