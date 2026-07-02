@@ -14,6 +14,9 @@ Working notes for the engine project.
   fold them back into the `core/` docs and write a new investigation.
   - [`2026-07-01-codebase-overview.md`](investigations/2026-07-01-codebase-overview.md)
   - [`2026-07-01-graphics-refactor.md`](investigations/2026-07-01-graphics-refactor.md)
+  - [`2026-07-02-metal-backend.md`](investigations/2026-07-02-metal-backend.md)
+  - [`2026-07-02-core-module-plan.md`](investigations/2026-07-02-core-module-plan.md)
+  - [`2026-07-02-geometry-scaling.md`](investigations/2026-07-02-geometry-scaling.md)
 
 ## Conventions
 

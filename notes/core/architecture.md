@@ -1,39 +1,52 @@
 # Architecture (as-is)
 
 Snapshot of the current structure. This describes what exists today, not the target.
-Last synced with code: 2026-07-01.
+Last synced with code: 2026-07-02.
 
 ## Build & layout
 
 - C++23, CMake `>= 3.25`, `compile_commands.json` exported.
 - Split `include/` (public headers) vs `src/` (implementation).
-- Per-module build files live in top-level `graphics/` and `physics/` dirs, separate from
-  their source under `src/`.
+- Per-module build files live in top-level `core/`, `graphics/`, `physics/`, `tst/` dirs,
+  separate from their source under `src/`. CMake uses `GLOB_RECURSE` (incl. `.mm`) +
+  `source_group`.
+- **Backend is platform-selected**: `if(APPLE)` → Metal + QuartzCore frameworks;
+  `else()` → `find_package(Vulkan)`.
 
 ```
 engine/
-├── CMakeLists.txt          # top-level: deps + module wiring
+├── CMakeLists.txt          # top-level: deps + platform backend select + module wiring
 ├── include/engine/
-│   ├── graphics/graphics.h # the entire graphics interface
+│   ├── core/core.h         # NEW — empty stub (backend-agnostic data target)
+│   ├── graphics/graphics.h # the entire graphics interface (still Vulkan-only)
 │   └── physics/physics.h   # stub
 ├── src/
-│   ├── graphics/           # 5 .cpp files, ~115 KB total
+│   ├── core/core.cpp       # NEW — empty stub
+│   ├── graphics/           # 5 .cpp files, ~115 KB total (all Vulkan)
 │   └── physics/physics.cpp # stub
-├── graphics/CMakeLists.txt # defines engine_graphics (STATIC)
-├── physics/CMakeLists.txt  # defines engine_physics (STATIC)
-└── external/               # submodules: glfw, stb, tinyobjloader
+├── core/CMakeLists.txt     # NEW — engine_core (STATIC)
+├── graphics/CMakeLists.txt # engine_graphics (STATIC); Metal|Vulkan link per platform
+├── physics/CMakeLists.txt  # engine_physics (STATIC)
+├── tst/                    # NEW — placeholder `test` executable
+└── external/               # submodules: glfw, glm, stb, tinyobjloader, metal-cpp (NEW)
 ```
 
 ## Target graph
 
 ```
 engine::engine (INTERFACE)
-├── engine::graphics (STATIC) → glfw, glm::glm, Vulkan::Vulkan, tinyobjloader, stb::stb
+├── engine::core     (STATIC) → glm::glm, tinyobjloader, stb::stb           [empty so far]
+├── engine::graphics (STATIC) → glfw, glm, tinyobjloader, stb,
+│                                (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan
 └── engine::physics  (STATIC)
 ```
 
-Dependencies: `glm` and `Vulkan` via `find_package`; `glfw` + `tinyobjloader` via
-`add_subdirectory`; `stb` as a header-only INTERFACE lib.
+Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdirectory`;
+`stb` header-only INTERFACE; `metal-cpp` vendored (not yet wired into include dirs).
+
+> ⚠️ **Current build reality**: graphics is 100% Vulkan, but Vulkan is no longer found on
+> Apple → the graphics module does not build on macOS until the backend abstraction + a
+> Metal impl exist. See investigations/2026-07-02-metal-backend.md.
 
 ## Graphics module
 
@@ -86,8 +99,11 @@ no collision, no broadphase.
 - No ECS (no entity/component/system/registry/archetype types anywhere).
 - No application entry point (`main`) or engine loop driver — this is a library with no
   consumer.
+- No backend abstraction (RHI) — graphics is a single Vulkan-only `Graphics` class, so the
+  committed Metal backend cannot exist until the interface is extracted.
+- `engine::core` exists but is empty (Vertex/Mesh/Material/loader not moved yet).
 - No headless/offscreen *device* path; rendering assumes a GLFW window + swapchain.
 - No compute pipelines or compute-queue usage.
-- No shaders in-tree and no SPIR-V compile step in CMake (pipelines take shader paths at
-  runtime).
-- No tests.
+- No shaders in-tree and no compile step (pipelines take shader paths at runtime; nothing
+  emits SPIR-V, let alone Metal `.metallib`).
+- Tests: only a placeholder `test` executable that prints a string.

@@ -12,9 +12,26 @@ A single engine serving three workloads on shared foundations:
 
 ## Architectural commitments
 
+- **Build everything ourselves.** The purpose of this project is to develop these systems
+  in-house — no adopting third-party engines/RHIs (e.g. Dawn, bgfx, SDL_gpu). Small focused
+  libraries for narrow concerns (glm, stb, tinyobjloader, glfw, metal-cpp bindings) are
+  fine, but the engine's own abstractions (RHI, ECS, renderer, physics) are hand-written.
+- **Engine, not application.** This is a library other projects consume to build their own
+  games/sims/tools. There is intentionally **no `main`** — the engine exposes APIs. See
+  the testing note below for how the drivers are exercised.
 - **Entity Component System (ECS)** as the core organizing model for simulation state.
-- **Vulkan** as the rendering backend.
+- **Multi-backend rendering behind a common interface (RHI)**: **Metal on Apple, Vulkan
+  elsewhere**, selected at build time. Both backends are written by us. (Was Vulkan-only;
+  Metal added 2026-07-02 — see investigations/2026-07-02-metal-backend.md.)
 - **C++23**, CMake build, dependencies vendored as git submodules under `external/`.
+
+## Testing / entry points
+
+- No application `main`. Instead, **driver tests** (under `tst/`) exercise subsystems
+  directly — they are how we run and validate the engine during development, standing in for
+  the consuming application. Expect a suite of these per driver/subsystem, not one binary.
+  (The `tst` CMake target was renamed from `test` to avoid colliding with CTest's reserved
+  target.)
 
 ## Constraints that follow from the goals
 
@@ -29,6 +46,32 @@ A single engine serving three workloads on shared foundations:
   simulation and physics layers are built.
 - **Compute, not just graphics.** ML and some rendering work belongs on compute pipelines
   and/or the compute queue; today only the graphics queue and graphics pipelines exist.
+
+## Build strategy
+
+- **Core first, then one graphics refactor pass.** Build `engine::core` to a good state
+  standalone; do **not** refactor graphics incrementally alongside it. Once core is solid,
+  go through the entire graphics package in one dedicated pass (refactor, delete, reorganize
+  behind the RHI). Until then the existing Vulkan graphics code is left as-is (and may not
+  build on Apple — that's fine; it gets rebuilt in the refactor pass).
+
+## Driving milestone: "a ball rolling down a plane"
+
+The first end-to-end target — a long-term vertical slice that forces the core systems to come
+together (geometry, physics, graphics, the RHI). Simple to *describe*, but deliberately
+scoped to exercise the overall goals, not just draw one sphere:
+
+- **The scene**: a sphere under gravity rolling down an inclined plane (physics integration +
+  collision + a real camera/render).
+- **Headless + deferred rendering**: run the same sim with no window, rendering to offscreen
+  targets (and/or deferred), as ML training and offline rendering require.
+- **Parallel simulations**: run many independent instances of the scene at once (training
+  throughput), not just one.
+- **Massive scale**: e.g. ~100,000 spheres, to pressure-test batched/instanced rendering,
+  data-oriented storage, and the physics broadphase.
+
+This milestone is the yardstick for "is core in a good state?" and defines what the graphics
+refactor pass must ultimately support.
 
 ## Non-goals (for now)
 
