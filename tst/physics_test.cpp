@@ -7,14 +7,20 @@
 //  exp/log orientation integration, and sphere inertia.
 //
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include "engine/core/threading/thread_pool.h"
+#include "engine/physics/broadphase/sweep_and_prune.h"
+#include "engine/physics/broadphase/uniform_grid.h"
 #include "engine/physics/physics.h"
+#include "engine/physics/world.h"
 
 using namespace engine::physics;
 
@@ -111,6 +117,137 @@ int main() {
         assert(approx(Iinv[0][0], Real(1) / expected));
         assert(approx((I * Iinv)[0][0], Real(1)));
         std::printf("inertia: I=%.4f, Iinv=%.4f\n", I[0][0], Iinv[0][0]);
+    }
+
+    // --- 6. Broadphase (sweep-and-prune) matches brute-force overlap set ---
+    {
+        std::vector<Aabb> boxes;
+        // A jittered 6x6 grid of unit boxes so some neighbors overlap and most don't.
+        for (int gx = 0; gx < 6; ++gx)
+            for (int gy = 0; gy < 6; ++gy) {
+                const Vec3 c(gx * 0.9f, gy * 0.9f, 0.0f);   // spacing 0.9 < size 1 -> neighbors touch
+                boxes.push_back(Aabb{ c - Vec3(0.5f), c + Vec3(0.5f) });
+            }
+
+        std::vector<broadphase::Pair> sap;
+        broadphase::sweepAndPrune(boxes, sap);
+
+        std::vector<broadphase::Pair> grid;
+        broadphase::uniformGrid(boxes, grid);
+
+        std::vector<broadphase::Pair> brute;
+        for (uint32_t i = 0; i < boxes.size(); ++i)
+            for (uint32_t j = i + 1; j < boxes.size(); ++j)
+                if (overlaps(boxes[i], boxes[j])) brute.emplace_back(i, j);
+        std::sort(brute.begin(), brute.end());
+
+        assert(sap == brute);
+        assert(grid == brute);
+        std::printf("broadphase: SAP + grid both found %zu pairs, match brute force (%zu)\n",
+                    grid.size(), brute.size());
+    }
+
+    // --- 7. Parallel step produces the same result as serial (determinism) ---
+    {
+        engine::core::ThreadPool pool;
+        auto buildPile = [](engine::core::ThreadPool* p) {
+            WorldDef wd;
+            wd.gravity = Vec3(0, -9.81f, 0);
+            wd.velocityIterations = 8;
+            wd.substeps = 1;
+            wd.threadPool = p;
+            wd.parallelThreshold = p ? 1 : 1000000;   // force the parallel path when pooled
+            auto w = createPhysicsWorld(Backend::Realtime, wd);
+            BodyDef plane;
+            plane.type = BodyType::Static;
+            plane.collider.type = ColliderDesc::Type::Plane;
+            plane.collider.plane = Plane{ Vec3(0, 1, 0), 0.0f };
+            plane.material.friction = 0.8f;
+            w->createBody(plane);
+            for (int x = 0; x < 5; ++x)
+                for (int z = 0; z < 5; ++z)
+                    for (int y = 0; y < 2; ++y) {
+                        BodyDef s;
+                        s.type = BodyType::Dynamic;
+                        s.mass = 1.0f;
+                        s.collider.type = ColliderDesc::Type::Sphere;
+                        s.collider.sphere = Sphere{ 0.5f };
+                        s.material.friction = 0.8f;
+                        s.position = Vec3(x * 0.8f, 1.0f + y * 0.9f, z * 0.8f);   // overlapping cluster
+                        w->createBody(s);
+                    }
+            return w;
+        };
+
+        auto serial = buildPile(nullptr);
+        auto parallel = buildPile(&pool);
+        for (int i = 0; i < 120; ++i) { serial->step(1.0f / 120.0f); parallel->step(1.0f / 120.0f); }
+
+        const auto ps = serial->poses();
+        const auto pp = parallel->poses();
+        assert(ps.size() == pp.size());
+        Real maxErr = 0;
+        for (size_t k = 0; k < ps.size(); ++k)
+            maxErr = std::max(maxErr, glm::length(ps[k].position - pp[k].position));
+        std::printf("determinism: parallel vs serial max pos err = %.3e\n", maxErr);
+        assert(maxErr < 1e-4f);
+    }
+
+    // --- 8. Box rests stably on a plane; sphere rests on top of a static box ---
+    {
+        WorldDef wd;
+        wd.gravity = Vec3(0, -9.81f, 0);
+        wd.velocityIterations = 12;
+        wd.substeps = 2;
+        auto w = createPhysicsWorld(Backend::Realtime, wd);
+
+        BodyDef plane;
+        plane.type = BodyType::Static;
+        plane.collider.type = ColliderDesc::Type::Plane;
+        plane.collider.plane = Plane{ Vec3(0, 1, 0), 0.0f };
+        plane.material.friction = 0.8f;
+        w->createBody(plane);
+
+        BodyDef box;
+        box.type = BodyType::Dynamic;
+        box.mass = 1.0f;
+        box.collider.type = ColliderDesc::Type::Box;
+        box.collider.box = Box{ Vec3(0.5f) };
+        box.material.friction = 0.8f;
+        box.material.restitution = 0.0f;
+        box.position = Vec3(0, 1.0f, 0);
+        const BodyHandle bh = w->createBody(box);
+
+        for (int i = 0; i < 300; ++i) w->step(1.0f / 120.0f);
+        const auto p = w->pose(bh);
+        const Real angSpeed = glm::length(w->angularVelocities()[bh.index]);
+        const Real linSpeed = glm::length(w->linearVelocities()[bh.index]);
+        std::printf("box on plane: y=%.3f |w|=%.3f |v|=%.3f\n", p.position.y, angSpeed, linSpeed);
+        assert(p.position.y > 0.45f && p.position.y < 0.56f);   // resting at half-height
+        assert(angSpeed < 0.3f);                                // flat, not tipping
+        assert(linSpeed < 0.3f);                                // settled
+
+        BodyDef staticBox;
+        staticBox.type = BodyType::Static;
+        staticBox.collider.type = ColliderDesc::Type::Box;
+        staticBox.collider.box = Box{ Vec3(1.0f, 0.5f, 1.0f) };
+        staticBox.position = Vec3(5, 0.5f, 0);
+        w->createBody(staticBox);
+
+        BodyDef sph;
+        sph.type = BodyType::Dynamic;
+        sph.mass = 1.0f;
+        sph.collider.type = ColliderDesc::Type::Sphere;
+        sph.collider.sphere = Sphere{ 0.5f };
+        sph.material.friction = 0.8f;
+        sph.material.restitution = 0.0f;
+        sph.position = Vec3(5, 2.0f, 0);
+        const BodyHandle sh = w->createBody(sph);
+
+        for (int i = 0; i < 300; ++i) w->step(1.0f / 120.0f);
+        const auto sp = w->pose(sh);
+        std::printf("sphere on box: y=%.3f (expect ~1.5)\n", sp.position.y);
+        assert(sp.position.y > 1.4f && sp.position.y < 1.6f);   // box top 1.0 + radius 0.5
     }
 
     std::printf("physics phase-0 ok\n");

@@ -109,9 +109,16 @@ from an entity layer yet.
 
 ECS-free, backend-agnostic core (depends on `engine::core` only — no ecs, no graphics).
 Design + phasing + differentiable-backend design-ahead: investigations/2026-07-03-physics-plan.md.
-- **Shapes**: `Sphere`, `Plane` (half-space). GJK `support()` seam is Phase 2.
-- **Collision** (`collide::sphereVsPlane`, `sphereVsSphere`): exact fast paths filling a
-  **solver-agnostic** `Contact` (continuous signed `separation`, normal, point).
+- **Shapes**: `Sphere`, `Plane` (half-space), `Box` (oriented). GJK `support()` seam via
+  `SupportShape` (sphere/box).
+- **Collision**: exact primitive fast paths (`sphereVsSphere`, `sphereVsPlane`, analytic
+  `sphereVsBox`, multi-contact `boxVsPlane` corner-clip for stable resting), and **GJK + EPA**
+  (`collision/{gjk,epa,convex}`) for general convex pairs (box-box; extensible to hulls). EPA
+  builds its own non-degenerate tetrahedron (off-axis seed) to survive axis-aligned box
+  degeneracy. All fill the solver-agnostic `Contact`. Verified analytically in
+  `tst/gjk_epa_test` (box-box depth/normal exact) and `tst/physics_test` (box rests flat on a
+  plane: y=0.495, |ω|≈0; sphere rests on a box top). Sphere shapes use analytic tests (EPA only
+  approximates curved surfaces).
 - **Dynamics**: `RigidBodyState`, `PhysicsMaterial` (restitution, friction, compliance),
   inertia helpers; pure integration kernels — semi-implicit `integrateLinear`, SO(3) exp/log
   orientation (`so3ExpMap`/`integrateOrientation`), differentiable-ready (plan §14).
@@ -120,8 +127,34 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   `createPhysicsWorld(Backend, ...)` factory. Multiple backends can coexist (plan §1).
 - **Realtime backend** (`backends/realtime`, private to its TU): semi-implicit Euler +
   **sequential-impulse (PGS)** contact solver (restitution, Coulomb friction, Baumgarte),
-  substeps × velocity iterations, brute-force broadphase (SAP/BVH = Phase 2). Friction at the
-  contact point applies torque ⇒ **true rolling**.
+  substeps × velocity iterations. Friction at the contact point applies torque ⇒ **true
+  rolling**.
+- **Broadphase** (Phase 2, `broadphase/`, selectable via `WorldDef::broadphase`):
+  - **Sweep-and-prune** (single-axis): great for small/clustered scenes; ~O(n^5/3) for a 3-D
+    cube of bodies (active list holds a whole slab).
+  - **Uniform spatial-hash grid** (default): flat "index sort" (sorted `(cellHash,body)`
+    entries + `thread_local` scratch, no per-step allocation), cell = largest AABB. **Linear
+    scaling** — body-steps/sec stays ~flat as n grows.
+  Both verified against brute force in `tst/physics_test`. Planes (infinite) are tested against
+  finite bodies directly. Measured (Release, free-fall, `tst/physics_bench`): at **65,536**
+  bodies grid = **19.9 ms/step** vs SAP 192 ms vs the O(n²) baseline's ~14 s extrapolation
+  (~**700×**); grid throughput ~3.3–5.4 M body-steps/s across 256→65k (flat), SAP falls
+  15.6M→0.34M. Crossover ~1–2k. 100k ≈ 30 ms/step single-threaded. See
+  investigations/2026-07-03-physics-baseline.md.
+
+### Threading (`engine::core::ThreadPool`)
+A minimal fixed-size worker pool with a blocking `parallelFor` (dynamic work-stealing; the
+caller thread participates). Verified by `tst/thread_pool_test` (every index visited once, no
+races). `core` links `Threads::Threads`. Two physics consumers:
+- **Parallel worlds** (ML many-envs / "parallel simulations"): independent `PhysicsWorld`s
+  stepped concurrently — **7.7× on 12 workers** (4.7M → 36.8M body-steps/s).
+- **Intra-world** (optional `WorldDef::threadPool`): the step parallelizes integration,
+  narrowphase (per-pair, lock-free), and the **contact solver via graph coloring** (same-color
+  contacts share no dynamic body → solved in parallel; colors sequential). Both serial and
+  pooled paths use the color order, so results are **bit-identical** (determinism verified in
+  `tst/physics_test`, max err 0.0). Dense 32k-body pile: **1.66×** (Amdahl-limited by the still
+  serial grid sort + per-color barriers — a parallel sort is the next lever). Static bodies are
+  never written, so shared colliders (the plane) are race-free.
 - `physics::Real` localizes the scalar for a future double/dual-number switch.
 
 ### physics_ecs bridge (`engine::physics_ecs`)
@@ -135,8 +168,11 @@ Depends on `engine::physics` + `engine::ecs` (separate from `scene`, which pulls
   speed, matching `a = g·sinθ/(1+2/5)` (measured 7.02 m in 2 s vs 7.01 analytic).
 - `tst/physics_window` (windowed, user-run): N spheres rolling down a tilted plane, physics →
   sync → `scene::extract` → Metal Renderer. Ties every subsystem together.
-- **Not yet**: GJK/EPA + box/convex + SAP/BVH broadphase (Phase 2, for the 100k case),
-  implicit/differentiable backend + parallel worlds (Phase 3).
+- **Not yet**: box-box contact *manifolds* (SAT/clip — box-box is single-point EPA now, so
+  box stacking is less stable than box-on-plane), convex-hull/capsule colliders, parallel
+  broadphase sort, implicit/differentiable backend + parallel worlds (Phase 3). **Done in
+  Phase 2**: SAP + uniform-grid broadphase, ThreadPool (parallel worlds + colored solver),
+  GJK/EPA + box colliders (sphere/plane/box all collide).
 
 ## ECS module (`engine::ecs`, 2026-07-03)
 

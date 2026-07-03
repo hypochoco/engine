@@ -17,6 +17,10 @@ struct Sphere {
     Real radius = Real(0.5);
 };
 
+struct Box {
+    Vec3 halfExtents{ Real(0.5) };
+};
+
 // Half-space plane: the surface is { x : dot(normal, x) = offset } with `normal` unit-length;
 // the signed distance of a point p is dot(normal, p) - offset (positive on the normal side).
 struct Plane {

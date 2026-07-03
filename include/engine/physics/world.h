@@ -19,14 +19,17 @@
 #include "engine/physics/shapes/shapes.h"
 #include "engine/physics/types.h"
 
+namespace engine::core { class ThreadPool; }
+
 namespace engine::physics {
 
 using BodyHandle = core::Handle<struct BodyTag>;
 
 struct ColliderDesc {
-    enum class Type { Sphere, Plane } type = Type::Sphere;
+    enum class Type { Sphere, Plane, Box } type = Type::Sphere;
     Sphere sphere{};
     Plane  plane{};
+    Box    box{};
 };
 
 struct BodyDef {
@@ -40,10 +43,20 @@ struct BodyDef {
     BodyType        type = BodyType::Dynamic;
 };
 
+enum class BroadphaseKind { SweepAndPrune, UniformGrid };
+
 struct WorldDef {
-    Vec3 gravity{0, Real(-9.81), 0};
-    int  velocityIterations = 8;
-    int  substeps = 1;
+    Vec3               gravity{0, Real(-9.81), 0};
+    int                velocityIterations = 8;
+    int                substeps = 1;
+    BroadphaseKind     broadphase = BroadphaseKind::UniformGrid;
+
+    // Optional: if set, the step parallelizes its embarrassingly-parallel stages (integration,
+    // narrowphase) across the pool when body/pair counts exceed `parallelThreshold`. Results
+    // are identical to serial (deterministic). The broadphase sort and the contact solver
+    // remain serial for now.
+    core::ThreadPool*  threadPool = nullptr;
+    int                parallelThreshold = 4096;
 };
 
 struct ContactEvent {

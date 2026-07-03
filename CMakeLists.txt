@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # external dependencies
 find_package(glm REQUIRED)
+find_package(Threads REQUIRED)
 add_subdirectory(external/glfw)
 add_subdirectory(external/tinyobjloader)
 

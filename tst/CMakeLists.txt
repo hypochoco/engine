@@ -7,8 +7,14 @@ target_link_libraries(ecs_test PRIVATE engine::ecs)
 add_executable(scheduler_test scheduler_test.cpp)
 target_link_libraries(scheduler_test PRIVATE engine::ecs)
 
+add_executable(thread_pool_test thread_pool_test.cpp)
+target_link_libraries(thread_pool_test PRIVATE engine::core)
+
 add_executable(physics_test physics_test.cpp)
 target_link_libraries(physics_test PRIVATE engine::physics)
+
+add_executable(gjk_epa_test gjk_epa_test.cpp)
+target_link_libraries(gjk_epa_test PRIVATE engine::physics)
 
 add_executable(physics_milestone physics_milestone.cpp)
 target_link_libraries(physics_milestone PRIVATE engine::physics_ecs)

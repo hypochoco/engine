@@ -24,4 +24,14 @@ bool sphereVsPlane(const Vec3& center, const Sphere& sphere,
 bool sphereVsSphere(const Vec3& centerA, const Sphere& a,
                     const Vec3& centerB, const Sphere& b, Real margin, Contact& out);
 
+// Sphere vs oriented box (analytic closest-point; exact, unlike EPA on a curved shape).
+// Contact normal points from the box toward the sphere (A = box, B = sphere convention).
+bool sphereVsBox(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
+                 const Vec3& sphereCenter, const Sphere& sphere, Real margin, Contact& out);
+
+// Oriented box vs half-space plane: up to 4 deepest penetrating corners (a stable manifold for
+// resting). Contact normal = plane normal (plane -> box). Returns the number of contacts.
+int boxVsPlane(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
+               const Plane& plane, Real margin, Contact out[4]);
+
 } // namespace engine::physics::collide

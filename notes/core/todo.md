@@ -147,9 +147,15 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       sequential-impulse backend** (restitution/friction/Baumgarte, substeps, rotation) + the
       **`engine::physics_ecs` bridge** (RigidBody + step/sync systems). **Milestone met**:
       `tst/physics_milestone` (headless — ball rolls without slipping down a 30° incline,
-      analytic match) + `tst/physics_window` (windowed, full stack). Next: Phase 2 GJK/EPA +
-      box/convex + SAP/BVH broadphase (100k); Phase 3 implicit/differentiable backend +
-      parallel worlds.
+      analytic match) + `tst/physics_window` (windowed, full stack). **Phase 2 in progress**:
+      sweep-and-prune + **uniform-grid** (flat index-sort) broadphases, both verified vs brute
+      force. Grid **scales linearly** — at 65,536 bodies grid 19.9 ms/step vs SAP 192 ms vs
+      ~14 s for the old O(n²) (~700×); 100k ≈ 30 ms/step single-threaded. **Parallel worlds**
+      via `core::ThreadPool`: 7.8× on 12 workers (36.8M body-steps/s). **GJK + EPA + box
+      colliders** landed (sphere/plane/box all collide; analytic sphere-box, multi-contact
+      box-plane resting, box-box via EPA; `tst/gjk_epa_test` + box-rest tests). Next: box-box
+      manifolds (SAT/clip) + convex hulls, parallel broadphase sort; then Phase 3
+      implicit/differentiable backend.
 - [x] **How physics state maps onto ECS components.** DECIDED (2026-07-03): backend owns
       packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate
       (no replacement/inheritance); a `physics_ecs` bridge syncs world poses → Transform. ML
@@ -157,7 +163,12 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
 
 ## Infra / quality
 
-- [ ] Multithreaded task system (readme.md sketches work-stealing + task dependency graph).
+- [~] Multithreaded task system. **`core::ThreadPool` landed** (fixed pool + blocking
+      dynamic-work-stealing `parallelFor`, caller participates; `tst/thread_pool_test`). Uses:
+      **parallel worlds** 7.7× on 12 workers, and **intra-world** parallel integration +
+      narrowphase + **graph-colored contact solver** (deterministic, bit-identical to serial;
+      1.66× on a dense 32k pile). Still TODO: parallel broadphase sort (the remaining serial
+      hotspot), a task **dependency graph** (readme sketch), fewer per-color barriers.
 - [ ] Test setup (no framework wired up yet).
 
 ## Open design questions (revisit "at some point")

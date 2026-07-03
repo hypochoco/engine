@@ -44,6 +44,19 @@ inline Mat3 solidSphereInvInertia(Real mass, Real radius) {
     return (denom > kEpsilon) ? Mat3(Real(1) / denom) : Mat3(Real(0));
 }
 
+// Solid box inverse inertia (body-space, diagonal). `half` = half-extents.
+inline Mat3 solidBoxInvInertia(Real mass, const Vec3& half) {
+    const Vec3 h2 = half * half;
+    const Real ix = Real(1) / Real(3) * mass * (h2.y + h2.z);
+    const Real iy = Real(1) / Real(3) * mass * (h2.x + h2.z);
+    const Real iz = Real(1) / Real(3) * mass * (h2.x + h2.y);
+    Mat3 inv(Real(0));
+    inv[0][0] = ix > kEpsilon ? Real(1) / ix : Real(0);
+    inv[1][1] = iy > kEpsilon ? Real(1) / iy : Real(0);
+    inv[2][2] = iz > kEpsilon ? Real(1) / iz : Real(0);
+    return inv;
+}
+
 // World-space inverse inertia for the current orientation: R · I⁻¹_local · Rᵀ.
 inline Mat3 worldInvInertia(const Quat& orientation, const Mat3& invInertiaLocal) {
     const Mat3 R = glm::mat3_cast(orientation);

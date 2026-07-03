@@ -31,4 +31,5 @@ target_link_libraries(engine_core
         glm::glm
         tinyobjloader
         stb::stb
+        Threads::Threads
 )
