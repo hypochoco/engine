@@ -44,9 +44,18 @@ engine::engine (INTERFACE)
 Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdirectory`;
 `stb` header-only INTERFACE; `metal-cpp` vendored (not yet wired into include dirs).
 
-> ⚠️ **Current build reality**: graphics is 100% Vulkan, but Vulkan is no longer found on
-> Apple → the graphics module does not build on macOS until the backend abstraction + a
-> Metal impl exist. See investigations/2026-07-02-metal-backend.md.
+> ✅ **Build reality (2026-07-03)**: the full tree builds on macOS; the Metal backend renders
+> core meshes both **offscreen and to a window**. `engine_graphics` = RHI + Metal backend
+> (headless & windowed `MTL::Device`; handle pools; Slang `.metallib` shader libs; graphics
+> pipeline + vertex descriptor + depth-stencil; render-encoder frame lifecycle; indexed draw
+> + depth; readback; **CAMetalLayer swapchain + present** via an Objective-C++ shim
+> `metal_window.mm`). `render::GeometryStore` uploads `core::MeshData` → shared buffers →
+> `MeshHandle`s. Tests: `rhi_smoke`, `triangle_offscreen`, `mesh_offscreen` (headless,
+> pixel-verified) and **`visual_window`** (opens a GLFW window, renders a lit `core` sphere in
+> a present loop). CMake enables `OBJC`+`OBJCXX` on Apple, links Cocoa/Metal/QuartzCore/
+> Foundation. Shaders via `slangc` (`shaders/{triangle,mesh}.slang`; toolchain from
+> `scripts/get_slang.sh` → gitignored `tools/`). Legacy Vulkan parked under
+> `src/graphics/vulkan/`. See investigations/2026-07-02-rhi-interface-plan.md §13.
 
 ## Graphics module
 
@@ -99,8 +108,11 @@ no collision, no broadphase.
 - No ECS (no entity/component/system/registry/archetype types anywhere).
 - No application entry point (`main`) or engine loop driver — this is a library with no
   consumer.
-- No backend abstraction (RHI) — graphics is a single Vulkan-only `Graphics` class, so the
-  committed Metal backend cannot exist until the interface is extracted.
+- Backend abstraction: the RHI **interface** headers exist (`include/engine/graphics/rhi/`
+  + `render/`, no `Vk*`/`MTL::`), and a **Metal backend skeleton** implements the headless
+  `Device` + buffer pool. Still missing: pipelines, command recording, swapchain/present,
+  shaders (Slang toolchain), and the whole Vulkan port behind the RHI (legacy code parked
+  under `src/graphics/vulkan/`, not yet reorganized).
 - `engine::core` exists but is empty (Vertex/Mesh/Material/loader not moved yet).
 - No headless/offscreen *device* path; rendering assumes a GLFW window + swapchain.
 - No compute pipelines or compute-queue usage.

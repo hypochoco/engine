@@ -12,4 +12,3 @@
 #include "engine/core/geometry/material.h"
 #include "engine/core/geometry/model.h"
 #include "engine/core/geometry/primitives.h"
-#include "engine/core/image/image.h"

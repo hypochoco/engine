@@ -19,8 +19,12 @@ target_include_directories(stb INTERFACE
 
 if(APPLE)
     message(STATUS "Apple platform detected. Configuring for Metal Backend.")
+    enable_language(OBJC)     # keep .m (e.g. GLFW's) as Objective-C
+    enable_language(OBJCXX)   # for the .mm CAMetalLayer/window shim
     find_library(METAL_FRAMEWORK Metal REQUIRED)
     find_library(QUARTZ_FRAMEWORK QuartzCore REQUIRED)
+    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
 else()
     message(STATUS "Non-Apple platform detected. Configuring for Vulkan Backend.")
     find_package(Vulkan REQUIRED)
@@ -30,6 +34,9 @@ endif()
 add_subdirectory(core)
 add_subdirectory(graphics)
 add_subdirectory(physics)
+
+# shaders (compiled via slangc)
+add_subdirectory(shaders)
 
 # tests
 add_subdirectory(tst)

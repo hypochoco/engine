@@ -1,0 +1,634 @@
+//
+//  metal_backend.cpp
+//  engine::graphics / metal
+//
+//  Metal implementation of the RHI. Also the single translation unit that defines the
+//  metal-cpp implementation macros (exactly one TU may, per metal-cpp README). Pure C++.
+//
+//  Covers: headless Device (MTL::Device + queue), handle-addressed pools (buffers, textures,
+//  render targets, shaders, pipelines), shader libraries loaded from a Slang-compiled
+//  metallib, graphics pipeline state (with a vertex descriptor), the offscreen frame +
+//  render-encoder lifecycle, and CPU readback. Swapchain/present + bindless come next.
+//
+
+// --- metal-cpp implementation macros (exactly one TU may define these) ---
+#define NS_PRIVATE_IMPLEMENTATION
+#define CA_PRIVATE_IMPLEMENTATION
+#define MTL_PRIVATE_IMPLEMENTATION
+#include <Foundation/Foundation.hpp>
+#include <Metal/Metal.hpp>
+#include <QuartzCore/QuartzCore.hpp>
+
+#include <dispatch/dispatch.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+#include "engine/graphics/rhi/rhi.h"
+
+// Objective-C++ window shim (src/graphics/metal/metal_window.mm): attaches a CAMetalLayer to
+// a GLFW window and returns it as an opaque pointer (a metal-cpp CA::MetalLayer*).
+extern "C" void* engine_metal_create_layer(void* glfwWindow, void* mtlDevice,
+                                           uint32_t width, uint32_t height);
+
+namespace engine::rhi {
+
+const char* backendName() { return "Metal"; }
+
+// -----------------------------------------------------------------------------
+// enum mapping helpers
+// -----------------------------------------------------------------------------
+namespace {
+
+MTL::ResourceOptions storageOptions(MemoryMode mode) {
+    switch (mode) {
+        case MemoryMode::GpuOnly:  return MTL::ResourceStorageModePrivate;
+        case MemoryMode::CpuToGpu: return MTL::ResourceStorageModeShared;
+        case MemoryMode::GpuToCpu: return MTL::ResourceStorageModeShared;
+    }
+    return MTL::ResourceStorageModeShared;
+}
+
+MTL::PixelFormat toMTLPixelFormat(Format f) {
+    switch (f) {
+        case Format::R8Unorm:         return MTL::PixelFormatR8Unorm;
+        case Format::RG8Unorm:        return MTL::PixelFormatRG8Unorm;
+        case Format::RGBA8Unorm:      return MTL::PixelFormatRGBA8Unorm;
+        case Format::RGBA8Srgb:       return MTL::PixelFormatRGBA8Unorm_sRGB;
+        case Format::BGRA8Unorm:      return MTL::PixelFormatBGRA8Unorm;
+        case Format::RGBA16Float:     return MTL::PixelFormatRGBA16Float;
+        case Format::RGBA32Float:     return MTL::PixelFormatRGBA32Float;
+        case Format::Depth32Float:    return MTL::PixelFormatDepth32Float;
+        case Format::Depth24Stencil8: return MTL::PixelFormatDepth32Float_Stencil8;
+        case Format::Undefined:       return MTL::PixelFormatInvalid;
+    }
+    return MTL::PixelFormatInvalid;
+}
+
+MTL::VertexFormat toMTLVertexFormat(VertexFormat f) {
+    switch (f) {
+        case VertexFormat::Float:      return MTL::VertexFormatFloat;
+        case VertexFormat::Float2:     return MTL::VertexFormatFloat2;
+        case VertexFormat::Float3:     return MTL::VertexFormatFloat3;
+        case VertexFormat::Float4:     return MTL::VertexFormatFloat4;
+        case VertexFormat::UByte4Norm: return MTL::VertexFormatUChar4Normalized;
+    }
+    return MTL::VertexFormatFloat3;
+}
+
+MTL::PrimitiveType toMTLPrimitive(Topology t) {
+    switch (t) {
+        case Topology::TriangleList:
+        case Topology::TriangleStrip: return MTL::PrimitiveTypeTriangle;
+        case Topology::LineList:      return MTL::PrimitiveTypeLine;
+        case Topology::PointList:     return MTL::PrimitiveTypePoint;
+    }
+    return MTL::PrimitiveTypeTriangle;
+}
+
+MTL::LoadAction toMTLLoad(LoadOp op) {
+    switch (op) {
+        case LoadOp::Load:     return MTL::LoadActionLoad;
+        case LoadOp::Clear:    return MTL::LoadActionClear;
+        case LoadOp::DontCare: return MTL::LoadActionDontCare;
+    }
+    return MTL::LoadActionClear;
+}
+
+MTL::StoreAction toMTLStore(StoreOp op) {
+    switch (op) {
+        case StoreOp::Store:    return MTL::StoreActionStore;
+        case StoreOp::DontCare: return MTL::StoreActionDontCare;
+    }
+    return MTL::StoreActionStore;
+}
+
+MTL::CompareFunction toMTLCompare(CompareOp op) {
+    switch (op) {
+        case CompareOp::Never:        return MTL::CompareFunctionNever;
+        case CompareOp::Less:         return MTL::CompareFunctionLess;
+        case CompareOp::Equal:        return MTL::CompareFunctionEqual;
+        case CompareOp::LessEqual:    return MTL::CompareFunctionLessEqual;
+        case CompareOp::Greater:      return MTL::CompareFunctionGreater;
+        case CompareOp::NotEqual:     return MTL::CompareFunctionNotEqual;
+        case CompareOp::GreaterEqual: return MTL::CompareFunctionGreaterEqual;
+        case CompareOp::Always:       return MTL::CompareFunctionAlways;
+    }
+    return MTL::CompareFunctionLess;
+}
+
+MTL::IndexType toMTLIndexType(IndexType t) {
+    return t == IndexType::Uint16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
+}
+
+bool isDepthFormat(Format f) {
+    return f == Format::Depth32Float || f == Format::Depth24Stencil8;
+}
+
+bool has(TextureUsage v, TextureUsage bit) { return static_cast<uint32_t>(v & bit) != 0; }
+
+// Metal buffer-index convention: low indices (0..N) hold resources (uniform/storage buffers,
+// matching what Slang assigns, e.g. the camera uniform at buffer(0)); vertex buffers are bound
+// at a high base so they never collide with resources. RHI vertex slot s -> Metal index base+s.
+constexpr uint32_t kVertexBufferBase = 16;
+
+} // namespace
+
+// -----------------------------------------------------------------------------
+// Device::Impl — the backend state and all resource pools
+// -----------------------------------------------------------------------------
+struct Device::Impl {
+    NS::SharedPtr<MTL::Device>       device;
+    NS::SharedPtr<MTL::CommandQueue> queue;
+    DeviceConfig                     config;
+
+    // Windowed swapchain (CAMetalLayer); unused in headless mode.
+    CA::MetalLayer* layer      = nullptr;   // retained by the .mm shim
+    bool            windowed   = false;
+    uint32_t        swapWidth  = 0;
+    uint32_t        swapHeight = 0;
+    uint32_t        swapTexSlot = 0xFFFF'FFFFu;   // reserved texture slot for the drawable
+    uint32_t        swapRTSlot  = 0xFFFF'FFFFu;   // reserved render-target slot
+
+    struct BufferSlot  { NS::SharedPtr<MTL::Buffer>  buffer;  uint32_t generation = 0; bool alive = false; };
+    struct TextureSlot { NS::SharedPtr<MTL::Texture> texture; uint32_t generation = 0; bool alive = false; };
+    struct ShaderSlot  { NS::SharedPtr<MTL::Library> library; NS::SharedPtr<MTL::Function> function;
+                         uint32_t generation = 0; bool alive = false; };
+    struct PipelineSlot{ NS::SharedPtr<MTL::RenderPipelineState> state;
+                         NS::SharedPtr<MTL::DepthStencilState> depthState;
+                         MTL::PrimitiveType topology = MTL::PrimitiveTypeTriangle;
+                         uint32_t generation = 0; bool alive = false; };
+    struct RenderTargetSlot { uint32_t textureIndex = 0; uint32_t generation = 0; bool alive = false; };
+
+    std::vector<BufferSlot>       buffers;
+    std::vector<TextureSlot>      textures;
+    std::vector<ShaderSlot>       shaders;
+    std::vector<PipelineSlot>     pipelines;
+    std::vector<RenderTargetSlot> renderTargets;
+
+    template <class Vec>
+    static uint32_t acquire(Vec& pool, std::vector<uint32_t>& freeList) {
+        if (!freeList.empty()) { uint32_t i = freeList.back(); freeList.pop_back(); return i; }
+        pool.emplace_back();
+        return static_cast<uint32_t>(pool.size() - 1);
+    }
+    std::vector<uint32_t> freeBuffers, freeTextures, freeShaders, freePipelines, freeRenderTargets;
+};
+
+// -----------------------------------------------------------------------------
+// CommandList::Impl — borrowed per-frame recording state
+// -----------------------------------------------------------------------------
+struct CommandList::Impl {
+    Device::Impl*                dev = nullptr;
+    MTL::CommandBuffer*          cmd = nullptr;      // borrowed (autoreleased, owned by frame pool)
+    MTL::RenderCommandEncoder*   encoder = nullptr;  // borrowed (autoreleased)
+    MTL::PrimitiveType           topology = MTL::PrimitiveTypeTriangle;
+    MTL::Buffer*                 indexBuffer = nullptr;   // borrowed
+    MTL::IndexType               indexType = MTL::IndexTypeUInt32;
+};
+
+// -----------------------------------------------------------------------------
+// FrameContext
+// -----------------------------------------------------------------------------
+struct FrameContext::Impl {
+    NS::AutoreleasePool* pool = nullptr;
+    MTL::CommandBuffer*  cmd  = nullptr;   // borrowed (autoreleased in pool)
+    CommandList::Impl    cmdState;
+    uint32_t             frameIndex = 0;
+    CA::MetalDrawable*   drawable = nullptr;    // windowed: current swapchain drawable
+    RenderTargetHandle   swapchainRT{};         // windowed: target for `drawable`
+};
+
+FrameContext::FrameContext(FrameContext&&) noexcept = default;
+FrameContext& FrameContext::operator=(FrameContext&&) noexcept = default;
+FrameContext::~FrameContext() {
+    if (impl_ && impl_->pool) { impl_->pool->release(); impl_->pool = nullptr; }
+}
+uint32_t FrameContext::frameIndex() const { return impl_ ? impl_->frameIndex : 0; }
+RenderTargetHandle FrameContext::swapchainTarget() const { return impl_ ? impl_->swapchainRT : RenderTargetHandle{}; }
+
+// -----------------------------------------------------------------------------
+// Device lifetime
+// -----------------------------------------------------------------------------
+Device::Device() = default;
+Device::Device(Device&&) noexcept = default;
+Device& Device::operator=(Device&&) noexcept = default;
+Device::~Device() = default;
+
+Device Device::createHeadless(const DeviceConfig& config) {
+    Device d;
+    d.impl_ = std::make_unique<Impl>();
+    d.impl_->config = config;
+    d.impl_->device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
+    if (d.impl_->device) {
+        d.impl_->queue = NS::TransferPtr(d.impl_->device->newCommandQueue());
+    }
+    return d;
+}
+
+Device Device::createWindowed(const WindowSurface& surface, const DeviceConfig& config) {
+    Device d;
+    d.impl_ = std::make_unique<Impl>();
+    d.impl_->config = config;
+    d.impl_->device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
+    d.impl_->queue  = NS::TransferPtr(d.impl_->device->newCommandQueue());
+
+    // Attach a CAMetalLayer to the window (Objective-C++ shim) and reserve swapchain slots.
+    void* layerPtr = engine_metal_create_layer(surface.nativeWindow, d.impl_->device.get(),
+                                               surface.width, surface.height);
+    d.impl_->layer      = reinterpret_cast<CA::MetalLayer*>(layerPtr);
+    d.impl_->windowed   = true;
+    d.impl_->swapWidth  = surface.width;
+    d.impl_->swapHeight = surface.height;
+
+    Impl& I = *d.impl_;
+    I.swapTexSlot = Impl::acquire(I.textures, I.freeTextures);
+    I.textures[I.swapTexSlot].alive = true;
+    I.swapRTSlot = Impl::acquire(I.renderTargets, I.freeRenderTargets);
+    I.renderTargets[I.swapRTSlot].textureIndex = I.swapTexSlot;
+    I.renderTargets[I.swapRTSlot].alive = true;
+    return d;
+}
+
+// -----------------------------------------------------------------------------
+// Buffers
+// -----------------------------------------------------------------------------
+BufferHandle Device::createBuffer(const BufferDesc& desc, std::span<const std::byte> initialData) {
+    Impl& I = *impl_;
+    MTL::ResourceOptions opts = storageOptions(desc.memory);
+    MTL::Buffer* raw = nullptr;
+    if (!initialData.empty()) {
+        opts = MTL::ResourceStorageModeShared;   // TODO(metal): staging blit for Private + data
+        raw  = I.device->newBuffer(initialData.data(), static_cast<NS::UInteger>(desc.size), opts);
+    } else {
+        raw = I.device->newBuffer(static_cast<NS::UInteger>(desc.size), opts);
+    }
+    uint32_t idx = Impl::acquire(I.buffers, I.freeBuffers);
+    I.buffers[idx].buffer = NS::TransferPtr(raw);
+    I.buffers[idx].alive  = true;
+    return BufferHandle{ idx, I.buffers[idx].generation };
+}
+
+void Device::destroy(BufferHandle h) {
+    if (!h.valid() || !impl_ || h.index >= impl_->buffers.size()) return;
+    auto& s = impl_->buffers[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.buffer.reset();
+    s.alive = false;
+    ++s.generation;
+    impl_->freeBuffers.push_back(h.index);
+}
+
+void* Device::map(BufferHandle h) {
+    if (!h.valid() || h.index >= impl_->buffers.size()) return nullptr;
+    auto& s = impl_->buffers[h.index];
+    if (!s.alive || s.generation != h.generation) return nullptr;
+    return s.buffer->contents();
+}
+void Device::unmap(BufferHandle) { /* Shared storage: nothing to do */ }
+
+void Device::updateBuffer(BufferHandle h, uint64_t offset, std::span<const std::byte> data) {
+    if (void* p = map(h)) {
+        std::memcpy(static_cast<uint8_t*>(p) + offset, data.data(), data.size());
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Textures & render targets
+// -----------------------------------------------------------------------------
+TextureHandle Device::createTexture(const TextureDesc& desc, std::span<const std::byte> initialData) {
+    Impl& I = *impl_;
+    auto* td = MTL::TextureDescriptor::alloc()->init();
+    td->setTextureType(MTL::TextureType2D);
+    td->setPixelFormat(toMTLPixelFormat(desc.format));
+    td->setWidth(desc.width);
+    td->setHeight(desc.height);
+    td->setMipmapLevelCount(desc.mipLevels);
+    // Depth targets must be Private on Apple Silicon; color targets stay Shared so we can
+    // read them back on the headless path. TODO(metal): Private + blit for GPU-only color.
+    td->setStorageMode(isDepthFormat(desc.format) ? MTL::StorageModePrivate : MTL::StorageModeShared);
+
+    MTL::TextureUsage usage = 0;
+    if (has(desc.usage, TextureUsage::Sampled))     usage |= MTL::TextureUsageShaderRead;
+    if (has(desc.usage, TextureUsage::ColorTarget)) usage |= MTL::TextureUsageRenderTarget;
+    if (has(desc.usage, TextureUsage::DepthTarget)) usage |= MTL::TextureUsageRenderTarget;
+    if (has(desc.usage, TextureUsage::Storage))     usage |= MTL::TextureUsageShaderWrite;
+    td->setUsage(usage);
+
+    MTL::Texture* tex = I.device->newTexture(td);
+    td->release();
+
+    if (!initialData.empty() && tex) {
+        MTL::Region region = MTL::Region::Make2D(0, 0, desc.width, desc.height);
+        tex->replaceRegion(region, 0, initialData.data(), desc.width * 4);  // assumes RGBA8
+    }
+
+    uint32_t idx = Impl::acquire(I.textures, I.freeTextures);
+    I.textures[idx].texture = NS::TransferPtr(tex);
+    I.textures[idx].alive   = true;
+    return TextureHandle{ idx, I.textures[idx].generation };
+}
+
+void Device::destroy(TextureHandle h) {
+    if (!h.valid() || h.index >= impl_->textures.size()) return;
+    auto& s = impl_->textures[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.texture.reset();
+    s.alive = false;
+    ++s.generation;
+    impl_->freeTextures.push_back(h.index);
+}
+
+RenderTargetHandle Device::createRenderTarget(TextureHandle tex) {
+    Impl& I = *impl_;
+    uint32_t idx = Impl::acquire(I.renderTargets, I.freeRenderTargets);
+    I.renderTargets[idx].textureIndex = tex.index;
+    I.renderTargets[idx].alive = true;
+    return RenderTargetHandle{ idx, I.renderTargets[idx].generation };
+}
+
+void Device::destroy(RenderTargetHandle h) {
+    if (!h.valid() || h.index >= impl_->renderTargets.size()) return;
+    auto& s = impl_->renderTargets[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.alive = false;
+    ++s.generation;
+    impl_->freeRenderTargets.push_back(h.index);
+}
+
+void Device::readback(TextureHandle h, std::span<std::byte> out) {
+    if (!h.valid() || h.index >= impl_->textures.size()) return;
+    auto& s = impl_->textures[h.index];
+    if (!s.alive) return;
+    MTL::Texture* tex = s.texture.get();
+    NS::UInteger w = tex->width(), ht = tex->height();
+    MTL::Region region = MTL::Region::Make2D(0, 0, w, ht);
+    tex->getBytes(out.data(), w * 4, region, 0);   // assumes RGBA8 (4 bytes/px)
+}
+
+// -----------------------------------------------------------------------------
+// Shaders & pipelines
+// -----------------------------------------------------------------------------
+ShaderHandle Device::createShader(std::span<const std::byte> blob, ShaderStage stage) {
+    Impl& I = *impl_;
+    dispatch_data_t dd = dispatch_data_create(blob.data(), blob.size(), nullptr,
+                                              DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+    NS::Error* err = nullptr;
+    MTL::Library* lib = I.device->newLibrary(dd, &err);
+    dispatch_release(dd);
+    if (!lib) {
+        if (err) std::fprintf(stderr, "createShader: %s\n", err->localizedDescription()->utf8String());
+        return {};
+    }
+
+    // Pick the entry point whose function type matches the requested stage.
+    MTL::Function* chosen = nullptr;
+    NS::Array* names = lib->functionNames();
+    for (NS::UInteger i = 0; i < names->count(); ++i) {
+        auto* name = static_cast<NS::String*>(names->object(i));
+        MTL::Function* fn = lib->newFunction(name);
+        MTL::FunctionType ft = fn->functionType();
+        const bool match =
+            (stage == ShaderStage::Vertex   && ft == MTL::FunctionTypeVertex)   ||
+            (stage == ShaderStage::Fragment && ft == MTL::FunctionTypeFragment) ||
+            (stage == ShaderStage::Compute  && ft == MTL::FunctionTypeKernel);
+        if (match) { chosen = fn; break; }
+        fn->release();
+    }
+    if (!chosen) { lib->release(); return {}; }
+
+    uint32_t idx = Impl::acquire(I.shaders, I.freeShaders);
+    I.shaders[idx].library  = NS::TransferPtr(lib);
+    I.shaders[idx].function = NS::TransferPtr(chosen);
+    I.shaders[idx].alive    = true;
+    return ShaderHandle{ idx, I.shaders[idx].generation };
+}
+
+void Device::destroy(ShaderHandle h) {
+    if (!h.valid() || h.index >= impl_->shaders.size()) return;
+    auto& s = impl_->shaders[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.function.reset();
+    s.library.reset();
+    s.alive = false;
+    ++s.generation;
+    impl_->freeShaders.push_back(h.index);
+}
+
+PipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) {
+    Impl& I = *impl_;
+    auto* pd = MTL::RenderPipelineDescriptor::alloc()->init();
+    pd->setVertexFunction(I.shaders[desc.vertex.index].function.get());
+    pd->setFragmentFunction(I.shaders[desc.fragment.index].function.get());
+
+    if (!desc.colorFormats.empty()) {
+        pd->colorAttachments()->object(0)->setPixelFormat(toMTLPixelFormat(desc.colorFormats[0]));
+    }
+    if (desc.depthFormat != Format::Undefined) {
+        pd->setDepthAttachmentPixelFormat(toMTLPixelFormat(desc.depthFormat));
+    }
+
+    // Vertex descriptor from the backend-agnostic VertexLayout (single interleaved buffer at 0).
+    if (!desc.vertexLayout.attributes.empty()) {
+        auto* vd = MTL::VertexDescriptor::alloc()->init();
+        for (const auto& attr : desc.vertexLayout.attributes) {
+            auto* a = vd->attributes()->object(attr.location);
+            a->setFormat(toMTLVertexFormat(attr.format));
+            a->setOffset(attr.offset);
+            a->setBufferIndex(kVertexBufferBase);
+        }
+        auto* layout = vd->layouts()->object(kVertexBufferBase);
+        layout->setStride(desc.vertexLayout.stride);
+        layout->setStepFunction(MTL::VertexStepFunctionPerVertex);
+        pd->setVertexDescriptor(vd);
+        vd->release();
+    }
+
+    NS::Error* err = nullptr;
+    MTL::RenderPipelineState* state = I.device->newRenderPipelineState(pd, &err);
+    pd->release();
+    if (!state) {
+        if (err) std::fprintf(stderr, "createGraphicsPipeline: %s\n", err->localizedDescription()->utf8String());
+        return {};
+    }
+
+    // Depth-stencil state is a separate Metal object, set on the encoder at bind time.
+    NS::SharedPtr<MTL::DepthStencilState> depthState;
+    if (desc.depthFormat != Format::Undefined) {
+        auto* dsd = MTL::DepthStencilDescriptor::alloc()->init();
+        dsd->setDepthCompareFunction(toMTLCompare(desc.depth.op));
+        dsd->setDepthWriteEnabled(desc.depth.write);
+        depthState = NS::TransferPtr(I.device->newDepthStencilState(dsd));
+        dsd->release();
+    }
+
+    uint32_t idx = Impl::acquire(I.pipelines, I.freePipelines);
+    I.pipelines[idx].state     = NS::TransferPtr(state);
+    I.pipelines[idx].depthState = depthState;
+    I.pipelines[idx].topology  = toMTLPrimitive(desc.topology);
+    I.pipelines[idx].alive     = true;
+    return PipelineHandle{ idx, I.pipelines[idx].generation };
+}
+
+PipelineHandle Device::createComputePipeline(const ComputePipelineDesc&) { return {}; }  // TODO
+SamplerHandle  Device::createSampler(const SamplerDesc&)                 { return {}; }  // TODO
+void Device::destroy(SamplerHandle) {}
+void Device::destroy(PipelineHandle h) {
+    if (!h.valid() || h.index >= impl_->pipelines.size()) return;
+    auto& s = impl_->pipelines[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.state.reset();
+    s.alive = false;
+    ++s.generation;
+    impl_->freePipelines.push_back(h.index);
+}
+
+uint32_t Device::registerBindlessTexture(TextureHandle) { return 0; }  // TODO(bindless)
+void     Device::unregisterBindlessTexture(uint32_t)    {}
+
+// -----------------------------------------------------------------------------
+// Frame lifecycle
+// -----------------------------------------------------------------------------
+FrameContext Device::beginFrame() {
+    FrameContext f;
+    f.impl_ = std::make_unique<FrameContext::Impl>();
+    f.impl_->pool = NS::AutoreleasePool::alloc()->init();
+    f.impl_->cmd  = impl_->queue->commandBuffer();   // autoreleased into the pool
+
+    if (impl_->windowed && impl_->layer) {
+        CA::MetalDrawable* drawable = impl_->layer->nextDrawable();   // autoreleased; may block
+        f.impl_->drawable = drawable;
+        if (drawable) {
+            // Point the reserved swapchain texture slot at this frame's drawable texture.
+            impl_->textures[impl_->swapTexSlot].texture = NS::RetainPtr(drawable->texture());
+            f.impl_->swapchainRT = RenderTargetHandle{ impl_->swapRTSlot,
+                                                       impl_->renderTargets[impl_->swapRTSlot].generation };
+        }
+    }
+    return f;
+}
+
+CommandList Device::commandList(FrameContext& f) {
+    f.impl_->cmdState.dev = impl_.get();
+    f.impl_->cmdState.cmd = f.impl_->cmd;
+    CommandList cl;
+    cl.impl_ = &f.impl_->cmdState;
+    return cl;
+}
+
+void Device::submit(FrameContext&, CommandList&) { /* Metal: recorded on the frame's cmd buffer */ }
+
+void Device::endFrame(FrameContext&& f) {
+    if (!f.impl_) return;
+    if (impl_->windowed && f.impl_->drawable) {
+        f.impl_->cmd->presentDrawable(f.impl_->drawable);
+        f.impl_->cmd->commit();                 // let it pipeline; CAMetalLayer paces frames
+    } else if (f.impl_->cmd) {
+        f.impl_->cmd->commit();
+        f.impl_->cmd->waitUntilCompleted();     // headless: block so readback is valid
+    }
+    if (f.impl_->pool) { f.impl_->pool->release(); f.impl_->pool = nullptr; }
+}
+
+void Device::waitIdle() { /* per-frame waitUntilCompleted covers the headless path for now */ }
+
+Swapchain* Device::swapchain() { return nullptr; }
+
+// -----------------------------------------------------------------------------
+// CommandList recording
+// -----------------------------------------------------------------------------
+void CommandList::beginRendering(const RenderTargetDesc& desc) {
+    Device::Impl* dev = impl_->dev;
+    auto* rp = MTL::RenderPassDescriptor::renderPassDescriptor();   // autoreleased
+
+    if (!desc.color.empty()) {
+        const ColorAttachment& c = desc.color[0];
+        uint32_t texIndex = dev->renderTargets[c.target.index].textureIndex;
+        auto* ca = rp->colorAttachments()->object(0);
+        ca->setTexture(dev->textures[texIndex].texture.get());
+        ca->setLoadAction(toMTLLoad(c.load));
+        ca->setStoreAction(toMTLStore(c.store));
+        ca->setClearColor(MTL::ClearColor::Make(c.clearColor[0], c.clearColor[1],
+                                                c.clearColor[2], c.clearColor[3]));
+    }
+    if (desc.depth) {
+        uint32_t texIndex = dev->renderTargets[desc.depth->target.index].textureIndex;
+        auto* da = rp->depthAttachment();
+        da->setTexture(dev->textures[texIndex].texture.get());
+        da->setLoadAction(toMTLLoad(desc.depth->load));
+        da->setStoreAction(toMTLStore(desc.depth->store));
+        da->setClearDepth(desc.depth->clearDepth);
+    }
+    impl_->encoder = impl_->cmd->renderCommandEncoder(rp);   // autoreleased
+}
+
+void CommandList::endRendering() {
+    if (impl_->encoder) { impl_->encoder->endEncoding(); impl_->encoder = nullptr; }
+}
+
+void CommandList::bindPipeline(PipelineHandle h) {
+    auto& slot = impl_->dev->pipelines[h.index];
+    impl_->encoder->setRenderPipelineState(slot.state.get());
+    if (slot.depthState) impl_->encoder->setDepthStencilState(slot.depthState.get());
+    impl_->topology = slot.topology;
+}
+
+void CommandList::bindVertexBuffer(BufferHandle b, uint32_t slot) {
+    impl_->encoder->setVertexBuffer(impl_->dev->buffers[b.index].buffer.get(), 0,
+                                    kVertexBufferBase + slot);
+}
+
+void CommandList::bindIndexBuffer(BufferHandle b, IndexType t) {
+    impl_->indexBuffer = impl_->dev->buffers[b.index].buffer.get();
+    impl_->indexType   = toMTLIndexType(t);
+}
+void CommandList::bindResources(const ResourceBindings& bindings) {
+    // Bind resource buffers at their (low) Metal indices, for both vertex and fragment stages
+    // (Slang declares the uniform in both). Bindless textures/samplers: TODO.
+    for (const auto& b : bindings.buffers) {
+        MTL::Buffer* buf = impl_->dev->buffers[b.buffer.index].buffer.get();
+        impl_->encoder->setVertexBuffer(buf, b.offset, b.binding);
+        impl_->encoder->setFragmentBuffer(buf, b.offset, b.binding);
+    }
+}
+void CommandList::setPushConstants(std::span<const std::byte>) { /* TODO */ }
+
+void CommandList::setViewport(float x, float y, float width, float height,
+                              float minDepth, float maxDepth) {
+    MTL::Viewport vp{ x, y, width, height, minDepth, maxDepth };
+    impl_->encoder->setViewport(vp);
+}
+
+void CommandList::setScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) {
+    MTL::ScissorRect sr{ static_cast<NS::UInteger>(x), static_cast<NS::UInteger>(y), width, height };
+    impl_->encoder->setScissorRect(sr);
+}
+
+void CommandList::draw(uint32_t vertexCount, uint32_t instanceCount,
+                       uint32_t firstVertex, uint32_t firstInstance) {
+    impl_->encoder->drawPrimitives(impl_->topology,
+                                   static_cast<NS::UInteger>(firstVertex),
+                                   static_cast<NS::UInteger>(vertexCount),
+                                   static_cast<NS::UInteger>(instanceCount),
+                                   static_cast<NS::UInteger>(firstInstance));
+}
+
+void CommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                             uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
+    const NS::UInteger indexStride = (impl_->indexType == MTL::IndexTypeUInt16) ? 2 : 4;
+    impl_->encoder->drawIndexedPrimitives(
+        impl_->topology,
+        static_cast<NS::UInteger>(indexCount),
+        impl_->indexType,
+        impl_->indexBuffer,
+        static_cast<NS::UInteger>(firstIndex) * indexStride,
+        static_cast<NS::UInteger>(instanceCount),
+        static_cast<NS::Integer>(vertexOffset),
+        static_cast<NS::UInteger>(firstInstance));
+}
+void CommandList::drawIndexedIndirect(BufferHandle, uint64_t, uint32_t, uint32_t) { /* TODO */ }
+void CommandList::dispatch(uint32_t, uint32_t, uint32_t) { /* TODO(compute) */ }
+
+} // namespace engine::rhi

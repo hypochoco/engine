@@ -17,6 +17,7 @@ Working notes for the engine project.
   - [`2026-07-02-metal-backend.md`](investigations/2026-07-02-metal-backend.md)
   - [`2026-07-02-core-module-plan.md`](investigations/2026-07-02-core-module-plan.md)
   - [`2026-07-02-geometry-scaling.md`](investigations/2026-07-02-geometry-scaling.md)
+  - [`2026-07-02-rhi-interface-plan.md`](investigations/2026-07-02-rhi-interface-plan.md)
 
 ## Conventions
 

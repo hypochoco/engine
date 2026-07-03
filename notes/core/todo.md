@@ -68,23 +68,38 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       and its OBJ/image loading with core's; delete the now-duplicated code. Each backend
       maps `core::Vertex` to its own vertex format. (Core itself is built in the Core section
       above, before this pass.)
-- [ ] **2. Define the RHI interface** (Device/Swapchain/Buffer/Texture/Pipeline/CommandBuffer
-      /Fence) with **no `Vk*`/`MTL::` in the public surface**. This is the refactor's Device
-      split + first-class pipelines, expressed as the cross-backend contract.
+- [x] **2. Define the RHI interface** — DONE (headers, 2026-07-02). Landed under
+      `include/engine/graphics/rhi/` (types, resources, pipeline, command_list, device +
+      `rhi.h` umbrella) and `include/engine/graphics/render/` (render_view, geometry_store,
+      renderer). Interface-only, no backend, compiles clean (`-Wall -Wextra`). Decisions:
+      handle-based, compile-time backend, **bindless**, Vulkan dynamic rendering; **Metal
+      first**; **Slang** shaders. Design + sequencing:
+      [2026-07-02-rhi-interface-plan.md](../investigations/2026-07-02-rhi-interface-plan.md)
+      (§13 supersedes the ordering below).
 - [ ] **3. Reorganize existing Vulkan code** into `src/graphics/vulkan/` behind the RHI;
       delete the 3 duplicated pipeline builders; fold `graphics_custom.cpp` offscreen helpers
       into the pipeline/pass API. (Design Vulkan side around dynamic rendering to line up
       with Metal.)
-- [ ] **4. Fix multi-backend CMake** (details in metal-backend §6): enable `OBJCXX` on Apple,
-      link **Foundation** framework, add `external/metal-cpp` to include dirs, one TU defines
-      metal-cpp impl macros, **per-backend source selection** (not one recursive glob),
-      rename the `test` target.
-- [ ] **5. Shader toolchain** (now two targets): pick Slang (one source → SPIR-V + MSL) or
-      GLSL+SPIRV-Cross; add a build step; abstract `rhi::ShaderModule` over `.spv`/`.metallib`.
-- [ ] **6. Implement the Metal backend** incrementally: Device → CAMetalLayer/drawable (+ `.mm`
-      window shim via `glfwGetCocoaWindow`) → Buffer/Texture → Pipeline → command encoding →
-      first triangle → parity with Vulkan. Wrap metal-cpp objects in RAII; AutoreleasePool
-      per frame.
+- [~] **4. Multi-backend CMake** — mostly DONE (2026-07-02): **Foundation** linked, `external/
+      metal-cpp` on the include path, one TU (`metal/metal_backend.cpp`) defines the impl
+      macros, **per-backend source selection** (`metal/` vs `vulkan/` + shared `common/`),
+      `test`→`tst`, `ENGINE_RHI_METAL/VULKAN` defines. Remaining: enable `OBJCXX` when the
+      `.mm` window shim lands (headless Metal is pure C++, so not needed yet).
+- [x] **5. Shader toolchain** — DONE (2026-07-03): **Slang** chosen and wired.
+      `scripts/get_slang.sh` fetches `slangc` into gitignored `tools/slang/`;
+      `shaders/CMakeLists.txt` compiles `.slang` → `.metallib` (Apple) / `.spv` (else) and
+      exposes `ENGINE_SHADER_DIR`. `rhi::ShaderModule`/`createShader` loads the backend blob.
+      First shader: `shaders/triangle.slang`.
+- [~] **6. Implement the Metal backend** incrementally — offscreen + **windowed** working
+      (2026-07-03): `tst/mesh_offscreen` (headless, pixel-verified) and `tst/visual_window`
+      (opens a GLFW window, renders a lit `core` sphere via CAMetalLayer swapchain + present).
+      Implemented: headless & windowed Device, handle pools, metallib libs, pipeline + vertex
+      descriptor + depth-stencil, render-encoder lifecycle, indexed draw, depth, readback,
+      CAMetalLayer/drawable present (`metal_window.mm` shim via `glfwGetCocoaWindow`;
+      `OBJC`+`OBJCXX` enabled). Next: **uniforms + camera (MVP)** so geometry isn't in clip
+      space, then **instance storage + bindless** (ECS/instancing path). TODO: window resize
+      (swapchain + depth recreate; currently fixed-size), staging for Private resources,
+      fence-gated deletion, per-frame-in-flight sync.
 - [ ] **7. Split `Swapchain` + `Renderer`; headless path** for both backends (ML/offline).
 - [ ] **8. Rework the render-list / instance path** against the ECS interface once ECS
       exists (fatten `InstanceSSBO`, upload only what's used, consider indirect/bindless).
@@ -129,7 +144,8 @@ Parked decisions we agreed to defer. Answer before the work they gate.
       to grow into the offline/high-quality renderer?
 - [x] **Build-your-own RHI vs. adopt.** DECIDED (2026-07-02): build our own; no third-party
       RHI. (metal-backend §3)
-- [ ] **Shader language/toolchain**: Slang (one source → SPIR-V + MSL) vs. GLSL + SPIRV-Cross.
+- [x] **Shader language/toolchain**: DECIDED (2026-07-03) — **Slang** (one source → SPIR-V +
+      metallib), wired via `slangc`. (metal-backend §5)
 - [ ] **RHI dispatch**: runtime-virtual (simpler) vs. compile-time (zero overhead).
 - [ ] **Metal API level**: classic `MTL` (widest support) vs. `MTL4` (newer, Vulkan-like;
       present in vendored metal-cpp).
