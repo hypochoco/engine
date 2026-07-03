@@ -10,6 +10,9 @@ target_link_libraries(scheduler_test PRIVATE engine::ecs)
 add_executable(physics_test physics_test.cpp)
 target_link_libraries(physics_test PRIVATE engine::physics)
 
+add_executable(physics_milestone physics_milestone.cpp)
+target_link_libraries(physics_milestone PRIVATE engine::physics_ecs)
+
 # RHI backend tests. Metal is the only implemented backend so far, so build these on Apple
 # only; they become cross-backend once Vulkan is ported behind the RHI.
 if(APPLE)
@@ -38,5 +41,11 @@ if(APPLE)
     target_link_libraries(visual_window PRIVATE engine::scene)
     add_dependencies(visual_window shaders)
     target_compile_definitions(visual_window PRIVATE
+        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+
+    add_executable(physics_window physics_window.cpp)
+    target_link_libraries(physics_window PRIVATE engine::scene engine::physics_ecs)
+    add_dependencies(physics_window shaders)
+    target_compile_definitions(physics_window PRIVATE
         ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
 endif()

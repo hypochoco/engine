@@ -141,12 +141,14 @@ Plan (all 8 decisions settled): [2026-07-03-physics-plan.md](../investigations/2
 Multi-backend behind a **runtime-virtual** `PhysicsWorld`; shared collision/broadphase
 substrate; realtime (impulse) + implicit/**differentiable** backends; rotational dynamics.
 
-- [~] **Simulation core.** **Phase 0 DONE** (2026-07-03): ECS-free `engine::physics` core —
-      shapes (sphere/plane), exact contacts (solver-agnostic `Contact`), rigid-body state +
-      inertia, pure integration kernels (semi-implicit + SO(3) exp/log orientation);
-      `tst/physics_test` (analytic). Next: Phase 1 `PhysicsWorld` interface + realtime
-      sequential-impulse backend + fixed timestep + the **ball-rolls-down-a-plane** milestone;
-      Phase 2 GJK/EPA + SAP/BVH broadphase (100k); Phase 3 implicit/differentiable backend +
+- [~] **Simulation core.** **Phase 0 + Phase 1 DONE** (2026-07-03): ECS-free `engine::physics`
+      core (shapes, exact contacts, rigid-body state + inertia, pure integration kernels incl.
+      SO(3) exp/log) + the runtime-virtual **`PhysicsWorld` interface** + a **realtime
+      sequential-impulse backend** (restitution/friction/Baumgarte, substeps, rotation) + the
+      **`engine::physics_ecs` bridge** (RigidBody + step/sync systems). **Milestone met**:
+      `tst/physics_milestone` (headless — ball rolls without slipping down a 30° incline,
+      analytic match) + `tst/physics_window` (windowed, full stack). Next: Phase 2 GJK/EPA +
+      box/convex + SAP/BVH broadphase (100k); Phase 3 implicit/differentiable backend +
       parallel worlds.
 - [x] **How physics state maps onto ECS components.** DECIDED (2026-07-03): backend owns
       packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate

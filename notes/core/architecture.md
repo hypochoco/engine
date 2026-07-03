@@ -104,24 +104,38 @@ from an entity layer yet.
 
 `MAX_FRAMES_IN_FLIGHT = 1`, `NUM_TEXTURES = 16`, `MAX_ENTITIES = 16`, `WIDTH/HEIGHT 800x600`.
 
-## Physics module (`engine::physics`, Phase 0, 2026-07-03)
+## Physics module (`engine::physics`, Phase 0–1, 2026-07-03)
 
 ECS-free, backend-agnostic core (depends on `engine::core` only — no ecs, no graphics).
 Design + phasing + differentiable-backend design-ahead: investigations/2026-07-03-physics-plan.md.
 - **Shapes**: `Sphere`, `Plane` (half-space). GJK `support()` seam is Phase 2.
 - **Collision** (`collide::sphereVsPlane`, `sphereVsSphere`): exact fast paths filling a
-  **solver-agnostic** `Contact` (continuous signed `separation`, normal, point) — consumable
-  by both a future impulse solver and a compliant/soft solver.
-- **Dynamics**: `RigidBodyState` (position, orientation quat, lin/ang velocity, invMass,
-  body-space invInertia), `PhysicsMaterial` (restitution, friction, compliance), inertia
-  helpers (`solidSphere{Inertia,InvInertia}`, `worldInvInertia`).
-- **Integration** (pure kernels): semi-implicit `integrateLinear`; orientation via the SO(3)
-  **exponential map** (`so3ExpMap`/`so3LogMap`/`integrateOrientation`) — differentiable-ready
-  (§14 constraints), not add-and-renormalize.
-- `physics::Real` localizes the scalar type for a future double/dual-number switch.
-- Driver: `tst/physics_test` (analytic checks: free-fall closed form, contacts, exp/log
-  orientation, inertia). **Not yet**: `PhysicsWorld` interface + realtime backend (Phase 1),
-  GJK/EPA + broadphase (Phase 2), implicit/differentiable backend + parallel worlds (Phase 3).
+  **solver-agnostic** `Contact` (continuous signed `separation`, normal, point).
+- **Dynamics**: `RigidBodyState`, `PhysicsMaterial` (restitution, friction, compliance),
+  inertia helpers; pure integration kernels — semi-implicit `integrateLinear`, SO(3) exp/log
+  orientation (`so3ExpMap`/`integrateOrientation`), differentiable-ready (plan §14).
+- **`PhysicsWorld` interface** (Phase 1): runtime-virtual coarse boundary (`createBody`/`step`/
+  bulk `poses()`/`linearVelocities()`/`angularVelocities()`/`contacts()`), `BodyDef`/`WorldDef`,
+  `createPhysicsWorld(Backend, ...)` factory. Multiple backends can coexist (plan §1).
+- **Realtime backend** (`backends/realtime`, private to its TU): semi-implicit Euler +
+  **sequential-impulse (PGS)** contact solver (restitution, Coulomb friction, Baumgarte),
+  substeps × velocity iterations, brute-force broadphase (SAP/BVH = Phase 2). Friction at the
+  contact point applies torque ⇒ **true rolling**.
+- `physics::Real` localizes the scalar for a future double/dual-number switch.
+
+### physics_ecs bridge (`engine::physics_ecs`)
+Depends on `engine::physics` + `engine::ecs` (separate from `scene`, which pulls graphics).
+`RigidBody{ BodyHandle }` component (no pose — Q2); `PhysicsWorldRef`/`FixedStep` resources;
+`stepSystem` + `syncSystem` (bulk world poses → `Transform`) added to an `ecs::Schedule`.
+
+### Milestone status — "ball rolling down a plane" ✅ (physics + sim)
+- `tst/physics_milestone` (headless): sphere on a 30° incline via the ECS bridge + scheduler.
+  Verified it descends, travels down-slope, and **rolls without slipping** — |ω|·r ≈ down-slope
+  speed, matching `a = g·sinθ/(1+2/5)` (measured 7.02 m in 2 s vs 7.01 analytic).
+- `tst/physics_window` (windowed, user-run): N spheres rolling down a tilted plane, physics →
+  sync → `scene::extract` → Metal Renderer. Ties every subsystem together.
+- **Not yet**: GJK/EPA + box/convex + SAP/BVH broadphase (Phase 2, for the 100k case),
+  implicit/differentiable backend + parallel worlds (Phase 3).
 
 ## ECS module (`engine::ecs`, 2026-07-03)
 

@@ -36,6 +36,7 @@ add_subdirectory(ecs)
 add_subdirectory(graphics)
 add_subdirectory(scene)
 add_subdirectory(physics)
+add_subdirectory(physics_ecs)
 
 # shaders (compiled via slangc)
 add_subdirectory(shaders)
@@ -53,4 +54,5 @@ target_link_libraries(engine INTERFACE
     engine::graphics
     engine::scene
     engine::physics
+    engine::physics_ecs
 )

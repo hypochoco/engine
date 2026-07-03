@@ -49,6 +49,63 @@ Open decisions collected in §11.
 
 ---
 
+## 0.5 Architecture diagram
+
+Solid = planned/near-term (Phases 0–2). Dashed = future (Phase 3+, incl. differentiability).
+
+```mermaid
+flowchart TB
+    subgraph app["Application / ECS (engine::ecs)"]
+        world["ecs::World + Schedule"]
+        comps["RigidBody{BodyHandle}<br/>Transform (separate, not owned by physics)"]
+    end
+
+    subgraph bridge["engine::physics_ecs (bridge -> ecs + physics)"]
+        stepSys["physicsStepSystem<br/>(fixed-step -> world.step)"]
+        syncSys["physicsSyncSystem<br/>(bulk poses -> Transform)"]
+    end
+
+    subgraph phys["engine::physics (ECS-free core, -> engine::core only)"]
+        iface["PhysicsWorld (abstract)<br/>runtime-virtual @ coarse step boundary"]
+
+        subgraph shared["shared substrate (all backends reuse)"]
+            shapes["shapes: sphere / plane / box / convex<br/>support(dir) seam"]
+            narrow["narrowphase: primitive fast paths<br/>+ GJK / EPA + manifold"]
+            broad["broadphase: static BVH + dynamic SAP"]
+        end
+
+        subgraph backends["backends (behind the interface)"]
+            rt["realtime (games)<br/>semi-implicit Euler + sequential impulse<br/>+ substeps + warm-start ; future: XPBD"]
+            impl["implicit / ML (future)<br/>backward Euler / compliant contact"]
+        end
+    end
+
+    subgraph diff["Differentiable physics (future, Phase 3+)"]
+        state["flat index-stable state tensor<br/>orientation on SO(3)"]
+        params["parameter block theta<br/>mass / inertia / friction / compliance / g / controls"]
+        grad["gradients: adjoint (IFT) / unrolled AD<br/>+ checkpointing"]
+        loss["loss L(trajectory) -> dL/dtheta"]
+    end
+
+    world --> stepSys --> iface
+    iface --> syncSys --> world
+    comps -.-> stepSys
+    iface --> shared
+    iface --> backends
+    rt --> shared
+    impl --> shared
+
+    impl -. state .-> state
+    params -. differentiable inputs .-> impl
+    state -.-> grad
+    params -.-> grad
+    grad -.-> loss
+
+    world --> render["scene::extract -> Renderer (unchanged)"]
+```
+
+---
+
 ## 1. Dispatch: why NOT the RHI's compile-time model
 
 | | Graphics RHI | Physics |
