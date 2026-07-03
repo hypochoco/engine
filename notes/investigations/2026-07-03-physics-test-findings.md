@@ -59,3 +59,35 @@ Proposed fix (options):
 Friction (slide vs damp), elastic velocity exchange, 3-box stack stability, SAP==grid
 equivalence (bit-identical here), and all collision/inertia/SO(3) unit cases behaved as
 expected.
+
+## Resolution (2026-07-03, fixed)
+Both fixed in `backends/realtime/sequential_impulse_world.cpp`; full suite green (47/47, debug +
+release), CTest 4/4.
+
+**Bug 1 — kinematic motion.** Added `forEachMoving` (iterates `alive && type != Static`, i.e.
+Dynamic + Kinematic) and used it for the position/orientation integration step; gravity still
+uses `forEachDynamic` (dynamic only) and impulses still skip `invMass==0`, so kinematics advance
+by their scripted velocity, ignore gravity, and are never pushed back. Also widened the swept-AABB
+CCD guard to `type != Static` so fast kinematics are broadphased along their path. Verified by
+`physics.kinematic_motion` (x: 0→1) and `physics.kinematic_pushes_dynamic` (a rising platform
+carries a resting box; platform 0.25→0.75, box 1.0→1.5).
+
+**Bug 2 — restitution vs speculative contacts.** In the normal-impulse solve, the *separated*
+(speculative) branch previously targeted `penetration/dt + restitutionBias`; since a speculative
+contact is detected when `gap ≈ approachSpeed·dt`, the `-gap/dt` term nearly cancels the approach
+velocity and brakes the body to a standstill before impact, cancelling the bounce. Now the
+separated branch targets the rebound velocity directly when the pair is bouncing
+(`restitutionBias > 0 ? restitutionBias : -gap/dt`); the overlapping branch is unchanged
+(`baumgarte + restitutionBias`). Verified by `physics.restitution`: e=1 drop now rebounds to
+3.058 with CCD **on** (was 0.589) and 3.059 with CCD off; e=0 stays at 0.582.
+
+**Regression investigated & explained.** After Bug 2's fix the CCD test jumped from y=0.600 to
+6.600. Root cause: that test's bullet never set `restitution`, so it used the default 0.2 — the
+old bug had silently suppressed it. With restitution working, the bullet correctly bounced
+(~0.2·120 m/s) instead of resting. Not an engine regression; the test now sets bullet+box
+restitution to 0 to isolate no-tunnelling, and asserts a bounded stop (0.55 < y < 1.6) → 0.600.
+
+**Known tradeoff (documented, not a bug).** A speculative contact resolves at detection, so a
+*very fast* bouncy body can rebound up to ~`approachSpeed·dt` (one speculative margin) before the
+geometric surface. Negligible at realistic speeds / with substeps; inherent to cheap
+speculative CCD without a true time-of-impact solve.

@@ -1,7 +1,7 @@
 # Architecture (as-is)
 
 Snapshot of the current structure. This describes what exists today, not the target.
-Last synced with code: 2026-07-02.
+Last synced with code: 2026-07-03.
 
 ## Build & layout
 
@@ -36,14 +36,19 @@ engine/
 
 ```
 engine::engine (INTERFACE)
-├── engine::core     (STATIC) → glm::glm, tinyobjloader, stb::stb           [empty so far]
-├── engine::graphics (STATIC) → glfw, glm, tinyobjloader, stb,
-│                                (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan
-└── engine::physics  (STATIC)
+├── engine::core        (STATIC) → glm, tinyobjloader, stb, Threads
+│                                  geometry (vertex/mesh/material/model/primitives),
+│                                  memory/Handle, math/Transform, threading (ThreadPool + parallelSort)
+├── engine::ecs         (STATIC) → engine::core   (archetype World, queries, resources, Schedule)
+├── engine::graphics    (STATIC) → engine::core, glfw, glm, tinyobjloader, stb,
+│                                  (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan   (RHI + Metal backend)
+├── engine::scene       (STATIC) → engine::ecs + engine::graphics   (ECS↔render bridge; extract)
+├── engine::physics     (STATIC) → engine::core   (shapes/collision/broadphase/solver, PhysicsWorld)
+└── engine::physics_ecs (STATIC) → engine::physics + engine::ecs    (RigidBody + step/sync systems)
 ```
 
 Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdirectory`;
-`stb` header-only INTERFACE; `metal-cpp` vendored (not yet wired into include dirs).
+`stb` header-only INTERFACE; `metal-cpp` vendored on the include path (Apple).
 
 > ✅ **Build reality (2026-07-03)**: full tree builds on macOS; the Metal backend renders
 > **instanced core meshes through the Renderer/RenderView path**, offscreen and to a window.
@@ -64,10 +69,22 @@ Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdir
 > `slangc` (column-major). Legacy Vulkan parked under
 > `src/graphics/vulkan/`. See investigations/2026-07-02-rhi-interface-plan.md §13.
 
-## Graphics module
+## Graphics module (`engine::graphics`)
 
-A single monolithic `Graphics` class (~460 lines of declarations in `graphics.h`),
-implemented across five files. Structure is derived from the vulkan-tutorial.com flow.
+**Current path (RHI + Metal)** — see the "Build reality (2026-07-03)" callout above for the
+authoritative description. In short: a hand-written **RHI** (`include/engine/graphics/rhi/`) with
+a working **Metal backend** (`src/graphics/metal/`), plus a **render layer**
+(`include/engine/graphics/render/`) — `GeometryStore` (uploads `core::MeshData`), `RenderView`
+(camera + `RenderItem[]` + per-instance `InstanceData[]` + `MaterialGPU[]`), and `Renderer`
+(instanced `drawIndexed`, per-instance materials, depth, offscreen + windowed present). Slang
+shaders (`shaders/*.slang` → `.metallib`). This is what the tests and the milestone exercise.
+
+### Legacy Vulkan code (parked under `src/graphics/vulkan/`, NOT the current path)
+
+The original monolithic `Graphics` class (~460 lines in `graphics.h`, derived from the
+vulkan-tutorial.com flow) is parked pending the Vulkan-behind-RHI port (todo.md "Graphics
+refactor pass" item 3). It does **not** build on Apple and is not linked into the Metal path.
+Kept for reference / to port from:
 
 - **`graphics.cpp`** (~48 KB) — instance/device selection, logical device, textures
   (staging, mipmaps, image views, sampler), buffers, single-time command helpers,
@@ -77,35 +94,17 @@ implemented across five files. Structure is derived from the vulkan-tutorial.com
   and the per-frame acquire → record → submit → present loop.
 - **`graphics_custom.cpp`** (~27 KB) — reusable helpers for *custom/offscreen* targets:
   `createRenderPass`, `createFramebuffer`, `createDescriptorSet(s)`, `createPipeline`
-  (incl. push-constant overload), and granular `record*` command helpers
-  (begin/end render pass, viewport, scissor, clear, bind descriptor, push constant, draw).
+  (incl. push-constant overload), and granular `record*` command helpers.
 - **`graphics_model.cpp`** (~8 KB) — `loadQuad`, `loadObj` (via tinyobjloader).
-- **`graphics_instance.cpp`** (~2 KB) — `updateGlobalUBO`, `addDrawJob`,
-  `copyInstanceToBuffer`.
+- **`graphics_instance.cpp`** (~2 KB) — `updateGlobalUBO`, `addDrawJob`, `copyInstanceToBuffer`.
 
-### Data structures (in graphics.h)
+Legacy data structures (in the old `graphics.h`): `Vertex`/`Mesh`/`Material`/`GlobalUBO`/
+`InstanceSSBO`/`DrawJob` + Vulkan helpers. Its shared-buffer + `DrawJob` + per-frame instance
+SSBO layout was the data-oriented seed the current `render::` layer grew from. Hardcoded caps
+still in that code: `MAX_FRAMES_IN_FLIGHT = 1`, `NUM_TEXTURES = 16`, `MAX_ENTITIES = 16`,
+`WIDTH/HEIGHT 800x600`. Known smells to fix during the port live in todo.md.
 
-- `Vertex` (pos/color/texCoord + binding/attribute descriptions + hash).
-- `Mesh` (first/count for vertices and indices into shared buffers).
-- `Material` (`textureIndex`).
-- `GlobalUBO` (view, proj; lights TODO).
-- `InstanceSSBO` (model matrix).
-- `DrawJob` (visible flag, meshIndex, material range, instance range).
-- Vulkan helpers: `SwapChainSupportDetails`, `QueueFamilyIndices`.
-
-### Rendering model (seed of data-oriented design)
-
-Shared vertex/index buffers hold all mesh data; `Mesh` records ranges into them.
-`DrawJob`s reference a mesh + material range + instance range. Instance model matrices
-live in a per-frame SSBO (`instanceStorageBuffers`, filled by `copyInstanceToBuffer`).
-This is the closest thing to an ECS-friendly, batched render path — but nothing feeds it
-from an entity layer yet.
-
-### Hardcoded caps
-
-`MAX_FRAMES_IN_FLIGHT = 1`, `NUM_TEXTURES = 16`, `MAX_ENTITIES = 16`, `WIDTH/HEIGHT 800x600`.
-
-## Physics module (`engine::physics`, Phase 0–1, 2026-07-03)
+## Physics module (`engine::physics`, Phase 0–2 + collision polish, 2026-07-03)
 
 ECS-free, backend-agnostic core (depends on `engine::core` only — no ecs, no graphics).
 Design + phasing + differentiable-backend design-ahead: investigations/2026-07-03-physics-plan.md.
@@ -117,14 +116,19 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   points) for accurate **capsule-vs-box/hull** (segment↔convex, up to 2 contacts), **GJK + EPA**
   for the separating normal, and **face-clip manifolds** for polytope pairs — `box_box` and
   generic `convex_manifold` (box-hull, hull-hull) — giving up to 4 points so boxes/hulls
-  **stack** stably. Verified: `tst/gjk_epa_test` (box/hull depth+normal exact, GJK-distance,
-  capsule-convex) and `tst/physics_test` (box/hull/capsule rest flat |ω|≈0; sphere-on-box;
+  **stack** stably. Verified: `tst/physics/unit/collision.cpp` (box/hull depth+normal exact,
+  GJK-distance, capsule-convex), `tst/physics/unit/{sphere_box,manifolds,segments}.cpp`
+  (sphere-box face/edge/corner/inside, plane manifold counts, capsule segment cases), and
+  `tst/physics/integration/rigidbody.cpp` (box/hull/capsule rest flat |ω|≈0; sphere-on-box;
   box & hull **stacks** upright; capsule-on-box).
 - **Solver robustness**: Baumgarte correction velocity is **clamped** (prevents fast/low-inertia
   bodies diverging). **CCD** (`WorldDef::continuousDetection`, default on): swept broadphase
   AABBs + **speculative contacts** (contacts within the substep's closing distance, solved so a
-  body stops at the surface rather than tunnelling). Verified: a 120 m/s sphere stops on a small
-  box (y=0.60) instead of passing through (y=−27) — `tst/physics_test`.
+  body stops at the surface rather than tunnelling). The speculative branch targets the
+  **restitution rebound velocity** when a pair is bouncing (so CCD doesn't brake the approach
+  away and silently cancel restitution). Verified: a 120 m/s sphere stops on a small box
+  (y=0.60) instead of passing through (y=−27), and an e=1 drop rebounds fully with CCD on
+  (`tst/physics/integration/{rigidbody,dynamics}.cpp`).
 - **Dynamics**: `RigidBodyState`, `PhysicsMaterial` (restitution, friction, compliance),
   inertia helpers; pure integration kernels — semi-implicit `integrateLinear`, SO(3) exp/log
   orientation (`so3ExpMap`/`integrateOrientation`), differentiable-ready (plan §14).
@@ -142,8 +146,8 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
     entries + `thread_local` scratch, no per-step allocation), cell = largest AABB. **Linear
     scaling**. The entry sort uses `core::parallelSort` when the world has a pool (sparse 65k
     free-fall: ~1.3× from parallel sort + integration).
-  Both verified against brute force in `tst/physics_test`. Planes (infinite) are tested against
-  finite bodies directly. Measured (Release, free-fall, `tst/physics_bench`): at **65,536**
+  Both verified against brute force in `tst/physics/unit/kernels.cpp`. Planes (infinite) are tested against
+  finite bodies directly. Measured (Release, free-fall, `tst/physics/benchmark/step.cpp`): at **65,536**
   bodies grid = **19.9 ms/step** vs SAP 192 ms vs the O(n²) baseline's ~14 s extrapolation
   (~**700×**); grid throughput ~3.3–5.4 M body-steps/s across 256→65k (flat), SAP falls
   15.6M→0.34M. Crossover ~1–2k. 100k ≈ 30 ms/step single-threaded. See
@@ -151,7 +155,7 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
 
 ### Threading (`engine::core::ThreadPool`)
 A minimal fixed-size worker pool with a blocking `parallelFor` (dynamic work-stealing; the
-caller thread participates). Verified by `tst/thread_pool_test` (every index visited once, no
+caller thread participates). Verified by `tst/core/unit/thread_pool.cpp` (every index visited once, no
 races). `core` links `Threads::Threads`. Two physics consumers:
 - **Parallel worlds** (ML many-envs / "parallel simulations"): independent `PhysicsWorld`s
   stepped concurrently — **7.7× on 12 workers** (4.7M → 36.8M body-steps/s).
@@ -159,7 +163,7 @@ races). `core` links `Threads::Threads`. Two physics consumers:
   narrowphase (per-pair, lock-free), and the **contact solver via graph coloring** (same-color
   contacts share no dynamic body → solved in parallel; colors sequential). Both serial and
   pooled paths use the color order, so results are **bit-identical** (determinism verified in
-  `tst/physics_test`, max err 0.0). Dense 32k-body pile: **1.66×** (Amdahl-limited by the still
+  `tst/physics/integration/rigidbody.cpp`, max err 0.0). Dense 32k-body pile: **1.66×** (Amdahl-limited by the still
   serial grid sort + per-color barriers — a parallel sort is the next lever). Static bodies are
   never written, so shared colliders (the plane) are race-free.
 - `physics::Real` localizes the scalar for a future double/dual-number switch.
@@ -170,11 +174,21 @@ Depends on `engine::physics` + `engine::ecs` (separate from `scene`, which pulls
 `stepSystem` + `syncSystem` (bulk world poses → `Transform`) added to an `ecs::Schedule`.
 
 ### Milestone status — "ball rolling down a plane" ✅ (physics + sim)
-- `tst/physics_milestone` (headless): sphere on a 30° incline via the ECS bridge + scheduler.
-  Verified it descends, travels down-slope, and **rolls without slipping** — |ω|·r ≈ down-slope
-  speed, matching `a = g·sinθ/(1+2/5)` (measured 7.02 m in 2 s vs 7.01 analytic).
-- `tst/physics_window` (windowed, user-run): N spheres rolling down a tilted plane, physics →
-  sync → `scene::extract` → Metal Renderer. Ties every subsystem together.
+- `tst/physics/integration/milestone.cpp` (headless): sphere on a 30° incline via the ECS bridge
+  + scheduler. Verified it descends, travels down-slope, and **rolls without slipping** —
+  |ω|·r ≈ down-slope speed, matching `a = g·sinθ/(1+2/5)` (measured 7.02 m in 2 s vs 7.01 analytic).
+- `tst/physics/visual/rolling.cpp` (windowed, user-run, in the `visuals` runner): N spheres
+  rolling down a tilted plane, physics → sync → `scene::extract` → Metal Renderer. Ties every
+  subsystem together.
+- **Test coverage** (`tst/physics/{unit,integration}/`): collision unit cases (sphere-box
+  face/edge/corner/inside, plane manifold counts, capsule segment cases incl. degenerate/NaN
+  safety, GJK/EPA), SO(3) exp/log + inertia, and integration cases (determinism, resting,
+  stacking incl. 3-box, capsule, CCD, **restitution**, **friction**, **elastic collision**,
+  **broadphase equivalence**, **kinematic motion**). Two bugs found + fixed 2026-07-03
+  (kinematic bodies didn't move; CCD suppressed restitution) — see
+  [2026-07-03-physics-test-findings.md](../investigations/2026-07-03-physics-test-findings.md).
+- **Recent solver additions**: **kinematic bodies** advance by their scripted velocity (ignore
+  gravity/impulses, still infinite-mass to the solver); **restitution works under CCD**.
 - **Not yet (Phase 3, deferred)**: implicit/differentiable backend + parallel worlds as an
   ML training harness. Physics **Phase 2 + collision polish complete**: SAP + uniform-grid
   broadphase (parallel-sorted), ThreadPool (parallel worlds + colored solver + parallel sort),
@@ -201,10 +215,10 @@ consumers). Design: investigations/2026-07-03-ecs-plan.md.
   `Time{dt}`.
 - **Scheduler** (`Schedule`): an ordered list of `void(World&)` systems, run in insertion
   order (deterministic). Systems read resources + iterate via queries. Driver
-  `tst/scheduler_test` (gravity→integrate, hand-verified deterministic result).
+  `tst/ecs/integration/scheduler.cpp` (gravity→integrate, hand-verified deterministic result).
 - Not yet: command buffer for deferred structural changes, add/remove-component, parallel
   worlds / within-system parallelism (all planned).
-- Driver: `tst/ecs_test` (spawn 1500 across 2 archetypes, query/mutate/chunk/destroy, verified).
+- Driver: `tst/ecs/unit/entities.cpp` (spawn 1500 across 2 archetypes, query/mutate/chunk/destroy, verified).
 
 `core` additions: `core/memory/handle.h` (`Handle<Tag>`, shared by rhi + ecs — the rhi's
 `Handle` is now an alias) and `core/math/transform.h` (`engine::Transform`).
@@ -218,24 +232,32 @@ The ECS↔render bridge — the only module that depends on **both** `engine::ec
 - **Extraction system**: `scene::extract(World, pipeline, ExtractedScene&)` queries
   `<Transform, RenderMesh, RenderMaterial>`, buckets instances by mesh (one instanced draw per
   mesh), and fills `RenderItem[] + InstanceData[]` for a `render::RenderView`.
-- Driver: `tst/scene_offscreen` (ECS entities → extract → render → pixel-verified);
-  `tst/visual_window` is now ECS-driven (a bob system + extraction each frame).
+- Driver: `tst/graphics/integration/scene.cpp` (ECS entities → extract → render → pixel-verified);
+  `tst/graphics/visual/grid.cpp` is ECS-driven (a bob system + extraction each frame).
 
 ## What is NOT here yet
 
-- ECS: **archetype core exists** (`engine::ecs`: Entity/World/archetype storage/queries) —
-  see the ECS module section above. Still missing: command buffer + add/remove-component,
-  system scheduler + resources, render-extraction system, parallel worlds.
-- No application entry point (`main`) or engine loop driver — this is a library with no
-  consumer.
-- Backend abstraction: the RHI **interface** headers exist (`include/engine/graphics/rhi/`
-  + `render/`, no `Vk*`/`MTL::`), and a **Metal backend skeleton** implements the headless
-  `Device` + buffer pool. Still missing: pipelines, command recording, swapchain/present,
-  shaders (Slang toolchain), and the whole Vulkan port behind the RHI (legacy code parked
-  under `src/graphics/vulkan/`, not yet reorganized).
-- `engine::core` exists but is empty (Vertex/Mesh/Material/loader not moved yet).
-- No headless/offscreen *device* path; rendering assumes a GLFW window + swapchain.
-- No compute pipelines or compute-queue usage.
-- No shaders in-tree and no compile step (pipelines take shader paths at runtime; nothing
-  emits SPIR-V, let alone Metal `.metallib`).
-- Tests: only a placeholder `test` executable that prints a string.
+Genuinely open gaps (see todo.md for the full backlog):
+
+- **ECS**: command buffer for deferred structural changes, add/remove-component, and parallel
+  worlds / within-system parallelism. (Archetype core, queries, resources, and the ordered
+  `Schedule` all exist.)
+- **Vulkan behind the RHI**: only the Metal backend is live. The legacy Vulkan code is parked
+  under `src/graphics/vulkan/` and not yet ported behind the RHI (graphics refactor item 3).
+- **Headless/offscreen split**: the Metal `Device` has a headless path and offscreen tests, but
+  `Swapchain` and `Renderer` aren't cleanly separated yet, and there's no window-free *windowed*
+  path abstraction for ML/offline (graphics refactor item 7).
+- **Bindless textures**: `baseColorTexture` + `Device::registerBindlessTexture` are stubs
+  (per-instance material *colors* work; textured surfaces are the next step).
+- **Compute**: no compute pipelines or compute-queue usage (needed for ML + some rendering).
+- **`core::io`/`image`**: `readFile`/`loadObj`/`loadImage` + `Image` not yet in `engine::core`
+  (loaders still live in the parked graphics code).
+- **Physics Phase 3**: implicit/differentiable backend + parallel-world ML harness.
+- **Application entry point**: intentionally none — this is a library; driver tests under
+  `tst/` stand in for the consuming app.
+
+Already done (previously listed here as missing): `engine::core` is populated (geometry,
+memory/Handle, math/Transform, threading); the Metal backend has pipelines, command recording,
+swapchain/present, and Slang shaders (`.metallib`/`.spv`); the ECS scheduler + resources +
+`scene::extract` render-extraction all exist; and there's a real test harness
+(`tst/harness/`, `tests`/`benchmarks`/`visuals` runners) with unit + integration coverage.

@@ -144,8 +144,9 @@ public:
             for (int it = 0; it < def_.velocityIterations; ++it)
                 solveColored();
 
-            // 4. Integrate positions + orientations.
-            forEachDynamic([&](BodyData& b) {
+            // 4. Integrate positions + orientations (Dynamic + Kinematic; Kinematic advances by
+            //    its scripted velocity, unaffected by gravity/impulses).
+            forEachMoving([&](BodyData& b) {
                 b.position += b.linVel * h;
                 b.orientation = integrateOrientation(b.orientation, b.angVel, h);
             });
@@ -188,6 +189,20 @@ private:
         auto one = [&](size_t i) {
             BodyData& b = bodies_[i];
             if (b.alive && b.invMass != Real(0)) f(b);
+        };
+        if (pool_ && n >= threshold_) pool_->parallelFor(n, one, 1024);
+        else for (size_t i = 0; i < n; ++i) one(i);
+    }
+
+    // Applies `f(body)` to each alive body that is integrated (Dynamic + Kinematic). Kinematic
+    // bodies have invMass==0 (never pushed by the solver) but DO advance by their scripted
+    // velocity, so they must be integrated even though forEachDynamic skips them.
+    template <class F>
+    void forEachMoving(F&& f) {
+        const size_t n = bodies_.size();
+        auto one = [&](size_t i) {
+            BodyData& b = bodies_[i];
+            if (b.alive && b.type != BodyType::Static) f(b);
         };
         if (pool_ && n >= threshold_) pool_->parallelFor(n, one, 1024);
         else for (size_t i = 0; i < n; ++i) one(i);
@@ -236,7 +251,7 @@ private:
             }
             if (!finite) continue;
 
-            if (def_.continuousDetection && b.invMass != Real(0)) {   // swept AABB (CCD)
+            if (def_.continuousDetection && b.type != BodyType::Static) {   // swept AABB (CCD)
                 const Vec3 d = b.linVel * h;
                 box.min += glm::min(d, Vec3(0));
                 box.max += glm::max(d, Vec3(0));
@@ -495,12 +510,23 @@ private:
                             - (A.linVel + glm::cross(A.angVel, rA));
             const Real vn = glm::dot(vrel, n);
             const Real kn = effectiveMass(A, B, IinvA, IinvB, rA, rB, n);
-            // Penetrating → softened Baumgarte push-out; separated (speculative) → permit approach
-            // only up to the current gap this substep (prevents tunnelling without floating).
-            const Real bias = (c.penetration >= Real(0))
-                ? std::min((kBaumgarte / kSubDt_) * std::max(c.penetration - kSlop, Real(0)), kMaxCorrection)
-                : c.penetration / kSubDt_;
-            Real lambda = (kn > kEpsilon) ? (bias + c.restitutionBias - vn) / kn : Real(0);
+            // Target normal velocity the solver drives toward:
+            //  * Overlapping → softened Baumgarte push-out plus any restitution rebound.
+            //  * Separated (speculative) → if the pair is bouncing (restitution active), aim for
+            //    the rebound velocity directly; adding the negative gap-closing bias here would
+            //    brake a fast approach to a near-standstill one substep before impact and
+            //    silently cancel restitution. Otherwise permit approach only up to the current
+            //    gap this substep (prevents tunnelling without floating).
+            Real target;
+            if (c.penetration >= Real(0)) {
+                const Real baumgarte = std::min((kBaumgarte / kSubDt_) * std::max(c.penetration - kSlop, Real(0)),
+                                                kMaxCorrection);
+                target = baumgarte + c.restitutionBias;
+            } else {
+                const Real speculative = c.penetration / kSubDt_;   // = -gap/h (negative)
+                target = (c.restitutionBias > Real(0)) ? c.restitutionBias : speculative;
+            }
+            Real lambda = (kn > kEpsilon) ? (target - vn) / kn : Real(0);
 
             const Real oldImpulse = c.normalImpulse;
             c.normalImpulse = std::max(oldImpulse + lambda, Real(0));

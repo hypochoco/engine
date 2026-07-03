@@ -8,19 +8,24 @@ Not commitments — a backlog to reason about.
 - [~] **ECS core.** DECIDED archetype (2026-07-03); phase 1 landed: `engine::ecs` with
       `Entity` (generational `core::Handle`), `World`, archetype/table storage, and
       `query<Ts...>().each/.chunks`. Ships `engine::Transform` (in `core`). Verified by
-      `tst/ecs_test`. **Resources + ordered scheduler DONE** (2026-07-03): `World::setResource/
-      getResource` + `Schedule` (ordered `void(World&)` systems); `tst/scheduler_test`
+      `tst/ecs/unit/entities.cpp`. **Resources + ordered scheduler DONE** (2026-07-03): `World::setResource/
+      getResource` + `Schedule` (ordered `void(World&)` systems); `tst/ecs/integration/scheduler.cpp`
       (deterministic gravity→integrate). Next: command buffer + add/remove-component, and
       parallel worlds. **Render-extraction DONE** (2026-07-03):
       `engine::scene` bridge (`RenderMesh`/`RenderMaterial` components + `scene::extract` →
-      `RenderView`); `tst/scene_offscreen` + ECS-driven `tst/visual_window`. Plan:
+      `RenderView`); `tst/graphics/integration/scene.cpp` + ECS-driven `tst/graphics/visual/grid.cpp`. Plan:
       [2026-07-03-ecs-plan.md](../investigations/2026-07-03-ecs-plan.md).
-- [ ] **Driver test harness (not a `main`).** The engine is a library with no application
-      entry point; consuming apps own the loop. Instead build a suite of driver tests under
-      `tst/` that construct subsystems and drive the update→render loop to validate them.
-- [ ] **Break the window/swapchain coupling.** Introduce a headless device/context path so
-      ML training and offline rendering can run without GLFW. Today `Graphics` assumes a
-      window + swapchain end to end.
+- [x] **Driver test harness (not a `main`).** DONE (2026-07-03). The engine is a library with
+      no application entry point; consuming apps own the loop. A self-registering harness
+      (`tst/harness/`, `TST_CASE(module, category, name)`) drives subsystems; tests are organized
+      `tst/<module>/<category>/*.cpp` and globbed into three runners — `tests` (unit +
+      integration, CTest per module), `benchmarks` (Release), `visuals` (windowed demos). See
+      goals.md "Testing / entry points".
+- [~] **Break the window/swapchain coupling.** A headless device/context path so ML training
+      and offline rendering run without GLFW. The **Metal `Device` has a headless path** (offscreen
+      tests render + read back with no window). Remaining: cleanly split `Swapchain` from
+      `Renderer` (graphics refactor item 7), and carry the same headless path through the Vulkan
+      port. (The parked legacy Vulkan `Graphics` still assumes a window + swapchain end to end.)
 
 ## Driving milestone: "a ball rolling down a plane"
 
@@ -29,21 +34,25 @@ capability targets that make it exercise our goals — headless + deferred rende
 sims for training, and massive scale (~100k spheres). This is the yardstick for whether core
 is "good enough" and defines what the graphics refactor pass must support.
 
-## Core (in progress — build standalone first)
+## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 
 Build `engine::core` to a good state before touching graphics. See
 [2026-07-02-core-module-plan.md](../investigations/2026-07-02-core-module-plan.md).
 
-- [ ] **geometry/**: `Vertex` (position, **normal**, uv, color), `MeshData`, `Mesh`,
-      minimal `Material`, `ModelData`. + `core.h` umbrella.
-- [ ] **geometry/primitives**: `makeQuad` / `makePlane` / `makeSphere` generators (feed the
-      milestone + give `tst` real geometry without asset files).
+- [x] **geometry/**: `Vertex` (position, **normal**, uv, color), `MeshData`, `Mesh`,
+      minimal `Material`, `ModelData`. + `core.h` umbrella. DONE.
+- [x] **geometry/primitives**: `makeQuad` / `makePlane` / `makeSphere` generators. DONE
+      (feed the milestone + give `tst` real geometry without asset files;
+      `tst/core/unit/geometry.cpp`).
 - [ ] **image/**: `Image` + `ImageFormat`.
 - [ ] **io/**: `readFile`, `loadObj` → `ModelData`, `loadImage` → `Image`. NOTE: centralize
       the stb/tinyobj implementation macros in exactly one TU (they currently live in
       graphics) to avoid duplicate symbols when both link — do this when graphics is
       refactored, or keep loaders' impls out of any target that also links graphics.
-- [ ] **tst driver**: build meshes via primitives, assert counts. Link `engine::core` only.
+- [x] **tst driver**: build meshes via primitives, assert counts, link `engine::core` only.
+      DONE (`tst/core/unit/geometry.cpp`).
+- [x] Also landed in `core` (not originally listed here): `memory/Handle<Tag>` (shared by rhi +
+      ecs), `math/Transform`, and `threading/` (`ThreadPool` + `parallelSort`).
 
 Scaling / ownership (from [2026-07-02-geometry-scaling.md](../investigations/2026-07-02-geometry-scaling.md)):
 - [ ] Treat `MeshData`/`ModelData` as **loader output only** — not the runtime store; never
@@ -98,15 +107,15 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       exposes `ENGINE_SHADER_DIR`. `rhi::ShaderModule`/`createShader` loads the backend blob.
       First shader: `shaders/triangle.slang`.
 - [~] **6. Implement the Metal backend** incrementally — offscreen + **windowed** working
-      (2026-07-03): `tst/mesh_offscreen` (headless, pixel-verified) and `tst/visual_window`
+      (2026-07-03): `tst/graphics/integration/mesh.cpp` (headless, pixel-verified) and `tst/graphics/visual/grid.cpp`
       (opens a GLFW window, renders a lit `core` sphere via CAMetalLayer swapchain + present).
       Implemented: headless & windowed Device, handle pools, metallib libs, pipeline + vertex
       descriptor + depth-stencil, render-encoder lifecycle, indexed draw, depth, readback,
       CAMetalLayer/drawable present (`metal_window.mm` shim via `glfwGetCocoaWindow`;
-      `OBJC`+`OBJCXX` enabled). Next: **uniforms + camera (MVP)** so geometry isn't in clip
-      space, then **instance storage + bindless** (ECS/instancing path). TODO: window resize
+      `OBJC`+`OBJCXX` enabled). **MVP camera uniform + instance storage + per-instance materials
+      DONE** (see item 8 + the architecture "Build reality" callout). TODO: window resize
       (swapchain + depth recreate; currently fixed-size), staging for Private resources,
-      fence-gated deletion, per-frame-in-flight sync.
+      fence-gated deletion, per-frame-in-flight sync, and **bindless textures** (stubs exist).
 - [ ] **7. Split `Swapchain` + `Renderer`; headless path** for both backends (ML/offline).
 - [~] **8. Rework the render-list / instance path** — instancing + **per-instance materials**
       done (2026-07-03): `RenderView { view/proj, target, RenderItem[], InstanceData[],
@@ -118,7 +127,9 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       stubs — defer until textured surfaces are needed; Metal argument-buffer + residency work);
       ECS-driven extraction/culling/sorting once ECS exists; the indirect/GPU-driven path.
 
-Known bugs/smells to fix along the way (details in the refactor investigation):
+Known bugs/smells to fix along the way (all in the **parked legacy Vulkan code** under
+`src/graphics/vulkan/` — fix during the Vulkan-behind-RHI port, not present in the Metal path;
+details in the refactor investigation):
 - [ ] `loadQuad` mis-computes `vertexCount`/`indexCount` (cumulative, not per-mesh counts).
 - [ ] `copyInstanceToBuffer` always copies `MAX_ENTITIES`; dirty-range copy is stubbed out.
 - [ ] `renderFinishedSemaphores` indexed per-frame not per-image (masked by frames=1).
@@ -146,8 +157,9 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       SO(3) exp/log) + the runtime-virtual **`PhysicsWorld` interface** + a **realtime
       sequential-impulse backend** (restitution/friction/Baumgarte, substeps, rotation) + the
       **`engine::physics_ecs` bridge** (RigidBody + step/sync systems). **Milestone met**:
-      `tst/physics_milestone` (headless — ball rolls without slipping down a 30° incline,
-      analytic match) + `tst/physics_window` (windowed, full stack). **Phase 2 in progress**:
+      `tst/physics/integration/milestone.cpp` (headless — ball rolls without slipping down a 30°
+      incline, analytic match) + `tst/physics/visual/rolling.cpp` (windowed, full stack).
+      **Phase 2 + collision polish COMPLETE**:
       sweep-and-prune + **uniform-grid** (flat index-sort) broadphases, both verified vs brute
       force. Grid **scales linearly** — at 65,536 bodies grid 19.9 ms/step vs SAP 192 ms vs
       ~14 s for the old O(n²) (~700×); 100k ≈ 30 ms/step single-threaded. **Parallel worlds**
@@ -156,8 +168,12 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       **GJK closest-distance** for capsule-vs-box/hull; GJK/EPA for the normal; **face-clip
       manifolds** (`box_box` + `convex_manifold`) → box/hull **stacking**. **Parallel broadphase
       sort**; **clamped Baumgarte**; **CCD** (swept AABBs + speculative contacts — 120 m/s
-      sphere doesn't tunnel). Phase 2 + collision polish complete; tests `tst/gjk_epa_test`,
-      `tst/physics_test`, `tst/physics_bench`. Phase 3 (deferred): implicit/differentiable
+      sphere doesn't tunnel); **kinematic bodies move** by scripted velocity (ignore gravity/
+      impulses); **restitution works under CCD** (speculative branch targets the rebound velocity
+      instead of braking the approach — see
+      [2026-07-03-physics-test-findings.md](../investigations/2026-07-03-physics-test-findings.md)).
+      Phase 2 + collision polish complete; tests live under `tst/physics/{unit,integration,
+      benchmark,visual}/`. Phase 3 (deferred): implicit/differentiable
       backend + parallel-world ML harness.
 - [x] **How physics state maps onto ECS components.** DECIDED (2026-07-03): backend owns
       packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate
@@ -167,12 +183,13 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
 ## Infra / quality
 
 - [~] Multithreaded task system. **`core::ThreadPool` landed** (fixed pool + blocking
-      dynamic-work-stealing `parallelFor`, caller participates; `tst/thread_pool_test`). Uses:
-      **parallel worlds** 7.7× on 12 workers, and **intra-world** parallel integration +
+      dynamic-work-stealing `parallelFor`, caller participates; `tst/core/unit/thread_pool.cpp`).
+      Uses: **parallel worlds** 7.7× on 12 workers, and **intra-world** parallel integration +
       narrowphase + **graph-colored contact solver** (deterministic, bit-identical to serial;
-      1.66× on a dense 32k pile). Still TODO: parallel broadphase sort (the remaining serial
-      hotspot), a task **dependency graph** (readme sketch), fewer per-color barriers.
-- [ ] Test setup (no framework wired up yet).
+      1.66× on a dense 32k pile) + **parallel broadphase sort** (`core::parallelSort`, landed).
+      Still TODO: a task **dependency graph** (readme sketch), fewer per-color barriers.
+- [x] Test setup. DONE (2026-07-03): self-registering harness + `tests`/`benchmarks`/`visuals`
+      runners + CTest per module (see the Foundational "Driver test harness" item).
 
 ## Open design questions (revisit "at some point")
 

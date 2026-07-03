@@ -87,21 +87,17 @@ Real bounceHeight(Real restitution, bool ccd = true) {
 
 // Restitution: e=1 returns most of the drop height; e=0 does not bounce. Impact speed here is
 // ~7 m/s (well above the solver's 1 m/s restitution threshold).
-// Restitution: with continuous detection OFF, e=1 returns essentially all of the drop height
-// and e=0 does not bounce (impact speed ~7 m/s, well above the solver's 1 m/s threshold).
-//
-// KNOWN BUG (reported): with continuousDetection ON (the WorldDef default), speculative contacts
-// bleed off the approach velocity over several substeps before the surface is reached, so
-// restitution is computed from a near-zero vn and the body barely bounces. We assert the correct
-// physics on the CCD-off path and characterize the CCD-on suppression via a print.
+// Restitution: e=1 returns essentially all of the drop height and e=0 does not bounce (impact
+// speed ~7 m/s, above the solver's 1 m/s threshold). Checked with continuous detection BOTH on
+// (the WorldDef default) and off — a speculative contact must not suppress the bounce.
 TST_CASE(physics, integration, restitution) {
-    const Real elastic = bounceHeight(1.0f, /*ccd=*/false);
-    const Real inelastic = bounceHeight(0.0f, /*ccd=*/false);
-    std::printf("restitution[ccd off]: e=1 -> %.3f, e=0 -> %.3f\n", elastic, inelastic);
-    std::printf("restitution[ccd on ]: e=1 -> %.3f, e=0 -> %.3f  <-- CCD suppresses the bounce (bug)\n",
-                bounceHeight(1.0f, true), bounceHeight(0.0f, true));
-    TST_REQUIRE(elastic > 2.4f);     // rebounds to >75% of the 2.5 m drop (center 3.0 -> rest 0.5)
-    TST_REQUIRE(inelastic < 0.75f);  // settles at the resting height, no bounce
+    for (bool ccd : { false, true }) {
+        const Real elastic = bounceHeight(1.0f, ccd);
+        const Real inelastic = bounceHeight(0.0f, ccd);
+        std::printf("restitution[ccd %s]: e=1 -> %.3f, e=0 -> %.3f\n", ccd ? "on " : "off", elastic, inelastic);
+        TST_REQUIRE(elastic > 2.4f);     // rebounds to >75% of the 2.5 m drop (center 3.0 -> rest 0.5)
+        TST_REQUIRE(inelastic < 0.75f);  // settles at the resting height, no bounce
+    }
 }
 
 // Coulomb friction on a flat slab given an initial horizontal velocity: frictionless keeps the
@@ -205,11 +201,8 @@ TST_CASE(physics, integration, broadphase_equivalence) {
     TST_REQUIRE(maxErr < 1e-3f);
 }
 
-// A kinematic body must ignore gravity (verified below). It should ALSO advance by its
-// prescribed velocity — but the realtime backend currently does not integrate kinematic
-// positions (see the reported bug: forEachDynamic skips invMass==0 bodies), so the body stays
-// put. We assert the correct-and-working behaviour (no gravity) and characterize the gap in a
-// print rather than a hard failure, pending the engine fix.
+// A kinematic body advances by its prescribed velocity, ignores gravity, and is not pushed back
+// by the solver (infinite mass).
 TST_CASE(physics, integration, kinematic_motion) {
     auto w = makeWorld(Vec3(0, -9.81f, 0), 8, 1);
     BodyDef k;
@@ -221,7 +214,35 @@ TST_CASE(physics, integration, kinematic_motion) {
     const BodyHandle h = w->createBody(k);
     for (int i = 0; i < 120; ++i) w->step(1.0f / 120.0f);   // 1.0 s
     const auto p = w->pose(h);
-    std::printf("kinematic_motion: pos=(%.3f, %.3f, %.3f); x should be ~1 once kinematic "
-                "integration lands (currently %.3f)\n", p.position.x, p.position.y, p.position.z, p.position.x);
+    std::printf("kinematic_motion: pos=(%.3f, %.3f, %.3f) (expect ~1, 5, 0)\n", p.position.x, p.position.y, p.position.z);
+    TST_REQUIRE(std::fabs(p.position.x - 1.0f) < 1e-3f);   // moved by v·t
     TST_REQUIRE(std::fabs(p.position.y - 5.0f) < 1e-4f);   // gravity does NOT pull a kinematic body down
+}
+
+// A kinematic body drives dynamics but is not pushed back: an upward-moving kinematic platform
+// carries a resting dynamic box with it, and the platform itself stays on its scripted path.
+TST_CASE(physics, integration, kinematic_pushes_dynamic) {
+    auto w = makeWorld(Vec3(0, -9.81f, 0), 12, 2);
+    BodyDef plat;
+    plat.type = BodyType::Kinematic;
+    plat.collider.type = ColliderDesc::Type::Box;
+    plat.collider.box = Box{ Vec3(2.0f, 0.25f, 2.0f) };
+    plat.position = Vec3(0, 0.25f, 0);
+    plat.linearVelocity = Vec3(0, 0.5f, 0);            // rising at 0.5 m/s
+    const BodyHandle ph = w->createBody(plat);
+
+    BodyDef box;
+    box.type = BodyType::Dynamic; box.mass = 1.0f;
+    box.collider.type = ColliderDesc::Type::Box;
+    box.collider.box = Box{ Vec3(0.5f) };
+    box.material.friction = 0.8f; box.material.restitution = 0.0f;
+    box.position = Vec3(0, 1.0f, 0);                   // resting on the platform top (0.5)
+    const BodyHandle bh = w->createBody(box);
+
+    for (int i = 0; i < 120; ++i) w->step(1.0f / 120.0f);   // 1.0 s -> platform rises 0.5 m
+    const auto pp = w->pose(ph);
+    const auto pb = w->pose(bh);
+    std::printf("kinematic push: platform.y=%.3f box.y=%.3f (both +~0.5)\n", pp.position.y, pb.position.y);
+    TST_REQUIRE(std::fabs(pp.position.y - 0.75f) < 1e-3f);  // platform followed its path (0.25 -> 0.75)
+    TST_REQUIRE(pb.position.y > 1.4f && pb.position.y < 1.6f);  // box carried up ~0.5, still resting on top
 }

@@ -63,8 +63,10 @@ A single engine serving three workloads on shared foundations:
 - **Core first, then one graphics refactor pass.** Build `engine::core` to a good state
   standalone; do **not** refactor graphics incrementally alongside it. Once core is solid,
   go through the entire graphics package in one dedicated pass (refactor, delete, reorganize
-  behind the RHI). Until then the existing Vulkan graphics code is left as-is (and may not
-  build on Apple — that's fine; it gets rebuilt in the refactor pass).
+  behind the RHI). Status (2026-07-03): the **RHI + Metal backend** landed as the current path
+  (offscreen + windowed, instanced, per-instance materials); the **legacy Vulkan code is parked**
+  under `src/graphics/vulkan/` (doesn't build on Apple — fine) awaiting the Vulkan-behind-RHI
+  port. So "add Metal" is done; "port Vulkan behind the RHI" is the remaining half of the pass.
 
 ## Driving milestone: "a ball rolling down a plane"
 
@@ -83,6 +85,13 @@ scoped to exercise the overall goals, not just draw one sphere:
 
 This milestone is the yardstick for "is core in a good state?" and defines what the graphics
 refactor pass must ultimately support.
+
+> **Status (2026-07-03)**: the **physics + sim slice is met** — a sphere rolls without slipping
+> down an inclined plane through the full ECS → physics → sync → `scene::extract` → Metal
+> Renderer stack (headless `tst/physics/integration/milestone.cpp` + windowed
+> `tst/physics/visual/rolling.cpp`). The broader **capability targets are still pending**:
+> a clean headless/offscreen *device* split + deferred rendering, parallel-world ML stepping,
+> and the ~100k-sphere instanced-at-scale case. See architecture.md "Milestone status".
 
 ## Non-goals (for now)
 

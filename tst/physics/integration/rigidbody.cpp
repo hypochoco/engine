@@ -207,11 +207,13 @@ TST_CASE(physics, integration, ccd) {
         box.type = BodyType::Static;
         box.collider.type = ColliderDesc::Type::Box;
         box.collider.box = Box{ Vec3(0.5f) };
+        box.material.restitution = 0.0f;
         w->createBody(box);
         BodyDef bullet;
         bullet.type = BodyType::Dynamic; bullet.mass = 1.0f;
         bullet.collider.type = ColliderDesc::Type::Sphere;
         bullet.collider.sphere = Sphere{ 0.1f };
+        bullet.material.restitution = 0.0f;   // isolate no-tunnelling from any bounce
         bullet.position = Vec3(0, 3.0f, 0);
         bullet.linearVelocity = Vec3(0, -120.0f, 0);
         const BodyHandle bh = w->createBody(bullet);
@@ -221,6 +223,6 @@ TST_CASE(physics, integration, ccd) {
     const Real yCCD = run(true);
     const Real yNo = run(false);
     std::printf("CCD: y = %.3f (on) vs %.3f (off)\n", yCCD, yNo);
-    TST_REQUIRE(yCCD > 0.55f);   // stops on the box
-    TST_REQUIRE(yNo < 0.0f);     // tunnels without CCD
+    TST_REQUIRE(yCCD > 0.55f && yCCD < 1.6f);   // stopped near the box top, no tunnelling, no bounce
+    TST_REQUIRE(yNo < 0.0f);                     // tunnels straight through without CCD
 }
