@@ -20,6 +20,7 @@ Working notes for the engine project.
   - [`2026-07-02-rhi-interface-plan.md`](investigations/2026-07-02-rhi-interface-plan.md)
   - [`2026-07-03-ecs-plan.md`](investigations/2026-07-03-ecs-plan.md)
   - [`2026-07-03-physics-plan.md`](investigations/2026-07-03-physics-plan.md)
+  - [`2026-07-03-physics-baseline.md`](investigations/2026-07-03-physics-baseline.md)
 
 ## Conventions
 

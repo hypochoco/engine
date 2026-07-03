@@ -13,6 +13,9 @@ target_link_libraries(physics_test PRIVATE engine::physics)
 add_executable(physics_milestone physics_milestone.cpp)
 target_link_libraries(physics_milestone PRIVATE engine::physics_ecs)
 
+add_executable(physics_bench physics_bench.cpp)
+target_link_libraries(physics_bench PRIVATE engine::physics_ecs)
+
 # RHI backend tests. Metal is the only implemented backend so far, so build these on Apple
 # only; they become cross-backend once Vulkan is ported behind the RHI.
 if(APPLE)

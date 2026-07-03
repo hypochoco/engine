@@ -7,28 +7,29 @@ Last synced with code: 2026-07-02.
 
 - C++23, CMake `>= 3.25`, `compile_commands.json` exported.
 - Split `include/` (public headers) vs `src/` (implementation).
-- Per-module build files live in top-level `core/`, `graphics/`, `physics/`, `tst/` dirs,
-  separate from their source under `src/`. CMake uses `GLOB_RECURSE` (incl. `.mm`) +
-  `source_group`.
+- Per-module build files live under a single top-level **`modules/`** dir (`modules/<name>/
+  CMakeLists.txt`, aggregated by `modules/CMakeLists.txt`), separate from their source under
+  `src/` and headers under `include/`. `tst/` (which holds actual driver sources) stays at the
+  root. CMake uses `GLOB_RECURSE` (incl. `.mm`) + `source_group`.
 - **Backend is platform-selected**: `if(APPLE)` → Metal + QuartzCore frameworks;
   `else()` → `find_package(Vulkan)`.
 
 ```
 engine/
-├── CMakeLists.txt          # top-level: deps + platform backend select + module wiring
-├── include/engine/
-│   ├── core/core.h         # NEW — empty stub (backend-agnostic data target)
-│   ├── graphics/graphics.h # the entire graphics interface (still Vulkan-only)
-│   └── physics/physics.h   # stub
-├── src/
-│   ├── core/core.cpp       # NEW — empty stub
-│   ├── graphics/           # 5 .cpp files, ~115 KB total (all Vulkan)
-│   └── physics/physics.cpp # stub
-├── core/CMakeLists.txt     # NEW — engine_core (STATIC)
-├── graphics/CMakeLists.txt # engine_graphics (STATIC); Metal|Vulkan link per platform
-├── physics/CMakeLists.txt  # engine_physics (STATIC)
-├── tst/                    # NEW — placeholder `test` executable
-└── external/               # submodules: glfw, glm, stb, tinyobjloader, metal-cpp (NEW)
+├── CMakeLists.txt              # top-level: deps + platform backend select + module wiring
+├── include/engine/<module>/    # public headers per module
+├── src/<module>/               # implementation per module
+├── modules/                    # per-module build files only (no sources)
+│   ├── CMakeLists.txt          # aggregator: add_subdirectory(core, ecs, graphics, ...)
+│   ├── core/CMakeLists.txt         engine_core       (STATIC)
+│   ├── ecs/CMakeLists.txt          engine_ecs        (STATIC)
+│   ├── graphics/CMakeLists.txt     engine_graphics   (STATIC); Metal|Vulkan per platform
+│   ├── scene/CMakeLists.txt        engine_scene      (STATIC); ecs↔render bridge
+│   ├── physics/CMakeLists.txt      engine_physics    (STATIC)
+│   └── physics_ecs/CMakeLists.txt  engine_physics_ecs(STATIC); physics↔ecs bridge
+├── shaders/                    # .slang → .metallib/.spv via slangc
+├── tst/                        # driver executables (sources live here) + CMakeLists
+└── external/                   # submodules: glfw, glm, stb, tinyobjloader, metal-cpp
 ```
 
 ## Target graph
