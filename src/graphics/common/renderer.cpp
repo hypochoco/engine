@@ -32,6 +32,8 @@ struct Renderer::Impl {
     rhi::BufferHandle       cameraUBO;         // glm::mat4 viewProj
     rhi::BufferHandle       instanceBuffer;    // InstanceData[]
     uint32_t                instanceCapacity = 0;
+    rhi::BufferHandle       materialBuffer;    // MaterialGPU[]
+    uint32_t                materialCapacity = 0;
     rhi::TextureHandle      depthTex;
     rhi::RenderTargetHandle depthRT;
     uint32_t                depthW = 0, depthH = 0;
@@ -55,6 +57,16 @@ struct Renderer::Impl {
             { .size = static_cast<uint64_t>(newCap) * sizeof(InstanceData),
               .usage = rhi::BufferUsage::Storage, .memory = rhi::MemoryMode::CpuToGpu });
         instanceCapacity = newCap;
+    }
+
+    void ensureMaterials(uint32_t count) {
+        if (count <= materialCapacity) return;
+        const uint32_t newCap = std::max(count, materialCapacity ? materialCapacity * 2 : 16u);
+        if (materialBuffer.valid()) device->destroy(materialBuffer);
+        materialBuffer = device->createBuffer(
+            { .size = static_cast<uint64_t>(newCap) * sizeof(MaterialGPU),
+              .usage = rhi::BufferUsage::Storage, .memory = rhi::MemoryMode::CpuToGpu });
+        materialCapacity = newCap;
     }
 };
 
@@ -83,6 +95,10 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
             I.ensureInstances(static_cast<uint32_t>(view.instances.size()));
             I.device->updateBuffer(I.instanceBuffer, 0, std::as_bytes(view.instances));
         }
+        if (!view.materials.empty()) {
+            I.ensureMaterials(static_cast<uint32_t>(view.materials.size()));
+            I.device->updateBuffer(I.materialBuffer, 0, std::as_bytes(view.materials));
+        }
 
         rhi::ColorAttachment ca;
         ca.target = view.target;
@@ -99,10 +115,11 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         rtd.depth = &da;
         rtd.width = view.width; rtd.height = view.height;
 
-        std::array<rhi::BufferBinding, 2> binds{};
+        std::array<rhi::BufferBinding, 3> binds{};
         uint32_t nbinds = 0;
         binds[nbinds++] = { .binding = 0, .buffer = I.cameraUBO };
         if (I.instanceBuffer.valid()) binds[nbinds++] = { .binding = 1, .buffer = I.instanceBuffer };
+        if (I.materialBuffer.valid()) binds[nbinds++] = { .binding = 2, .buffer = I.materialBuffer };
         rhi::ResourceBindings rb;
         rb.buffers = std::span<const rhi::BufferBinding>(binds.data(), nbinds);
 

@@ -2,10 +2,10 @@
 //  mesh.slang
 //  engine shaders
 //
-//  Instanced mesh shader. A shared camera (view-projection) plus a per-instance storage
-//  buffer (model + normal matrix), indexed by SV_InstanceID. Consumes the canonical
-//  engine::Vertex; attribute order matches render::coreVertexLayout(). Simple fixed-direction
-//  diffuse shading. Column-major matrices (see shaders/CMakeLists.txt) so glm uploads direct.
+//  Instanced mesh shader. A shared camera (view-projection), a per-instance storage buffer
+//  (model + normal matrix + material index), and a materials storage buffer. Each instance
+//  looks up its material's base color. Consumes the canonical engine::Vertex; column-major
+//  matrices (see shaders/CMakeLists.txt).
 //
 
 struct Camera {
@@ -20,6 +20,13 @@ struct Instance {
     uint3    _pad;
 };
 StructuredBuffer<Instance> instances;
+
+struct Material {
+    float4 baseColorFactor;
+    int    baseColorTexture;   // index into the bindless table (-1 = none); unused until bindless lands
+    uint3  _pad;
+};
+StructuredBuffer<Material> materials;
 
 struct VSInput {
     float3 position;   // attribute 0
@@ -37,11 +44,13 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput vertexMain(VSInput input, uint instanceID : SV_InstanceID) {
     Instance inst = instances[instanceID];
+    Material mat  = materials[inst.materialIndex];
+
     VSOutput output;
     float4 world    = mul(inst.model, float4(input.position, 1.0));
     output.position = mul(camera.viewProj, world);
     output.normal   = mul((float3x3)inst.normalMatrix, input.normal);
-    output.color    = input.color;
+    output.color    = input.color * mat.baseColorFactor.rgb;
     return output;
 }
 

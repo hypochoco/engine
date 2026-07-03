@@ -85,13 +85,19 @@ int main() {
     render::MeshHandle sphere = geometry.upload(primitives::makeSphere(0.35f, 16, 32));
     render::Renderer renderer(device, geometry);
 
-    // Grid layout in the XZ plane, centered at the origin. Per-instance color varies by cell.
+    // Grid layout in the XZ plane, centered at the origin. Per-instance color via materials.
     const float spacing = 1.0f;
     const float extent  = (grid - 1) * spacing * 0.5f;
     std::vector<render::InstanceData> instances(count);
-    auto baseColor = [&](int ix, int iz) {
-        return glm::vec3(0.3f + 0.7f * float(ix) / grid, 0.4f, 0.3f + 0.7f * float(iz) / grid);
-    };
+    std::vector<render::MaterialGPU>  materials(count);
+    for (int iz = 0; iz < grid; ++iz) {
+        for (int ix = 0; ix < grid; ++ix) {
+            const int i = iz * grid + ix;
+            instances[i].materialIndex = static_cast<uint32_t>(i);
+            materials[i].baseColorFactor = glm::vec4(
+                0.25f + 0.75f * float(ix) / grid, 0.35f, 0.25f + 0.75f * float(iz) / grid, 1.0f);
+        }
+    }
 
     render::RenderItem item;
     item.mesh = sphere; item.pipeline = pipe;
@@ -114,8 +120,6 @@ int main() {
                 render::InstanceData& d = instances[iz * grid + ix];
                 d.model = m;
                 d.normalModel = m;
-                // color isn't per-instance in the vertex stream; bake into geometry later.
-                (void)baseColor;
             }
         }
 
@@ -128,6 +132,7 @@ int main() {
         view.width = W; view.height = H;
         view.items = std::span<const render::RenderItem>(&item, 1);
         view.instances = std::span<const render::InstanceData>(instances);
+        view.materials = std::span<const render::MaterialGPU>(materials);
 
         FrameContext frame = device.beginFrame();
         if (!frame.swapchainTarget().valid()) { device.endFrame(std::move(frame)); continue; }

@@ -101,14 +101,15 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       (swapchain + depth recreate; currently fixed-size), staging for Private resources,
       fence-gated deletion, per-frame-in-flight sync.
 - [ ] **7. Split `Swapchain` + `Renderer`; headless path** for both backends (ML/offline).
-- [~] **8. Rework the render-list / instance path** — STARTED (2026-07-03): the ECS-facing
-      `RenderView { view/proj, target, RenderItem[], InstanceData[] }` contract is live and
-      `render::Renderer` consumes it — per-instance SoA data in a storage buffer, one
-      **instanced** `drawIndexed` per RenderItem (`tst/mesh_offscreen` headless-verified;
-      `tst/visual_window` draws an NxN instanced sphere grid, `ENGINE_GRID=N`). Still to do
-      against the ECS once it exists: extraction/culling/sorting into the render list, fatten
-      per-instance data (material index → bindless), and the indirect/GPU-driven path (the
-      RenderView contract already allows swapping to `drawIndexedIndirect`).
+- [~] **8. Rework the render-list / instance path** — instancing + **per-instance materials**
+      done (2026-07-03): `RenderView { view/proj, target, RenderItem[], InstanceData[],
+      MaterialGPU[] }` consumed by `render::Renderer`; per-instance SoA data + a materials
+      storage buffer (each instance's `materialIndex` → `baseColorFactor`); one instanced
+      `drawIndexed` per RenderItem. Verified: `mesh_offscreen` (3 differently-colored instanced
+      spheres, red center), `visual_window` (NxN color-gradient grid, `ENGINE_GRID=N`).
+      Remaining: **bindless texture table** (`baseColorTexture` + `registerBindlessTexture` are
+      stubs — defer until textured surfaces are needed; Metal argument-buffer + residency work);
+      ECS-driven extraction/culling/sorting once ECS exists; the indirect/GPU-driven path.
 
 Known bugs/smells to fix along the way (details in the refactor investigation):
 - [ ] `loadQuad` mis-computes `vertexCount`/`indexCount` (cumulative, not per-mesh counts).

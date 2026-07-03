@@ -71,13 +71,18 @@ int main() {
     render::MeshHandle sphere = geometry.upload(primitives::makeSphere(0.5f, 24, 48));
     render::Renderer renderer(device, geometry);
 
-    // Three instances: one centered (covers the center pixel) + two offset.
-    std::vector<render::InstanceData> instances;
-    for (glm::vec3 p : { glm::vec3(0, 0, 0), glm::vec3(-1.2f, 0, 0), glm::vec3(1.2f, 0, 0) }) {
-        render::InstanceData d;
-        d.model = glm::translate(glm::mat4(1.0f), p);
-        d.normalModel = d.model;
-        instances.push_back(d);
+    // Three instances (center + two offset), each with its own material color.
+    std::vector<render::MaterialGPU> materials(3);
+    materials[0].baseColorFactor = {1.0f, 0.2f, 0.2f, 1.0f};   // red   (center)
+    materials[1].baseColorFactor = {0.2f, 1.0f, 0.2f, 1.0f};   // green (left)
+    materials[2].baseColorFactor = {0.2f, 0.2f, 1.0f, 1.0f};   // blue  (right)
+
+    const glm::vec3 positions[3] = { {0, 0, 0}, {-1.2f, 0, 0}, {1.2f, 0, 0} };
+    std::vector<render::InstanceData> instances(3);
+    for (uint32_t i = 0; i < 3; ++i) {
+        instances[i].model = glm::translate(glm::mat4(1.0f), positions[i]);
+        instances[i].normalModel = instances[i].model;
+        instances[i].materialIndex = i;
     }
     render::RenderItem item;
     item.mesh = sphere; item.pipeline = pipe;
@@ -90,6 +95,7 @@ int main() {
     view.width = W; view.height = H;
     view.items = std::span<const render::RenderItem>(&item, 1);
     view.instances = std::span<const render::InstanceData>(instances);
+    view.materials = std::span<const render::MaterialGPU>(materials);
 
     FrameContext frame = device.beginFrame();
     renderer.render(frame, std::span<const render::RenderView>(&view, 1));
@@ -103,11 +109,12 @@ int main() {
 
     std::printf("center rgba = %u %u %u %u\n", center[0], center[1], center[2], center[3]);
     std::printf("corner rgba = %u %u %u %u\n", corner[0], corner[1], corner[2], corner[3]);
-    std::printf("instances = %zu\n", instances.size());
+    std::printf("instances = %zu, materials = %zu\n", instances.size(), materials.size());
 
-    const bool centerLit    = (center[0] + center[1] + center[2]) > 120 && center[3] == 255;
+    // Center instance uses the red material → red channel should dominate.
+    const bool centerRed    = center[0] > 110 && center[0] > center[1] + 40 && center[0] > center[2] + 40;
     const bool cornerIsClear = corner[0] < 70 && corner[1] < 70 && corner[2] < 70;
-    if (!centerLit)     { std::printf("FAIL: center is not a lit sphere\n"); return 1; }
+    if (!centerRed)     { std::printf("FAIL: center is not the red-material sphere\n"); return 1; }
     if (!cornerIsClear) { std::printf("FAIL: corner is not the clear color\n"); return 1; }
 
     std::printf("mesh offscreen ok\n");

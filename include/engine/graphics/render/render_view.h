@@ -42,6 +42,13 @@ struct InstanceData {
     uint32_t  _pad[3]       = {0, 0, 0};
 };
 
+// GPU material record (matches the shader's Material). Indexed by InstanceData::materialIndex.
+struct MaterialGPU {
+    glm::vec4 baseColorFactor{1.0f};
+    int32_t   baseColorTexture = -1;   // bindless-table index (-1 = none); unused until bindless
+    uint32_t  _pad[3]          = {0, 0, 0};
+};
+
 // A single view/pass to render. Multiple views enable multi-pass (deferred G-buffer →
 // lighting), multiple cameras, or many parallel-env targets.
 struct RenderView {
@@ -54,6 +61,7 @@ struct RenderView {
 
     std::span<const RenderItem>   items;      // pre-sorted by pipeline → mesh → material
     std::span<const InstanceData> instances;  // indexed by RenderItem instance ranges
+    std::span<const MaterialGPU>  materials;  // indexed by InstanceData::materialIndex
 };
 
 } // namespace engine::render

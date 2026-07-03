@@ -50,12 +50,17 @@ Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdir
 > `.metallib` libs; pipeline + vertex descriptor + depth-stencil; render-encoder lifecycle;
 > **indexed + instanced draw**; depth; readback; CAMetalLayer present via `metal_window.mm`).
 > `render::GeometryStore` uploads `core::MeshData` → shared buffers; **`render::Renderer`**
-> consumes `RenderView`s (camera uniform @buffer0 + per-instance storage @buffer1 + shared
-> vertex data @buffer16), owning the per-frame camera/instance buffers + depth target.
-> Shader `shaders/mesh.slang` is instanced (SV_InstanceID → per-instance model). Tests:
-> `rhi_smoke`, `triangle_offscreen`, `mesh_offscreen` (headless: 3 instanced spheres via the
-> Renderer, pixel-verified), `visual_window` (windowed: NxN instanced sphere grid, orbiting
-> camera). Shaders via `slangc` (column-major). Legacy Vulkan parked under
+> consumes `RenderView`s (camera uniform @buffer0 + per-instance storage @buffer1 + materials
+> storage @buffer2 + shared vertex data @buffer16), owning the per-frame buffers + depth
+> target. **Per-instance materials**: each instance carries a `materialIndex` into a materials
+> buffer (`baseColorFactor`), so instanced draws are individually colored (bindless *textures*
+> are the reserved next step: `baseColorTexture` field + `Device::registerBindlessTexture`
+> exist but aren't wired). Shader `shaders/mesh.slang` is instanced (SV_InstanceID → per-
+> instance model + material). Tests:
+> `rhi_smoke`, `triangle_offscreen`, `mesh_offscreen` (headless: 3 instanced spheres, each a
+> different material color, pixel-verified red center), `visual_window` (windowed: NxN
+> instanced sphere grid with a per-instance color gradient, orbiting camera). Shaders via
+> `slangc` (column-major). Legacy Vulkan parked under
 > `src/graphics/vulkan/`. See investigations/2026-07-02-rhi-interface-plan.md §13.
 
 ## Graphics module
