@@ -7,6 +7,9 @@ target_link_libraries(ecs_test PRIVATE engine::ecs)
 add_executable(scheduler_test scheduler_test.cpp)
 target_link_libraries(scheduler_test PRIVATE engine::ecs)
 
+add_executable(physics_test physics_test.cpp)
+target_link_libraries(physics_test PRIVATE engine::physics)
+
 # RHI backend tests. Metal is the only implemented backend so far, so build these on Apple
 # only; they become cross-backend once Vulkan is ported behind the RHI.
 if(APPLE)

@@ -104,10 +104,24 @@ from an entity layer yet.
 
 `MAX_FRAMES_IN_FLIGHT = 1`, `NUM_TEXTURES = 16`, `MAX_ENTITIES = 16`, `WIDTH/HEIGHT 800x600`.
 
-## Physics module
+## Physics module (`engine::physics`, Phase 0, 2026-07-03)
 
-Stub only: `Physics::test()` prints `"hello physics"`. No simulation, no integrator,
-no collision, no broadphase.
+ECS-free, backend-agnostic core (depends on `engine::core` only — no ecs, no graphics).
+Design + phasing + differentiable-backend design-ahead: investigations/2026-07-03-physics-plan.md.
+- **Shapes**: `Sphere`, `Plane` (half-space). GJK `support()` seam is Phase 2.
+- **Collision** (`collide::sphereVsPlane`, `sphereVsSphere`): exact fast paths filling a
+  **solver-agnostic** `Contact` (continuous signed `separation`, normal, point) — consumable
+  by both a future impulse solver and a compliant/soft solver.
+- **Dynamics**: `RigidBodyState` (position, orientation quat, lin/ang velocity, invMass,
+  body-space invInertia), `PhysicsMaterial` (restitution, friction, compliance), inertia
+  helpers (`solidSphere{Inertia,InvInertia}`, `worldInvInertia`).
+- **Integration** (pure kernels): semi-implicit `integrateLinear`; orientation via the SO(3)
+  **exponential map** (`so3ExpMap`/`so3LogMap`/`integrateOrientation`) — differentiable-ready
+  (§14 constraints), not add-and-renormalize.
+- `physics::Real` localizes the scalar type for a future double/dual-number switch.
+- Driver: `tst/physics_test` (analytic checks: free-fall closed form, contacts, exp/log
+  orientation, inertia). **Not yet**: `PhysicsWorld` interface + realtime backend (Phase 1),
+  GJK/EPA + broadphase (Phase 2), implicit/differentiable backend + parallel worlds (Phase 3).
 
 ## ECS module (`engine::ecs`, 2026-07-03)
 

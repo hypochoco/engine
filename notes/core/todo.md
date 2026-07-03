@@ -137,8 +137,21 @@ Known bugs/smells to fix along the way (details in the refactor investigation):
 
 ## Physics
 
-- [ ] Replace the stub with a real simulation core (integrator, collision, broadphase).
-- [ ] Decide how physics state maps onto ECS components.
+Plan (all 8 decisions settled): [2026-07-03-physics-plan.md](../investigations/2026-07-03-physics-plan.md).
+Multi-backend behind a **runtime-virtual** `PhysicsWorld`; shared collision/broadphase
+substrate; realtime (impulse) + implicit/**differentiable** backends; rotational dynamics.
+
+- [~] **Simulation core.** **Phase 0 DONE** (2026-07-03): ECS-free `engine::physics` core —
+      shapes (sphere/plane), exact contacts (solver-agnostic `Contact`), rigid-body state +
+      inertia, pure integration kernels (semi-implicit + SO(3) exp/log orientation);
+      `tst/physics_test` (analytic). Next: Phase 1 `PhysicsWorld` interface + realtime
+      sequential-impulse backend + fixed timestep + the **ball-rolls-down-a-plane** milestone;
+      Phase 2 GJK/EPA + SAP/BVH broadphase (100k); Phase 3 implicit/differentiable backend +
+      parallel worlds.
+- [x] **How physics state maps onto ECS components.** DECIDED (2026-07-03): backend owns
+      packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate
+      (no replacement/inheritance); a `physics_ecs` bridge syncs world poses → Transform. ML
+      path omits Transform entirely. (physics-plan Q2/Q3)
 
 ## Infra / quality
 

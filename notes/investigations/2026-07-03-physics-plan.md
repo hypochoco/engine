@@ -304,28 +304,47 @@ velocity increases, and angular velocity becomes non-zero (it rolls, not slides)
 
 ---
 
-## 11. Open decisions (need owner input)
+## 11. Decisions & open questions
 
-- **Q1 — Dispatch.** Confirm **runtime-virtual `PhysicsWorld`** (recommended, §1) over a
-  compile-time/template-policy world. (A template policy is possible for a single hot backend
-  but blocks game+ML coexistence.)
-- **Q2 — State ownership.** Confirm **backend-owns-state + bulk ECS sync** (recommended, §5-of-0)
-  vs ECS component columns as the dynamics truth (simpler for games, worse for implicit/ML
-  layouts).
-- **Q3 — Module split.** Separate targets `engine::physics` (ECS-free core) + `engine::physics_ecs`
-  (bridge) [recommended, keeps core reusable], vs a single `engine::physics` that just depends
-  on `engine::ecs` (fewer targets, like nothing else forces the split yet — YAGNI tension).
-- **Q4 — Determinism scope.** Same-binary reproducibility now; cross-platform bit-exact later
-  (recommended) vs commit to cross-platform now (expensive).
-- **Q5 — Realtime contact solver.** Sequential impulse / PGS + substeps first (recommended) vs
-  TGS-soft / position-based dynamics.
-- **Q6 — Coordinate/units conventions.** Confirm right-handed, y-up, meters, gravity
-  `-9.81 y`, to stay consistent with the render camera conventions (glm, column-major).
-- **Q7 — Dynamic broadphase.** SAP first (recommended for many uniform spheres) vs dynamic BVH;
-  decide by benchmark in Phase 2.
-- **Q8 — ML ambitions.** Is **differentiable physics** (gradients through the step for
-  learning) an eventual goal? It heavily influences the implicit backend's internals — worth
-  knowing now even if deferred.
+**Decided (owner, 2026-07-03):**
+- **Q1 — Dispatch: runtime-virtual `PhysicsWorld`** (coarse boundary), concrete non-virtual
+  hot loops. ✅
+- **Q4 — Determinism scope: same-binary reproducibility now**, cross-platform bit-exact is a
+  later, separate goal. ✅
+- **Q6 — Conventions: right-handed, y-up, meters, gravity `-9.81 y`** (matches render/glm). ✅
+- **Q7 — Dynamic broadphase: SAP first**, benchmark vs dynamic BVH in Phase 2. ✅
+- **Q8 — Differentiable physics IS a goal.** Gradients through the step (for learning) are an
+  eventual target. This constrains the ML/implicit backend: state must be a contiguous,
+  index-stable tensor with a well-defined `state_{t+1}=f(state_t, θ)` and an adjoint;
+  contacts will likely use a **compliant/soft** formulation (smoother gradients) + analytic
+  (implicit-function-theorem) or unrolled autodiff. It also settles Q2 toward backend-owned
+  state (see below). Detection stays shared; only the ML solver differs.
+
+**Still under discussion (Q2, Q3, Q5) — leanings below, pending confirmation:**
+- **Q2 — State ownership: backend-owns-state + bulk ECS sync.** ✅ (owner, 2026-07-03) Q8
+  effectively forces this for the ML backend (contiguous, index-stable state tensor for
+  adjoints / backprop-through-time); serves realtime + parallel worlds too.
+  - **Transform vs RigidBody — keep them separate, composed; no inheritance, no replacement.**
+    (owner, 2026-07-03) `Transform` stays the single universal pose interface (rendering,
+    culling, queries, gameplay all read it; physics is just one producer, only for dynamic
+    bodies). `RigidBody = { BodyHandle }` — a handle into the world's arrays, **no pose stored
+    in the ECS** (so no in-ECS duplication). Rejected: (a) *dropping* Transform when a
+    RigidBody is present → forces every spatial consumer to branch / breaks the
+    `<Transform, RenderMesh>` extraction contract; (b) `RigidBody : Transform` *inheritance* →
+    fights composition storage (would land in the RigidBody column, invisible to
+    `query<Transform>`), buys nothing. **"No Transform" is instead achieved by composition**:
+    the pure-ML/headless path simply omits Transform + the sync system and reads world state
+    tensors directly (enabled by the ECS-free core, Q3). Authority is one-way: physics owns
+    the pose for physical bodies; gameplay teleports go through the world API, never by writing
+    Transform directly.
+- **Q3 — Module split: two targets** `engine::physics` (ECS-free core) + `engine::physics_ecs`
+  (bridge). ✅ (owner, 2026-07-03) The ML training loop is a real ECS-free consumer of the
+  core → not speculative. Bridge is its own target (NOT folded into `scene`, which pulls
+  graphics).
+- **Q5 — Realtime contact solver: sequential impulse (PGS) + substeps + warm-start.** ✅
+  (owner, 2026-07-03) **Future: attempt PBD/XPBD.** Differentiable-contact concern lives in
+  the implicit ML backend (compliant contacts + adjoints), not here — a key reason to keep
+  solvers separate but detection shared.
 
 ---
 
@@ -338,3 +357,92 @@ velocity increases, and angular velocity becomes non-zero (it rolls, not slides)
   physics and (e.g.) culling use them — start them in `physics/shapes/` and promote on the 2nd
   consumer (YAGNI).
 - **No graphics dependency** anywhere in physics.
+
+---
+
+## 13. Differentiable & implicit backend (design-ahead, Phase 3+)
+
+Not implemented for a while, but the design below is what Phase 0/1 must stay compatible with.
+The goal (Q8): compute gradients of a scalar loss `L(trajectory)` w.r.t. parameters `θ`
+(initial state, masses/inertia, material params, controls, gravity, even shape params), so the
+sim can be dropped into gradient-based learning / trajectory-opt / system-id.
+
+### 13.1 The step as a differentiable map
+Model each step as `s_{t+1} = f(s_t, θ, u_t)` with `s` the full state, `θ` params, `u` controls.
+Gradients of `L` come by chaining vector-Jacobian products backward across `T` steps
+(backprop-through-time / the adjoint method).
+
+Two gradient routes, both kept open:
+- **Analytic adjoint / implicit differentiation.** A step defined by solving `g(s_{t+1}, s_t,
+  θ)=0` (implicit integrator, or a contact solve at its fixed point) gets `∂s_{t+1}/∂s_t` and
+  `∂s_{t+1}/∂θ` from the **implicit function theorem** — no differentiating through solver
+  iterations, iteration-count-independent, stable. Preferred for the solver core (cf. Dojo,
+  OptNet).
+- **Unrolled autodiff.** Reverse-mode AD through the op sequence; simpler to extend but
+  O(T·state) memory → needs **checkpointing** (store state every k steps, recompute forward
+  in the backward pass).
+
+### 13.2 The hard part: contact is non-smooth
+Hard contact is a complementarity condition (normal force ≥0, separation ≥0, complementary);
+its gradients are discontinuous / a.e.-zero. Resolution (this is why the ML backend's solver
+**differs** from the realtime PGS one):
+- **Compliant / soft contact** (spring-damper or **XPBD compliance**): replace the hard
+  constraint with a stiff-but-smooth force → finite, smooth gradients; stiffness is a tunable
+  (and itself differentiable) parameter. This is the primary model — and it's exactly the
+  PBD/XPBD direction Q5 already earmarked, so realtime-future and ML converge on compliance.
+- **Implicit time-stepping + IFT** through the (relaxed) complementarity solution for harder
+  contact when needed.
+- **Randomized smoothing** (explicit, seeded) as a training-side fallback when analytic
+  gradients are uninformative.
+
+### 13.3 Integrator
+Backward Euler (`v_{t+1}=v_t+h M⁻¹F(x_{t+1},v_{t+1})`, `x_{t+1}=x_t+h v_{t+1}`): solve the
+nonlinear system per step (Newton; each iter a linear solve), unconditionally stable for stiff
+compliant contacts/springs. The converged solution is differentiated via IFT (§13.1).
+"Integrator-pluggable": semi-implicit / RK4 available for smooth (contact-free) accuracy.
+
+### 13.4 State & parameters as tensors
+- **State is one flat, contiguous tensor** with a fixed, documented layout, **index-stable for
+  the whole rollout** (no body reordering mid-trajectory). Per rigid body:
+  `[pos(3), quat(4), linVel(3), angVel(3)]`.
+- **Orientation lives on a manifold.** Gradients live in the tangent space `so(3)`; orientation
+  updates must use **differentiable exp/log maps** (not ad-hoc "add then renormalize", which
+  corrupts gradients). ← concrete Phase-0 constraint (§14).
+- **Everything differentiable-w.r.t. is data, never a constant**: mass, inverse inertia,
+  restitution, friction, **compliance/stiffness**, gravity, control forces — all live in
+  settable arrays exposed as a "parameter block."
+- **Batch dimension for parallel envs**: state laid out to add an outer batch (worlds) cleanly,
+  so many envs differentiate/step together and the layout stays GPU-portable (SoA, per-field
+  contiguous). No GPU now; just don't preclude it.
+
+### 13.5 AD mechanism — deferred, not precluded
+Choice among (a) hand-written analytic adjoints, (b) a small in-house reverse-mode tape over
+our math, (c) an external tool (e.g. Enzyme/LLVM autodiff). **Not decided now.** The obligation
+on earlier phases is only to keep the step *adjoint-able*: pure functions of explicit
+(state, params), no hidden mutable global state, explicit seeded RNG, checkpointable state.
+
+---
+
+## 14. Constraints propagated to Phase 0 / earlier phases
+
+These are cheap disciplines (no speculative code) that keep §13 reachable. Phase 0 **must**
+honor them:
+
+1. **Pure kernels.** Integrate / contact / force helpers are free functions over explicit
+   state + params (spans/values in, results out) — **no hidden mutable statics, no global
+   RNG, no singletons.** (Also lets the realtime backend reuse them.)
+2. **Orientation via exp/log maps.** Provide `so3ExpMap(rotvec)→quat` (+ `log`) and integrate
+   orientation through it, not by `q += 0.5ωq; normalize`. Differentiable and 2nd-order-clean.
+3. **Scalar type localized.** Introduce `physics::Real` (= `float` now). Use it consistently so
+   a later switch to `double` / a dual/adjoint scalar is a localized change, not a rewrite.
+   (Do **not** template everything now — YAGNI; just don't hardcode `float` everywhere.)
+4. **Solver-agnostic contact data.** The `Contact`/manifold struct carries a **continuous
+   signed separation** (+ normal, point(s), the two bodies) and does **not** bake in
+   impulse-vs-compliant assumptions. Both a hard impulse solver and a compliant/soft force can
+   consume the same manifold.
+5. **Index-stable, checkpointable state.** Body storage keyed by stable index/handle; no
+   reordering; deterministic iteration. State must be snapshot/restore-able.
+6. **Params are data.** Mass, inertia, restitution, friction, (future) compliance, gravity all
+   live in structs/arrays — never hardcoded constants in the step.
+7. **Fixed timestep `h` is an explicit argument**, never baked into a kernel.
+8. **Deterministic + explicit-seed randomness** (Phase 0 kernels are deterministic anyway).
