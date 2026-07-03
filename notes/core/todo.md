@@ -101,8 +101,14 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       (swapchain + depth recreate; currently fixed-size), staging for Private resources,
       fence-gated deletion, per-frame-in-flight sync.
 - [ ] **7. Split `Swapchain` + `Renderer`; headless path** for both backends (ML/offline).
-- [ ] **8. Rework the render-list / instance path** against the ECS interface once ECS
-      exists (fatten `InstanceSSBO`, upload only what's used, consider indirect/bindless).
+- [~] **8. Rework the render-list / instance path** — STARTED (2026-07-03): the ECS-facing
+      `RenderView { view/proj, target, RenderItem[], InstanceData[] }` contract is live and
+      `render::Renderer` consumes it — per-instance SoA data in a storage buffer, one
+      **instanced** `drawIndexed` per RenderItem (`tst/mesh_offscreen` headless-verified;
+      `tst/visual_window` draws an NxN instanced sphere grid, `ENGINE_GRID=N`). Still to do
+      against the ECS once it exists: extraction/culling/sorting into the render list, fatten
+      per-instance data (material index → bindless), and the indirect/GPU-driven path (the
+      RenderView contract already allows swapping to `drawIndexedIndirect`).
 
 Known bugs/smells to fix along the way (details in the refactor investigation):
 - [ ] `loadQuad` mis-computes `vertexCount`/`indexCount` (cumulative, not per-mesh counts).

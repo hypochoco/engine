@@ -2,19 +2,24 @@
 //  mesh.slang
 //  engine shaders
 //
-//  Consumes the canonical engine::Vertex (position/normal/uv/color). Transforms by a camera
-//  uniform (MVP + normal matrix) and applies a simple fixed-direction diffuse term. Attribute
-//  order matches engine::Vertex field order, which render::coreVertexLayout() mirrors.
-//
-//  Compiled with column-major matrix layout (see shaders/CMakeLists.txt) so glm matrices
-//  upload directly without transposing.
+//  Instanced mesh shader. A shared camera (view-projection) plus a per-instance storage
+//  buffer (model + normal matrix), indexed by SV_InstanceID. Consumes the canonical
+//  engine::Vertex; attribute order matches render::coreVertexLayout(). Simple fixed-direction
+//  diffuse shading. Column-major matrices (see shaders/CMakeLists.txt) so glm uploads direct.
 //
 
-struct Uniforms {
-    float4x4 mvp;
-    float4x4 normalMatrix;
+struct Camera {
+    float4x4 viewProj;
 };
-ConstantBuffer<Uniforms> uniforms;
+ConstantBuffer<Camera> camera;
+
+struct Instance {
+    float4x4 model;
+    float4x4 normalMatrix;
+    uint     materialIndex;
+    uint3    _pad;
+};
+StructuredBuffer<Instance> instances;
 
 struct VSInput {
     float3 position;   // attribute 0
@@ -30,10 +35,12 @@ struct VSOutput {
 };
 
 [shader("vertex")]
-VSOutput vertexMain(VSInput input) {
+VSOutput vertexMain(VSInput input, uint instanceID : SV_InstanceID) {
+    Instance inst = instances[instanceID];
     VSOutput output;
-    output.position = mul(uniforms.mvp, float4(input.position, 1.0));
-    output.normal   = mul((float3x3)uniforms.normalMatrix, input.normal);
+    float4 world    = mul(inst.model, float4(input.position, 1.0));
+    output.position = mul(camera.viewProj, world);
+    output.normal   = mul((float3x3)inst.normalMatrix, input.normal);
     output.color    = input.color;
     return output;
 }

@@ -48,6 +48,9 @@ struct RenderView {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
     rhi::RenderTargetHandle target;          // swapchain image OR offscreen texture(s)
+    uint32_t  width  = 0;                     // target dimensions (viewport + depth sizing)
+    uint32_t  height = 0;
+    float     clearColor[4] = {0.08f, 0.10f, 0.14f, 1.0f};
 
     std::span<const RenderItem>   items;      // pre-sorted by pipeline → mesh → material
     std::span<const InstanceData> instances;  // indexed by RenderItem instance ranges

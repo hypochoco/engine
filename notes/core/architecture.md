@@ -44,17 +44,18 @@ engine::engine (INTERFACE)
 Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdirectory`;
 `stb` header-only INTERFACE; `metal-cpp` vendored (not yet wired into include dirs).
 
-> ✅ **Build reality (2026-07-03)**: the full tree builds on macOS; the Metal backend renders
-> core meshes both **offscreen and to a window**. `engine_graphics` = RHI + Metal backend
-> (headless & windowed `MTL::Device`; handle pools; Slang `.metallib` shader libs; graphics
-> pipeline + vertex descriptor + depth-stencil; render-encoder frame lifecycle; indexed draw
-> + depth; readback; **CAMetalLayer swapchain + present** via an Objective-C++ shim
-> `metal_window.mm`). `render::GeometryStore` uploads `core::MeshData` → shared buffers →
-> `MeshHandle`s. Tests: `rhi_smoke`, `triangle_offscreen`, `mesh_offscreen` (headless,
-> pixel-verified) and **`visual_window`** (opens a GLFW window, renders a lit `core` sphere in
-> a present loop). CMake enables `OBJC`+`OBJCXX` on Apple, links Cocoa/Metal/QuartzCore/
-> Foundation. Shaders via `slangc` (`shaders/{triangle,mesh}.slang`; toolchain from
-> `scripts/get_slang.sh` → gitignored `tools/`). Legacy Vulkan parked under
+> ✅ **Build reality (2026-07-03)**: full tree builds on macOS; the Metal backend renders
+> **instanced core meshes through the Renderer/RenderView path**, offscreen and to a window.
+> `engine_graphics` = RHI + Metal backend (headless & windowed Device; handle pools; Slang
+> `.metallib` libs; pipeline + vertex descriptor + depth-stencil; render-encoder lifecycle;
+> **indexed + instanced draw**; depth; readback; CAMetalLayer present via `metal_window.mm`).
+> `render::GeometryStore` uploads `core::MeshData` → shared buffers; **`render::Renderer`**
+> consumes `RenderView`s (camera uniform @buffer0 + per-instance storage @buffer1 + shared
+> vertex data @buffer16), owning the per-frame camera/instance buffers + depth target.
+> Shader `shaders/mesh.slang` is instanced (SV_InstanceID → per-instance model). Tests:
+> `rhi_smoke`, `triangle_offscreen`, `mesh_offscreen` (headless: 3 instanced spheres via the
+> Renderer, pixel-verified), `visual_window` (windowed: NxN instanced sphere grid, orbiting
+> camera). Shaders via `slangc` (column-major). Legacy Vulkan parked under
 > `src/graphics/vulkan/`. See investigations/2026-07-02-rhi-interface-plan.md §13.
 
 ## Graphics module

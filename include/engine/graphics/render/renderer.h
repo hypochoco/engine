@@ -14,7 +14,7 @@
 
 #include "engine/graphics/render/render_view.h"
 
-namespace engine::rhi { class Device; }
+namespace engine::rhi { class Device; class FrameContext; }
 
 namespace engine::render {
 
@@ -29,11 +29,11 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     ~Renderer();
 
-    // Uploads per-frame instance/uniform data, then for each view: begin pass, bind
-    // pipeline (on change), bind the shared geometry + per-view resources, and issue one
-    // instanced indexed draw per RenderItem. A straight swap to drawIndexedIndirect later
-    // leaves this signature unchanged.
-    void render(std::span<const RenderView> views);
+    // Records the given views into the frame's command list: uploads per-view camera +
+    // instance data, then for each RenderItem binds its pipeline and issues one instanced
+    // indexed draw. The Device owns beginFrame/endFrame (present or readback); the Renderer
+    // owns pipelinesʼ per-frame buffers + the depth target. Manages no scene data.
+    void render(rhi::FrameContext& frame, std::span<const RenderView> views);
 
 private:
     struct Impl;
