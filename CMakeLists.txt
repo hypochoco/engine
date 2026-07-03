@@ -32,7 +32,9 @@ endif()
 
 # engine modules
 add_subdirectory(core)
+add_subdirectory(ecs)
 add_subdirectory(graphics)
+add_subdirectory(scene)
 add_subdirectory(physics)
 
 # shaders (compiled via slangc)
@@ -47,6 +49,8 @@ add_library(engine::engine ALIAS engine)
 
 target_link_libraries(engine INTERFACE
     engine::core
+    engine::ecs
     engine::graphics
+    engine::scene
     engine::physics
 )

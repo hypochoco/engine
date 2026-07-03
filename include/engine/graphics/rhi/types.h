@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+#include "engine/core/memory/handle.h"
+
 namespace engine::rhi {
 
 // -----------------------------------------------------------------------------
@@ -19,16 +21,9 @@ namespace engine::rhi {
 // -----------------------------------------------------------------------------
 // The Device owns every GPU object in pools; the public API passes these small value
 // handles. `generation` guards against using a handle whose slot was freed and reused.
+// The handle type is shared engine-wide (see core/memory/handle.h).
 template <class Tag>
-struct Handle {
-    static constexpr uint32_t kInvalid = 0xFFFF'FFFFu;
-
-    uint32_t index      = kInvalid;
-    uint32_t generation = 0;
-
-    constexpr bool valid() const { return index != kInvalid; }
-    constexpr bool operator==(const Handle&) const = default;
-};
+using Handle = engine::core::Handle<Tag>;
 
 struct BufferTag;
 struct TextureTag;

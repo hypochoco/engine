@@ -2,11 +2,12 @@
 //  visual_window.cpp
 //  engine::tst
 //
-//  Windowed instancing demo: a large grid of core spheres drawn in a single instanced draw
-//  call through the Renderer/RenderView path, with a perspective camera orbiting the grid.
-//  Each sphere bobs so the motion is obvious. Close the window to exit.
+//  ECS-driven windowed demo: a grid of sphere entities (Transform + RenderMesh +
+//  RenderMaterial) in an ecs::World. Each frame a "bob" system animates the transforms, the
+//  extraction system builds a RenderView, and the Renderer draws them in one instanced call.
+//  Camera orbits the grid. Close the window to exit.
 //
-//  Run:  ./build/tst/visual_window   (optionally set ENGINE_GRID=N for an NxN grid)
+//  Run:  ./build/tst/visual_window   (optionally ENGINE_GRID=N for an NxN grid)
 //
 
 #define GLFW_INCLUDE_NONE
@@ -25,10 +26,13 @@
 #include <string>
 #include <vector>
 
+#include "engine/core/core.h"                     // engine::Transform
+#include "engine/ecs/ecs.h"
 #include "engine/core/geometry/primitives.h"
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
+#include "engine/scene/extract.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -53,7 +57,7 @@ int main() {
     if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(1000, 750, "engine — instancing demo", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1000, 750, "engine — ECS instancing demo", nullptr, nullptr);
     if (!window) { std::printf("FAIL: window\n"); glfwTerminate(); return 1; }
 
     int fbw = 0, fbh = 0;
@@ -79,59 +83,52 @@ int main() {
     pdesc.depthFormat = Format::Depth32Float;
     pdesc.depth = { .test = true, .write = true, .op = CompareOp::Less };
     PipelineHandle pipe = device.createGraphicsPipeline(pdesc);
-    if (!pipe.valid()) { std::printf("FAIL: pipeline\n"); return 1; }
 
     render::GeometryStore geometry(device);
     render::MeshHandle sphere = geometry.upload(primitives::makeSphere(0.35f, 16, 32));
     render::Renderer renderer(device, geometry);
 
-    // Grid layout in the XZ plane, centered at the origin. Per-instance color via materials.
+    // ECS world: one entity per grid cell, each with a material color.
+    ecs::World world;
+    std::vector<render::MaterialGPU> materials(count);
     const float spacing = 1.0f;
     const float extent  = (grid - 1) * spacing * 0.5f;
-    std::vector<render::InstanceData> instances(count);
-    std::vector<render::MaterialGPU>  materials(count);
     for (int iz = 0; iz < grid; ++iz) {
         for (int ix = 0; ix < grid; ++ix) {
             const int i = iz * grid + ix;
-            instances[i].materialIndex = static_cast<uint32_t>(i);
             materials[i].baseColorFactor = glm::vec4(
                 0.25f + 0.75f * float(ix) / grid, 0.35f, 0.25f + 0.75f * float(iz) / grid, 1.0f);
+            world.spawn(
+                Transform{ .position = glm::vec3(ix * spacing - extent, 0.0f, iz * spacing - extent) },
+                scene::RenderMesh{ sphere },
+                scene::RenderMaterial{ static_cast<uint32_t>(i) });
         }
     }
 
-    render::RenderItem item;
-    item.mesh = sphere; item.pipeline = pipe;
-    item.firstInstance = 0; item.instanceCount = static_cast<uint32_t>(count);
-
-    std::printf("visual_window: instancing %d spheres (%dx%d grid) at %ux%u — close to exit.\n",
+    scene::ExtractedScene extracted;
+    std::printf("visual_window: ECS-driven %d spheres (%dx%d) at %ux%u — close to exit.\n",
                 count, grid, grid, W, H);
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         const float t = static_cast<float>(glfwGetTime());
 
-        // Animate per-instance model matrices (each sphere bobs on Y).
-        for (int iz = 0; iz < grid; ++iz) {
-            for (int ix = 0; ix < grid; ++ix) {
-                const float x = ix * spacing - extent;
-                const float z = iz * spacing - extent;
-                const float y = 0.35f * std::sin(t * 1.5f + (x + z) * 0.6f);
-                glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(x, y, z));
-                render::InstanceData& d = instances[iz * grid + ix];
-                d.model = m;
-                d.normalModel = m;
-            }
-        }
+        // "bob" system: animate each transform's Y from its X/Z (a query over the world).
+        world.query<Transform>().each([&](ecs::Entity, Transform& tr) {
+            tr.position.y = 0.35f * std::sin(t * 1.5f + (tr.position.x + tr.position.z) * 0.6f);
+        });
 
-        // Orbiting camera looking at the grid center.
+        // extraction system: world -> render lists.
+        scene::extract(world, pipe, extracted);
+
         const float r = extent * 2.2f + 3.0f;
         glm::vec3 eye(std::sin(t * 0.3f) * r, extent * 0.9f + 2.0f, std::cos(t * 0.3f) * r);
         render::RenderView view;
         view.view = glm::lookAt(eye, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
         view.proj = glm::perspective(glm::radians(55.0f), float(W) / float(H), 0.1f, 200.0f);
         view.width = W; view.height = H;
-        view.items = std::span<const render::RenderItem>(&item, 1);
-        view.instances = std::span<const render::InstanceData>(instances);
+        view.items = std::span<const render::RenderItem>(extracted.items);
+        view.instances = std::span<const render::InstanceData>(extracted.instances);
         view.materials = std::span<const render::MaterialGPU>(materials);
 
         FrameContext frame = device.beginFrame();

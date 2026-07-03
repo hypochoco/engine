@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include "engine/core/math/transform.h"
+#include "engine/core/memory/handle.h"
 #include "engine/core/geometry/vertex.h"
 #include "engine/core/geometry/mesh.h"
 #include "engine/core/geometry/material.h"

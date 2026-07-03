@@ -487,3 +487,58 @@ Still open (not blocking header work):
 6. Wire the **ECS extraction** path and drive the milestone (ball on plane → 100k spheres).
 
 Each step keeps the build green and is independently reviewable.
+
+---
+
+## 14. Bindless textures — status & implementation plan (added 2026-07-03)
+
+### Status
+- **Done**: per-instance *materials by index*. Each `InstanceData.materialIndex` selects an
+  entry in a materials storage buffer (`MaterialGPU.baseColorFactor`); the mesh shader looks
+  it up. This is the same index-into-a-buffer pattern bindless textures build on, and it gives
+  per-instance color today (verified: colored instanced spheres).
+- **Deferred**: the global **bindless texture table** itself. `MaterialGPU.baseColorTexture`
+  (int, −1 = none), `rhi::ResourceKind::BindlessTextureTable`, and
+  `Device::registerBindlessTexture / unregisterBindlessTexture` exist as **reserved stubs** so
+  it can be added without churn. `createSampler` is also still a stub.
+
+### Why deferred
+Not needed for the "ball rolling down a plane" milestone (solid-colored). It's a substantial,
+backend-specific subsystem (argument buffers + GPU residency on Metal). Per the project's YAGNI
+discipline: build it when the first **textured surface** appears (an asset with a base-color
+texture, or a renderer feature that needs sampling), not speculatively.
+
+### Metal implementation approach (when built)
+- **Storage**: the Device owns a growable **argument buffer** holding an array of texture
+  references (Metal 3 `MTLResourceID` / a `texture2d` array in an argument buffer, or a texture
+  heap) plus a free-list of indices.
+- **Registration**: `registerBindlessTexture(TextureHandle)` allocates an index, writes the
+  texture into that argument-buffer slot, returns the index (what goes in
+  `MaterialGPU.baseColorTexture`); `unregister` frees the slot.
+- **Residency (the key Metal gotcha)**: bindless textures are accessed *indirectly* (not via
+  `setFragmentTexture`), so the GPU must be told they're resident — call
+  `MTL::RenderCommandEncoder::useResource(s)` (or a `MTL::ResidencySet`) for all live bindless
+  textures before drawing.
+- **Binding**: bind the bindless argument buffer at a reserved fragment buffer index (low, next
+  to camera/instances/materials — pick an index Slang assigns; verify via MSL as we did for the
+  others). Bind the shared sampler(s).
+- **Slang**: declare an unbounded `Texture2D gTextures[]` + a `SamplerState`; fragment samples
+  `gTextures[material.baseColorTexture].Sample(s, uv) * baseColorFactor`. **Verify** Slang's
+  Metal codegen emits an argument-buffer array and confirm the buffer/sampler indices (this is
+  the main unknown — inspect the emitted MSL before writing the backend, as with the other
+  buffers).
+
+### Vulkan approach (future backend)
+Descriptor indexing (`VK_EXT_descriptor_indexing` / Vulkan 1.2): one large descriptor set of
+sampled images, update-after-bind, `nonuniformEXT` index in the shader. Same `.slang` source
+compiles to both — this is exactly why the shader toolchain is single-source.
+
+### RHI surface additions needed
+- Implement `createSampler` (currently a stub).
+- A way to make the bindless table active for a pass — either implicit (Device binds it +
+  sets residency each frame) or an explicit `CommandList` call. Prefer implicit so the
+  `RenderView` contract doesn't change.
+
+### Trigger
+First textured material (asset-loaded base-color texture) or a renderer feature requiring
+texture sampling. Until then, `baseColorFactor` (solid color) is sufficient.

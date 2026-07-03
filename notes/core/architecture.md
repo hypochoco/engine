@@ -109,9 +109,49 @@ from an entity layer yet.
 Stub only: `Physics::test()` prints `"hello physics"`. No simulation, no integrator,
 no collision, no broadphase.
 
+## ECS module (`engine::ecs`, 2026-07-03)
+
+Archetype (table) ECS, std-only + `engine::core` (no graphics/physics dependency — they're
+consumers). Design: investigations/2026-07-03-ecs-plan.md.
+
+- `Entity` = `core::Handle<EntityTag>` (generational). `World` maps entity index → generation
+  + location `{archetype, row}`.
+- **Archetype storage**: entities sharing a component set live in one table with contiguous
+  per-component columns (SoA); `signature` = sorted component ids. Swap-remove on destroy.
+- **Components**: any trivially-copyable struct; compile-time `componentId<T>()` (static
+  counter). The first shipped common component is **`engine::Transform`** (in `core`).
+- `World::spawn<Ts...>` / `get<T>` / `has<T>` / `destroy`; `query<Ts...>().each(fn)` (per
+  entity) / `.chunks(fn)` (per-archetype contiguous spans). Archetype iteration order is
+  stable (creation order) → deterministic.
+- **Resources**: typed singletons on the World (`setResource<T>`/`getResource<T>`), e.g.
+  `Time{dt}`.
+- **Scheduler** (`Schedule`): an ordered list of `void(World&)` systems, run in insertion
+  order (deterministic). Systems read resources + iterate via queries. Driver
+  `tst/scheduler_test` (gravity→integrate, hand-verified deterministic result).
+- Not yet: command buffer for deferred structural changes, add/remove-component, parallel
+  worlds / within-system parallelism (all planned).
+- Driver: `tst/ecs_test` (spawn 1500 across 2 archetypes, query/mutate/chunk/destroy, verified).
+
+`core` additions: `core/memory/handle.h` (`Handle<Tag>`, shared by rhi + ecs — the rhi's
+`Handle` is now an alias) and `core/math/transform.h` (`engine::Transform`).
+
+## Scene module (`engine::scene`, 2026-07-03)
+
+The ECS↔render bridge — the only module that depends on **both** `engine::ecs` and
+`engine::graphics` (keeps `ecs` graphics-free and the `Renderer` ECS-free).
+- **Render components**: `RenderMesh { render::MeshHandle }`, `RenderMaterial { uint32_t
+  materialIndex }` (trivially copyable → usable as ECS components).
+- **Extraction system**: `scene::extract(World, pipeline, ExtractedScene&)` queries
+  `<Transform, RenderMesh, RenderMaterial>`, buckets instances by mesh (one instanced draw per
+  mesh), and fills `RenderItem[] + InstanceData[]` for a `render::RenderView`.
+- Driver: `tst/scene_offscreen` (ECS entities → extract → render → pixel-verified);
+  `tst/visual_window` is now ECS-driven (a bob system + extraction each frame).
+
 ## What is NOT here yet
 
-- No ECS (no entity/component/system/registry/archetype types anywhere).
+- ECS: **archetype core exists** (`engine::ecs`: Entity/World/archetype storage/queries) —
+  see the ECS module section above. Still missing: command buffer + add/remove-component,
+  system scheduler + resources, render-extraction system, parallel worlds.
 - No application entry point (`main`) or engine loop driver — this is a library with no
   consumer.
 - Backend abstraction: the RHI **interface** headers exist (`include/engine/graphics/rhi/`

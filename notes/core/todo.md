@@ -5,9 +5,16 @@ Not commitments — a backlog to reason about.
 
 ## Foundational (blocks most other work)
 
-- [ ] **ECS core.** Decide on approach (archetype vs sparse-set) and stand up
-      entity/component storage + system scheduling. This is the stated organizing model
-      and nothing depends on it yet because it doesn't exist.
+- [~] **ECS core.** DECIDED archetype (2026-07-03); phase 1 landed: `engine::ecs` with
+      `Entity` (generational `core::Handle`), `World`, archetype/table storage, and
+      `query<Ts...>().each/.chunks`. Ships `engine::Transform` (in `core`). Verified by
+      `tst/ecs_test`. **Resources + ordered scheduler DONE** (2026-07-03): `World::setResource/
+      getResource` + `Schedule` (ordered `void(World&)` systems); `tst/scheduler_test`
+      (deterministic gravity→integrate). Next: command buffer + add/remove-component, and
+      parallel worlds. **Render-extraction DONE** (2026-07-03):
+      `engine::scene` bridge (`RenderMesh`/`RenderMaterial` components + `scene::extract` →
+      `RenderView`); `tst/scene_offscreen` + ECS-driven `tst/visual_window`. Plan:
+      [2026-07-03-ecs-plan.md](../investigations/2026-07-03-ecs-plan.md).
 - [ ] **Driver test harness (not a `main`).** The engine is a library with no application
       entry point; consuming apps own the loop. Instead build a suite of driver tests under
       `tst/` that construct subsystems and drive the update→render loop to validate them.
@@ -86,7 +93,7 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       `test`→`tst`, `ENGINE_RHI_METAL/VULKAN` defines. Remaining: enable `OBJCXX` when the
       `.mm` window shim lands (headless Metal is pure C++, so not needed yet).
 - [x] **5. Shader toolchain** — DONE (2026-07-03): **Slang** chosen and wired.
-      `scripts/get_slang.sh` fetches `slangc` into gitignored `tools/slang/`;
+      `scripts/get_slang.sh` fetches `slangc` into gitignored `external/slang/`;
       `shaders/CMakeLists.txt` compiles `.slang` → `.metallib` (Apple) / `.spv` (else) and
       exposes `ENGINE_SHADER_DIR`. `rhi::ShaderModule`/`createShader` loads the backend blob.
       First shader: `shaders/triangle.slang`.
@@ -142,9 +149,9 @@ Known bugs/smells to fix along the way (details in the refactor investigation):
 
 Parked decisions we agreed to defer. Answer before the work they gate.
 
-- [ ] **ECS approach: archetype vs sparse-set.** Archetype gives great cache/iteration
-      behavior and pairs well with the batched render path; sparse-set is simpler and more
-      flexible for add/remove. Gates the ECS core.
+- [x] **ECS approach: archetype vs sparse-set.** DECIDED (2026-07-03): **archetype** — best
+      multi-component iteration/cache, maps onto batched instancing + the 100k case; structural
+      changes (rare in a sim) are its weak spot but acceptable. (ecs-plan §3)
 - [ ] **ML training model: many envs in-process vs separate processes.** Drives the
       headless context design and how far determinism must reach.
 - [ ] **Offline renderer basis:** is `graphics_custom.cpp`'s offscreen helper set intended

@@ -1,6 +1,12 @@
 add_executable(tst test.cpp)
 target_link_libraries(tst PRIVATE engine::core)
 
+add_executable(ecs_test ecs_test.cpp)
+target_link_libraries(ecs_test PRIVATE engine::ecs)
+
+add_executable(scheduler_test scheduler_test.cpp)
+target_link_libraries(scheduler_test PRIVATE engine::ecs)
+
 # RHI backend tests. Metal is the only implemented backend so far, so build these on Apple
 # only; they become cross-backend once Vulkan is ported behind the RHI.
 if(APPLE)
@@ -19,8 +25,14 @@ if(APPLE)
     target_compile_definitions(mesh_offscreen PRIVATE
         ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
 
+    add_executable(scene_offscreen scene_offscreen.cpp)
+    target_link_libraries(scene_offscreen PRIVATE engine::scene)
+    add_dependencies(scene_offscreen shaders)
+    target_compile_definitions(scene_offscreen PRIVATE
+        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+
     add_executable(visual_window visual_window.cpp)
-    target_link_libraries(visual_window PRIVATE engine::graphics)
+    target_link_libraries(visual_window PRIVATE engine::scene)
     add_dependencies(visual_window shaders)
     target_compile_definitions(visual_window PRIVATE
         ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")

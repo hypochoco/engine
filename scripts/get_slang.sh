@@ -4,7 +4,8 @@
 #
 # Slang (https://github.com/shader-slang/slang) compiles our single-source .slang shaders to
 # both SPIR-V (Vulkan) and Metal (MSL/metallib). The toolchain is a prebuilt release binary,
-# not committed to the repo (tools/ is gitignored). CMake locates tools/slang/bin/slangc.
+# vendored under external/ but not committed (external/slang is gitignored). CMake locates
+# external/slang/bin/slangc.
 #
 # Usage: scripts/get_slang.sh [version]
 set -euo pipefail
@@ -20,7 +21,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="$ROOT/tools/slang"
+DEST="$ROOT/external/slang"
 ARCHIVE="slang-${VERSION}-${PLATFORM}.tar.gz"
 URL="https://github.com/shader-slang/slang/releases/download/v${VERSION}/${ARCHIVE}"
 
