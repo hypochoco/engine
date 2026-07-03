@@ -28,7 +28,7 @@ engine/
 │   ├── physics/CMakeLists.txt      engine_physics    (STATIC)
 │   └── physics_ecs/CMakeLists.txt  engine_physics_ecs(STATIC); physics↔ecs bridge
 ├── shaders/                    # .slang → .metallib/.spv via slangc
-├── tst/                        # driver executables (sources live here) + CMakeLists
+├── tst/                        # tests by <module>/<category>/ → tests | benchmarks | visuals
 └── external/                   # submodules: glfw, glm, stb, tinyobjloader, metal-cpp
 ```
 
@@ -109,16 +109,22 @@ from an entity layer yet.
 
 ECS-free, backend-agnostic core (depends on `engine::core` only — no ecs, no graphics).
 Design + phasing + differentiable-backend design-ahead: investigations/2026-07-03-physics-plan.md.
-- **Shapes**: `Sphere`, `Plane` (half-space), `Box` (oriented). GJK `support()` seam via
-  `SupportShape` (sphere/box).
+- **Shapes**: `Sphere`, `Plane` (half-space), `Box` (oriented), `ConvexHull` (vertex set),
+  `Capsule` (segment + radius). GJK `support()` seam via `SupportShape`.
 - **Collision**: exact primitive fast paths (`sphereVsSphere`, `sphereVsPlane`, analytic
-  `sphereVsBox`, multi-contact `boxVsPlane` corner-clip for stable resting), and **GJK + EPA**
-  (`collision/{gjk,epa,convex}`) for general convex pairs (box-box; extensible to hulls). EPA
-  builds its own non-degenerate tetrahedron (off-axis seed) to survive axis-aligned box
-  degeneracy. All fill the solver-agnostic `Contact`. Verified analytically in
-  `tst/gjk_epa_test` (box-box depth/normal exact) and `tst/physics_test` (box rests flat on a
-  plane: y=0.495, |ω|≈0; sphere rests on a box top). Sphere shapes use analytic tests (EPA only
-  approximates curved surfaces).
+  `sphereVsBox`, `boxVsPlane`/`pointsVsPlane`/`capsuleVsPlane` multi-contact resting, analytic
+  `capsuleVsSphere`/`capsuleVsCapsule`), **GJK closest-distance** (`gjk_distance`, witness
+  points) for accurate **capsule-vs-box/hull** (segment↔convex, up to 2 contacts), **GJK + EPA**
+  for the separating normal, and **face-clip manifolds** for polytope pairs — `box_box` and
+  generic `convex_manifold` (box-hull, hull-hull) — giving up to 4 points so boxes/hulls
+  **stack** stably. Verified: `tst/gjk_epa_test` (box/hull depth+normal exact, GJK-distance,
+  capsule-convex) and `tst/physics_test` (box/hull/capsule rest flat |ω|≈0; sphere-on-box;
+  box & hull **stacks** upright; capsule-on-box).
+- **Solver robustness**: Baumgarte correction velocity is **clamped** (prevents fast/low-inertia
+  bodies diverging). **CCD** (`WorldDef::continuousDetection`, default on): swept broadphase
+  AABBs + **speculative contacts** (contacts within the substep's closing distance, solved so a
+  body stops at the surface rather than tunnelling). Verified: a 120 m/s sphere stops on a small
+  box (y=0.60) instead of passing through (y=−27) — `tst/physics_test`.
 - **Dynamics**: `RigidBodyState`, `PhysicsMaterial` (restitution, friction, compliance),
   inertia helpers; pure integration kernels — semi-implicit `integrateLinear`, SO(3) exp/log
   orientation (`so3ExpMap`/`integrateOrientation`), differentiable-ready (plan §14).
@@ -134,7 +140,8 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
     cube of bodies (active list holds a whole slab).
   - **Uniform spatial-hash grid** (default): flat "index sort" (sorted `(cellHash,body)`
     entries + `thread_local` scratch, no per-step allocation), cell = largest AABB. **Linear
-    scaling** — body-steps/sec stays ~flat as n grows.
+    scaling**. The entry sort uses `core::parallelSort` when the world has a pool (sparse 65k
+    free-fall: ~1.3× from parallel sort + integration).
   Both verified against brute force in `tst/physics_test`. Planes (infinite) are tested against
   finite bodies directly. Measured (Release, free-fall, `tst/physics_bench`): at **65,536**
   bodies grid = **19.9 ms/step** vs SAP 192 ms vs the O(n²) baseline's ~14 s extrapolation
@@ -168,11 +175,13 @@ Depends on `engine::physics` + `engine::ecs` (separate from `scene`, which pulls
   speed, matching `a = g·sinθ/(1+2/5)` (measured 7.02 m in 2 s vs 7.01 analytic).
 - `tst/physics_window` (windowed, user-run): N spheres rolling down a tilted plane, physics →
   sync → `scene::extract` → Metal Renderer. Ties every subsystem together.
-- **Not yet**: box-box contact *manifolds* (SAT/clip — box-box is single-point EPA now, so
-  box stacking is less stable than box-on-plane), convex-hull/capsule colliders, parallel
-  broadphase sort, implicit/differentiable backend + parallel worlds (Phase 3). **Done in
-  Phase 2**: SAP + uniform-grid broadphase, ThreadPool (parallel worlds + colored solver),
-  GJK/EPA + box colliders (sphere/plane/box all collide).
+- **Not yet (Phase 3, deferred)**: implicit/differentiable backend + parallel worlds as an
+  ML training harness. Physics **Phase 2 + collision polish complete**: SAP + uniform-grid
+  broadphase (parallel-sorted), ThreadPool (parallel worlds + colored solver + parallel sort),
+  sphere/plane/box/hull/capsule colliders with GJK/EPA + GJK-distance + resting/stacking
+  **manifolds**, clamped-Baumgarte solver, and **CCD** (swept AABBs + speculative contacts).
+  Possible later: persistent warm-started manifolds, box-box/hull CCD (conservative advancement),
+  joints/constraints, sleeping/islands.
 
 ## ECS module (`engine::ecs`, 2026-07-03)
 

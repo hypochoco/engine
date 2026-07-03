@@ -8,7 +8,7 @@
 //  spin axis perpendicular to the descent plane) rather than merely sliding.
 //
 
-#include <cassert>
+#include "harness/harness.h"
 #include <cmath>
 #include <cstdio>
 
@@ -21,7 +21,7 @@
 #include "engine/physics_ecs/components.h"
 #include "engine/physics_ecs/systems.h"
 
-int main() {
+TST_CASE(physics, integration, milestone) {
     using namespace engine;
     using namespace engine::physics;
 
@@ -88,5 +88,4 @@ int main() {
     assert(std::fabs(omega.z) > 0.9f * glm::length(omega));
 
     std::printf("physics milestone ok (ball rolled down the incline)\n");
-    return 0;
 }

@@ -60,19 +60,17 @@ void ThreadPool::parallelFor(std::size_t count, const std::function<void(std::si
     };
 
     const unsigned n = workerCount();
-    std::atomic<unsigned> pending{ n };
     std::mutex doneMx;
     std::condition_variable doneCv;
+    unsigned pending = n;   // guarded by doneMx
 
     {
         std::lock_guard<std::mutex> lk(mutex_);
         for (unsigned w = 0; w < n; ++w) {
             tasks_.push([&] {
                 work();
-                if (pending.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                    std::lock_guard<std::mutex> dlk(doneMx);
-                    doneCv.notify_one();
-                }
+                std::lock_guard<std::mutex> dlk(doneMx);   // decrement + notify under the lock
+                if (--pending == 0) doneCv.notify_one();   // so the waiter can't destroy them early
             });
         }
     }
@@ -81,7 +79,7 @@ void ThreadPool::parallelFor(std::size_t count, const std::function<void(std::si
     work();   // the calling thread participates
 
     std::unique_lock<std::mutex> dlk(doneMx);
-    doneCv.wait(dlk, [&] { return pending.load(std::memory_order_acquire) == 0; });
+    doneCv.wait(dlk, [&] { return pending == 0; });
 }
 
 } // namespace engine::core

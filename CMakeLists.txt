@@ -38,6 +38,7 @@ add_subdirectory(modules)
 add_subdirectory(shaders)
 
 # tests
+enable_testing()
 add_subdirectory(tst)
 
 # engine meta target

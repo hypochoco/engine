@@ -29,9 +29,20 @@ A single engine serving three workloads on shared foundations:
 
 - No application `main`. Instead, **driver tests** (under `tst/`) exercise subsystems
   directly — they are how we run and validate the engine during development, standing in for
-  the consuming application. Expect a suite of these per driver/subsystem, not one binary.
-  (The `tst` CMake target was renamed from `test` to avoid colliding with CTest's reserved
-  target.)
+  the consuming application.
+- **Test architecture (2026-07-03)**: organized by **module then category** —
+  `tst/<module>/<category>/*.cpp` where module ∈ {core, ecs, physics, graphics} and category ∈
+  {unit, integration, benchmark, visual}. Each file **self-registers** cases via
+  `TST_CASE(module, category, name) { ... }` (shared harness in `tst/harness/`; `TST_REQUIRE`
+  throws + reports, no abort). CMake globs categories (`CONFIGURE_DEPENDS`) into **three
+  executables** — no per-file wiring:
+  - **`tests`** — unit + integration (headless pass/fail). Run all `./build/tst/tests`, filter
+    `--module physics`, `--category unit`, or `<module>.<name>`; `--list` enumerates. **CTest**
+    registers one entry per module (`ctest --test-dir build`).
+  - **`benchmarks`** — benchmark suites (run in **Release**; print timings, not pass/fail).
+  - **`visuals`** — interactive windowed demos (Apple); run one by name, e.g. `visuals rolling`.
+  Adding a test = drop a `.cpp` in the right folder with a `TST_CASE` — it's picked up
+  automatically. Graphics suites + all visuals are Apple-only (Metal backend).
 
 ## Constraints that follow from the goals
 

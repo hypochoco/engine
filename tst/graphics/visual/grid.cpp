@@ -1,3 +1,4 @@
+#include "harness/harness.h"
 //
 //  visual_window.cpp
 //  engine::tst
@@ -46,7 +47,7 @@ std::vector<std::byte> readFile(const std::string& path) {
 }
 }
 
-int main() {
+TST_CASE(graphics, visual, grid) {
     using namespace engine;
     using namespace engine::rhi;
 
@@ -54,11 +55,11 @@ int main() {
     if (const char* g = std::getenv("ENGINE_GRID")) { grid = std::atoi(g); if (grid < 1) grid = 1; }
     const int count = grid * grid;
 
-    if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return 1; }
+    if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     GLFWwindow* window = glfwCreateWindow(1000, 750, "engine — ECS instancing demo", nullptr, nullptr);
-    if (!window) { std::printf("FAIL: window\n"); glfwTerminate(); return 1; }
+    if (!window) { std::printf("FAIL: window\n"); glfwTerminate(); return; }
 
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(window, &fbw, &fbh);
@@ -69,7 +70,7 @@ int main() {
 
     const std::string metallib = std::string(ENGINE_SHADER_DIR) + "/mesh.metallib";
     const auto blob = readFile(metallib);
-    if (blob.empty()) { std::printf("FAIL: read %s\n", metallib.c_str()); return 1; }
+    if (blob.empty()) { std::printf("FAIL: read %s\n", metallib.c_str()); return; }
     ShaderHandle vs = device.createShader(blob, ShaderStage::Vertex);
     ShaderHandle fs = device.createShader(blob, ShaderStage::Fragment);
 
@@ -141,5 +142,4 @@ int main() {
     glfwDestroyWindow(window);
     glfwTerminate();
     std::printf("visual_window: closed.\n");
-    return 0;
 }

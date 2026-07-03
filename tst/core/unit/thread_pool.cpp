@@ -7,17 +7,17 @@
 //
 
 #include <atomic>
-#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
 #include "engine/core/threading/thread_pool.h"
+#include "harness/harness.h"
 
-int main() {
+TST_CASE(core, unit, thread_pool) {
     engine::core::ThreadPool pool;
     std::printf("workers = %u\n", pool.workerCount());
-    assert(pool.workerCount() >= 1);
+    TST_REQUIRE(pool.workerCount() >= 1);
 
     constexpr std::size_t N = 1'000'000;
 
@@ -25,18 +25,17 @@ int main() {
     std::vector<std::uint64_t> v(N, 0);
     pool.parallelFor(N, [&](std::size_t i) { v[i] = i + 1; }, 4096);
     std::uint64_t sum = 0;
-    for (std::size_t i = 0; i < N; ++i) { assert(v[i] == i + 1); sum += v[i]; }
+    for (std::size_t i = 0; i < N; ++i) { TST_REQUIRE(v[i] == i + 1); sum += v[i]; }
     const std::uint64_t expected = static_cast<std::uint64_t>(N) * (N + 1) / 2;
-    assert(sum == expected);
+    TST_REQUIRE(sum == expected);
 
     // Exactly N visits regardless of grain.
     std::atomic<std::size_t> visits{ 0 };
     pool.parallelFor(N, [&](std::size_t) { visits.fetch_add(1, std::memory_order_relaxed); }, 1000);
-    assert(visits.load() == N);
+    TST_REQUIRE(visits.load() == N);
 
-    // Empty range is a no-op.
-    pool.parallelFor(0, [&](std::size_t) { assert(false); });
+    // Empty range is a no-op (the body never runs).
+    pool.parallelFor(0, [&](std::size_t) { TST_REQUIRE(false); });
 
     std::printf("thread pool ok (sum=%llu)\n", static_cast<unsigned long long>(sum));
-    return 0;
 }

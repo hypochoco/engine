@@ -1,60 +1,54 @@
-add_executable(tst test.cpp)
-target_link_libraries(tst PRIVATE engine::core)
+# ---------------------------------------------------------------------------------------------
+# Test architecture — organized by module (core/ecs/physics/graphics) then category:
+#   <module>/unit/*.cpp         → fast, isolated pass/fail        ┐
+#   <module>/integration/*.cpp  → cross-subsystem pass/fail       ┘ → `tests` (CTest per module)
+#   <module>/benchmark/*.cpp    → perf, prints timings              → `benchmarks` (Release)
+#   <module>/visual/*.cpp       → interactive windowed demos        → `visuals` (dispatch by name)
+#
+# Each file self-registers via TST_CASE(module, category, name) — drop a file in the right
+# folder and it's picked up (CONFIGURE_DEPENDS re-globs), no list to edit. Graphics suites and
+# all visuals require the Metal backend, so they're Apple-only for now.
+# ---------------------------------------------------------------------------------------------
 
-add_executable(ecs_test ecs_test.cpp)
-target_link_libraries(ecs_test PRIVATE engine::ecs)
+set(HARNESS harness/harness.cpp harness/runner_main.cpp)
 
-add_executable(scheduler_test scheduler_test.cpp)
-target_link_libraries(scheduler_test PRIVATE engine::ecs)
-
-add_executable(thread_pool_test thread_pool_test.cpp)
-target_link_libraries(thread_pool_test PRIVATE engine::core)
-
-add_executable(physics_test physics_test.cpp)
-target_link_libraries(physics_test PRIVATE engine::physics)
-
-add_executable(gjk_epa_test gjk_epa_test.cpp)
-target_link_libraries(gjk_epa_test PRIVATE engine::physics)
-
-add_executable(physics_milestone physics_milestone.cpp)
-target_link_libraries(physics_milestone PRIVATE engine::physics_ecs)
-
-add_executable(physics_bench physics_bench.cpp)
-target_link_libraries(physics_bench PRIVATE engine::physics_ecs)
-
-# RHI backend tests. Metal is the only implemented backend so far, so build these on Apple
-# only; they become cross-backend once Vulkan is ported behind the RHI.
+file(GLOB_RECURSE UNIT_SRC  CONFIGURE_DEPENDS
+    core/unit/*.cpp ecs/unit/*.cpp physics/unit/*.cpp)
+file(GLOB_RECURSE INTEG_SRC CONFIGURE_DEPENDS
+    core/integration/*.cpp ecs/integration/*.cpp physics/integration/*.cpp)
+file(GLOB_RECURSE BENCH_SRC CONFIGURE_DEPENDS
+    core/benchmark/*.cpp ecs/benchmark/*.cpp physics/benchmark/*.cpp)
 if(APPLE)
-    add_executable(rhi_smoke rhi_smoke.cpp)
-    target_link_libraries(rhi_smoke PRIVATE engine::graphics)
+    file(GLOB_RECURSE GFX_TEST_SRC CONFIGURE_DEPENDS
+        graphics/unit/*.cpp graphics/integration/*.cpp)
+    file(GLOB_RECURSE VISUAL_SRC   CONFIGURE_DEPENDS
+        physics/visual/*.cpp graphics/visual/*.cpp)
+endif()
 
-    add_executable(triangle_offscreen triangle_offscreen.cpp)
-    target_link_libraries(triangle_offscreen PRIVATE engine::graphics)
-    add_dependencies(triangle_offscreen shaders)
-    target_compile_definitions(triangle_offscreen PRIVATE
-        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+# --- tests: unit + integration (headless pass/fail) ---
+add_executable(tests ${HARNESS} ${UNIT_SRC} ${INTEG_SRC} ${GFX_TEST_SRC})
+target_include_directories(tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(tests PRIVATE engine::physics_ecs)
+if(APPLE)
+    target_link_libraries(tests PRIVATE engine::scene)
+    add_dependencies(tests shaders)
+    target_compile_definitions(tests PRIVATE ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+endif()
 
-    add_executable(mesh_offscreen mesh_offscreen.cpp)
-    target_link_libraries(mesh_offscreen PRIVATE engine::graphics)
-    add_dependencies(mesh_offscreen shaders)
-    target_compile_definitions(mesh_offscreen PRIVATE
-        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+foreach(module core ecs physics graphics)
+    add_test(NAME ${module} COMMAND tests --module ${module})
+endforeach()
 
-    add_executable(scene_offscreen scene_offscreen.cpp)
-    target_link_libraries(scene_offscreen PRIVATE engine::scene)
-    add_dependencies(scene_offscreen shaders)
-    target_compile_definitions(scene_offscreen PRIVATE
-        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+# --- benchmarks: perf suites (run in Release; not pass/fail) ---
+add_executable(benchmarks ${HARNESS} ${BENCH_SRC})
+target_include_directories(benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(benchmarks PRIVATE engine::physics_ecs)
 
-    add_executable(visual_window visual_window.cpp)
-    target_link_libraries(visual_window PRIVATE engine::scene)
-    add_dependencies(visual_window shaders)
-    target_compile_definitions(visual_window PRIVATE
-        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
-
-    add_executable(physics_window physics_window.cpp)
-    target_link_libraries(physics_window PRIVATE engine::scene engine::physics_ecs)
-    add_dependencies(physics_window shaders)
-    target_compile_definitions(physics_window PRIVATE
-        ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+# --- visuals: interactive windowed demos (Apple; run one by name, e.g. `visuals rolling`) ---
+if(APPLE)
+    add_executable(visuals ${HARNESS} ${VISUAL_SRC})
+    target_include_directories(visuals PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(visuals PRIVATE engine::scene engine::physics_ecs)
+    add_dependencies(visuals shaders)
+    target_compile_definitions(visuals PRIVATE ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
 endif()

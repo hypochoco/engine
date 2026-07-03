@@ -7,7 +7,7 @@
 //  Headless, no graphics.
 //
 
-#include <cassert>
+#include "harness/harness.h"
 #include <cstdio>
 
 #include <glm/glm.hpp>
@@ -15,9 +15,9 @@
 #include "engine/core/core.h"        // engine::Transform
 #include "engine/ecs/ecs.h"
 
-struct Velocity { glm::vec3 v{0.0f}; };
+namespace { struct Velocity { glm::vec3 v{0.0f}; }; }
 
-int main() {
+TST_CASE(ecs, unit, entities) {
     using namespace engine;
     using namespace engine::ecs;
 
@@ -73,5 +73,4 @@ int main() {
     assert(nAfter == 1500);
 
     std::printf("ecs ok (entities=%zu)\n", world.size());
-    return 0;
 }

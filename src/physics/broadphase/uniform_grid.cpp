@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/core/threading/parallel_sort.h"
+
 namespace engine::physics::broadphase {
 namespace {
 
@@ -29,7 +31,7 @@ inline uint32_t cellHash(int32_t x, int32_t y, int32_t z) {
 
 } // namespace
 
-void uniformGrid(std::span<const Aabb> aabbs, std::vector<Pair>& pairs) {
+void uniformGrid(std::span<const Aabb> aabbs, std::vector<Pair>& pairs, core::ThreadPool* pool) {
     pairs.clear();
     const uint32_t n = static_cast<uint32_t>(aabbs.size());
     if (n < 2) return;
@@ -53,7 +55,8 @@ void uniformGrid(std::span<const Aabb> aabbs, std::vector<Pair>& pairs) {
                 for (int32_t z = coord(a.min.z); z <= coord(a.max.z); ++z)
                     entries.push_back((static_cast<uint64_t>(cellHash(x, y, z)) << 32) | i);
     }
-    std::sort(entries.begin(), entries.end());
+    if (pool) core::parallelSort(*pool, entries);
+    else      std::sort(entries.begin(), entries.end());
 
     const size_t m = entries.size();
     for (size_t s = 0; s < m;) {

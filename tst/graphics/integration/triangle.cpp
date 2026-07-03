@@ -1,3 +1,4 @@
+#include "harness/harness.h"
 //
 //  triangle_offscreen.cpp
 //  engine::tst
@@ -29,7 +30,7 @@ std::vector<std::byte> readFile(const std::string& path) {
 }
 }
 
-int main() {
+TST_CASE(graphics, integration, triangle) {
     using namespace engine::rhi;
 
     constexpr uint32_t W = 64, H = 64;
@@ -39,11 +40,11 @@ int main() {
     // --- shader (Slang-compiled metallib; ENGINE_SHADER_DIR set by CMake) ---
     const std::string metallib = std::string(ENGINE_SHADER_DIR) + "/triangle.metallib";
     const auto blob = readFile(metallib);
-    if (blob.empty()) { std::printf("FAIL: could not read %s\n", metallib.c_str()); return 1; }
+    if (blob.empty()) { std::printf("FAIL: could not read %s\n", metallib.c_str()); TST_REQUIRE_MSG(false, "setup/verification failed"); }
 
     ShaderHandle vs = device.createShader(blob, ShaderStage::Vertex);
     ShaderHandle fs = device.createShader(blob, ShaderStage::Fragment);
-    if (!vs.valid() || !fs.valid()) { std::printf("FAIL: shader load\n"); return 1; }
+    if (!vs.valid() || !fs.valid()) { std::printf("FAIL: shader load\n"); TST_REQUIRE_MSG(false, "setup/verification failed"); }
 
     // --- pipeline: vertex = {float3 position; float3 color;} (stride 24) ---
     VertexLayout layout;
@@ -61,7 +62,7 @@ int main() {
     pd.topology = Topology::TriangleList;
     pd.colorFormats = std::span<const Format>(&colorFormat, 1);
     PipelineHandle pipe = device.createGraphicsPipeline(pd);
-    if (!pipe.valid()) { std::printf("FAIL: pipeline\n"); return 1; }
+    if (!pipe.valid()) { std::printf("FAIL: pipeline\n"); TST_REQUIRE_MSG(false, "setup/verification failed"); }
 
     // --- offscreen render target ---
     TextureHandle color = device.createTexture(
@@ -118,9 +119,8 @@ int main() {
 
     const bool centerIsTriangle = (center[0] + center[1] + center[2]) > 90 && center[3] == 255;
     const bool cornerIsClear    = corner[0] < 60 && corner[1] < 60 && corner[2] < 60;
-    if (!centerIsTriangle) { std::printf("FAIL: center pixel is not the triangle\n"); return 1; }
-    if (!cornerIsClear)    { std::printf("FAIL: corner pixel is not the clear color\n"); return 1; }
+    if (!centerIsTriangle) { std::printf("FAIL: center pixel is not the triangle\n"); TST_REQUIRE_MSG(false, "setup/verification failed"); }
+    if (!cornerIsClear)    { std::printf("FAIL: corner pixel is not the clear color\n"); TST_REQUIRE_MSG(false, "setup/verification failed"); }
 
     std::printf("triangle offscreen ok\n");
-    return 0;
 }

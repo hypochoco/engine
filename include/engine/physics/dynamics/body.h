@@ -57,6 +57,18 @@ inline Mat3 solidBoxInvInertia(Real mass, const Vec3& half) {
     return inv;
 }
 
+// Capsule (local +Y axis) inverse inertia, cylinder approximation (caps' distribution ignored).
+inline Mat3 solidCapsuleInvInertia(Real mass, Real radius, Real halfHeight) {
+    const Real h = Real(2) * halfHeight;
+    const Real iy = Real(0.5) * mass * radius * radius;                          // about the axis
+    const Real ip = Real(1) / Real(12) * mass * (Real(3) * radius * radius + h * h);   // perpendicular
+    Mat3 inv(Real(0));
+    inv[0][0] = ip > kEpsilon ? Real(1) / ip : Real(0);
+    inv[1][1] = iy > kEpsilon ? Real(1) / iy : Real(0);
+    inv[2][2] = ip > kEpsilon ? Real(1) / ip : Real(0);
+    return inv;
+}
+
 // World-space inverse inertia for the current orientation: R · I⁻¹_local · Rᵀ.
 inline Mat3 worldInvInertia(const Quat& orientation, const Mat3& invInertiaLocal) {
     const Mat3 R = glm::mat3_cast(orientation);

@@ -26,10 +26,12 @@ namespace engine::physics {
 using BodyHandle = core::Handle<struct BodyTag>;
 
 struct ColliderDesc {
-    enum class Type { Sphere, Plane, Box } type = Type::Sphere;
-    Sphere sphere{};
-    Plane  plane{};
-    Box    box{};
+    enum class Type { Sphere, Plane, Box, ConvexHull, Capsule } type = Type::Sphere;
+    Sphere     sphere{};
+    Plane      plane{};
+    Box        box{};
+    ConvexHull convexHull{};
+    Capsule    capsule{};
 };
 
 struct BodyDef {
@@ -57,6 +59,10 @@ struct WorldDef {
     // remain serial for now.
     core::ThreadPool*  threadPool = nullptr;
     int                parallelThreshold = 4096;
+
+    // Continuous collision detection: swept broadphase AABBs + speculative contacts so fast
+    // bodies don't tunnel through finite colliders in one step.
+    bool               continuousDetection = true;
 };
 
 struct ContactEvent {

@@ -7,7 +7,7 @@
 //  and checks the result against a hand computation (deterministic).
 //
 
-#include <cassert>
+#include "harness/harness.h"
 #include <cmath>
 #include <cstdio>
 
@@ -16,10 +16,12 @@
 #include "engine/core/core.h"     // engine::Transform
 #include "engine/ecs/ecs.h"
 
+namespace {
 struct Velocity { glm::vec3 v{0.0f}; };
 struct Time     { float dt = 0.0f; };
+}
 
-int main() {
+TST_CASE(ecs, integration, scheduler) {
     using namespace engine;
     using namespace engine::ecs;
 
@@ -64,5 +66,4 @@ int main() {
     assert(moved == 10);
 
     std::printf("scheduler ok\n");
-    return 0;
 }

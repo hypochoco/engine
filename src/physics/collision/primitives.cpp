@@ -63,26 +63,19 @@ bool sphereVsBox(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
     return out.touching;
 }
 
-int boxVsPlane(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
-               const Plane& plane, Real margin, Contact out[4]) {
-    const Vec3 he = box.halfExtents;
-    Contact cand[8];
+int pointsVsPlane(const Vec3* worldPoints, int count, const Plane& plane, Real margin, Contact out[4]) {
+    Contact cand[64];
     int n = 0;
-    for (int sx = -1; sx <= 1; sx += 2)
-        for (int sy = -1; sy <= 1; sy += 2)
-            for (int sz = -1; sz <= 1; sz += 2) {
-                const Vec3 corner = boxCenter + boxOrient * Vec3(sx * he.x, sy * he.y, sz * he.z);
-                const Real sep = glm::dot(plane.normal, corner) - plane.offset;
-                if (sep <= margin) {
-                    cand[n].normal = plane.normal;   // plane -> box
-                    cand[n].point = corner;
-                    cand[n].separation = sep;
-                    cand[n].touching = true;
-                    ++n;
-                }
-            }
-
-    // Keep up to 4 deepest (most negative separation).
+    for (int i = 0; i < count && n < 64; ++i) {
+        const Real sep = glm::dot(plane.normal, worldPoints[i]) - plane.offset;
+        if (sep <= margin) {
+            cand[n].normal = plane.normal;   // plane -> shape
+            cand[n].point = worldPoints[i];
+            cand[n].separation = sep;
+            cand[n].touching = true;
+            ++n;
+        }
+    }
     const int keep = std::min(n, 4);
     for (int i = 0; i < keep; ++i) {
         int best = i;
@@ -92,6 +85,18 @@ int boxVsPlane(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
         out[i] = cand[i];
     }
     return keep;
+}
+
+int boxVsPlane(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
+               const Plane& plane, Real margin, Contact out[4]) {
+    const Vec3 he = box.halfExtents;
+    Vec3 corners[8];
+    int n = 0;
+    for (int sx = -1; sx <= 1; sx += 2)
+        for (int sy = -1; sy <= 1; sy += 2)
+            for (int sz = -1; sz <= 1; sz += 2)
+                corners[n++] = boxCenter + boxOrient * Vec3(sx * he.x, sy * he.y, sz * he.z);
+    return pointsVsPlane(corners, 8, plane, margin, out);
 }
 
 } // namespace engine::physics::collide

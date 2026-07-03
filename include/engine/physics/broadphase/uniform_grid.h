@@ -15,8 +15,12 @@
 
 #include "engine/physics/broadphase/aabb.h"
 
+namespace engine::core { class ThreadPool; }
+
 namespace engine::physics::broadphase {
 
-void uniformGrid(std::span<const Aabb> aabbs, std::vector<Pair>& pairs);
+// `pool` (optional) parallelizes the internal entry sort for large inputs.
+void uniformGrid(std::span<const Aabb> aabbs, std::vector<Pair>& pairs,
+                 core::ThreadPool* pool = nullptr);
 
 } // namespace engine::physics::broadphase

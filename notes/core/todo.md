@@ -151,11 +151,14 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       sweep-and-prune + **uniform-grid** (flat index-sort) broadphases, both verified vs brute
       force. Grid **scales linearly** — at 65,536 bodies grid 19.9 ms/step vs SAP 192 ms vs
       ~14 s for the old O(n²) (~700×); 100k ≈ 30 ms/step single-threaded. **Parallel worlds**
-      via `core::ThreadPool`: 7.8× on 12 workers (36.8M body-steps/s). **GJK + EPA + box
-      colliders** landed (sphere/plane/box all collide; analytic sphere-box, multi-contact
-      box-plane resting, box-box via EPA; `tst/gjk_epa_test` + box-rest tests). Next: box-box
-      manifolds (SAT/clip) + convex hulls, parallel broadphase sort; then Phase 3
-      implicit/differentiable backend.
+      via `core::ThreadPool`: 7.8× on 12 workers (36.8M body-steps/s). **Colliders**:
+      sphere/plane/box/hull/capsule; analytic sphere-box + capsule-sphere/capsule/plane;
+      **GJK closest-distance** for capsule-vs-box/hull; GJK/EPA for the normal; **face-clip
+      manifolds** (`box_box` + `convex_manifold`) → box/hull **stacking**. **Parallel broadphase
+      sort**; **clamped Baumgarte**; **CCD** (swept AABBs + speculative contacts — 120 m/s
+      sphere doesn't tunnel). Phase 2 + collision polish complete; tests `tst/gjk_epa_test`,
+      `tst/physics_test`, `tst/physics_bench`. Phase 3 (deferred): implicit/differentiable
+      backend + parallel-world ML harness.
 - [x] **How physics state maps onto ECS components.** DECIDED (2026-07-03): backend owns
       packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate
       (no replacement/inheritance); a `physics_ecs` bridge syncs world poses → Transform. ML

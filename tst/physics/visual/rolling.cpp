@@ -1,3 +1,4 @@
+#include "harness/harness.h"
 //
 //  physics_window.cpp
 //  engine::tst
@@ -59,7 +60,7 @@ glm::quat rotationBetween(const glm::vec3& from, const glm::vec3& to) {
 }
 }
 
-int main() {
+TST_CASE(physics, visual, rolling) {
     using namespace engine;
     using namespace engine::rhi;
     namespace phys = engine::physics;
@@ -67,11 +68,11 @@ int main() {
     int balls = 12;
     if (const char* b = std::getenv("ENGINE_BALLS")) { balls = std::atoi(b); if (balls < 1) balls = 1; }
 
-    if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return 1; }
+    if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     GLFWwindow* window = glfwCreateWindow(1000, 750, "engine — ball rolling down a plane", nullptr, nullptr);
-    if (!window) { std::printf("FAIL: window\n"); glfwTerminate(); return 1; }
+    if (!window) { std::printf("FAIL: window\n"); glfwTerminate(); return; }
 
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(window, &fbw, &fbh);
@@ -82,7 +83,7 @@ int main() {
 
     const std::string metallib = std::string(ENGINE_SHADER_DIR) + "/mesh.metallib";
     const auto blob = readFile(metallib);
-    if (blob.empty()) { std::printf("FAIL: read %s\n", metallib.c_str()); return 1; }
+    if (blob.empty()) { std::printf("FAIL: read %s\n", metallib.c_str()); return; }
     ShaderHandle vs = device.createShader(blob, ShaderStage::Vertex);
     ShaderHandle fs = device.createShader(blob, ShaderStage::Fragment);
 
@@ -200,5 +201,4 @@ int main() {
     glfwDestroyWindow(window);
     glfwTerminate();
     std::printf("physics_window: closed.\n");
-    return 0;
 }

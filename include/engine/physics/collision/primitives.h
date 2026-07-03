@@ -34,4 +34,8 @@ bool sphereVsBox(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
 int boxVsPlane(const Vec3& boxCenter, const Quat& boxOrient, const Box& box,
                const Plane& plane, Real margin, Contact out[4]);
 
+// Generic: up to 4 deepest world-space points penetrating a half-space plane (for convex
+// hulls). Contact normal = plane normal. Returns the number of contacts.
+int pointsVsPlane(const Vec3* worldPoints, int count, const Plane& plane, Real margin, Contact out[4]);
+
 } // namespace engine::physics::collide

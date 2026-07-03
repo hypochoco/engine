@@ -1,3 +1,4 @@
+#include "harness/harness.h"
 //
 //  rhi_smoke.cpp
 //  engine::tst
@@ -13,7 +14,7 @@
 
 #include "engine/graphics/rhi/rhi.h"
 
-int main() {
+TST_CASE(graphics, unit, rhi_smoke) {
     using namespace engine::rhi;
 
     std::printf("rhi backend: %s\n", backendName());
@@ -30,11 +31,10 @@ int main() {
 
     if (!buf.valid()) {
         std::printf("FAIL: buffer handle invalid\n");
-        return 1;
+        TST_REQUIRE_MSG(false, "setup/verification failed");
     }
     std::printf("buffer ok: index=%u generation=%u\n", buf.index, buf.generation);
 
     device.destroy(buf);
     std::printf("rhi smoke ok\n");
-    return 0;
 }

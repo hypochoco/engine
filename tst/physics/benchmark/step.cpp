@@ -1,3 +1,4 @@
+#include "harness/harness.h"
 //
 //  physics_bench.cpp
 //  engine::tst
@@ -36,12 +37,15 @@ namespace {
 
 // A grid of free-falling spheres far above the plane so nothing contacts within the run: this
 // isolates the broadphase (O(n²) narrowphase) + integration cost — the pre-scaling bottleneck.
-std::unique_ptr<phys::PhysicsWorld> makeFreefallWorld(int n, int substeps, phys::BroadphaseKind bp) {
+std::unique_ptr<phys::PhysicsWorld> makeFreefallWorld(int n, int substeps, phys::BroadphaseKind bp,
+                                                     engine::core::ThreadPool* pool = nullptr) {
     phys::WorldDef wd;
     wd.gravity = phys::Vec3(0, -9.81f, 0);
     wd.velocityIterations = 8;
     wd.substeps = substeps;
     wd.broadphase = bp;
+    wd.threadPool = pool;
+    wd.parallelThreshold = 1024;
     auto world = phys::createPhysicsWorld(phys::Backend::Realtime, wd);
 
     phys::BodyDef plane;
@@ -143,7 +147,7 @@ double benchBridgeStep(int n, int steps, int substeps) {
 
 } // namespace
 
-int main() {
+TST_CASE(physics, benchmark, step) {
 #ifdef NDEBUG
     const char* build = "Release/optimized";
 #else
@@ -226,9 +230,31 @@ int main() {
         std::printf("\nintra-world (dense pile, %d bodies, workers=%u): "
                     "serial %.2f ms/step, parallel %.2f ms/step, speedup %.2fx\n",
                     N, pool.workerCount(), serial * 1e3, parallel * 1e3, serial / parallel);
-        std::printf("  (parallel stages: integration + narrowphase; solver + sort still serial)\n");
+        std::printf("  (parallel stages: integration + narrowphase + colored solver)\n");
+    }
+
+    // Intra-world, sparse: ONE large free-fall world, serial vs pooled (parallel entry sort +
+    // integration — the broadphase-bound regime).
+    {
+        const int   N = 65536;
+        const int   S = 20;
+        const float dt = 1.0f / 120.0f;
+        engine::core::ThreadPool pool;
+
+        auto run = [&](engine::core::ThreadPool* p) {
+            auto w = makeFreefallWorld(N, 1, phys::BroadphaseKind::UniformGrid, p);
+            for (int s = 0; s < 5; ++s) w->step(dt);
+            const auto t0 = Clock::now();
+            for (int s = 0; s < S; ++s) w->step(dt);
+            return std::chrono::duration<double>(Clock::now() - t0).count() / S;
+        };
+        const double serial = run(nullptr);
+        const double parallel = run(&pool);
+        std::printf("\nintra-world (sparse free-fall, %d bodies, workers=%u): "
+                    "serial %.2f ms/step, parallel %.2f ms/step, speedup %.2fx\n",
+                    N, pool.workerCount(), serial * 1e3, parallel * 1e3, serial / parallel);
+        std::printf("  (parallel stages: grid entry sort + integration)\n");
     }
 
     std::printf("\nbenchmark done\n");
-    return 0;
 }

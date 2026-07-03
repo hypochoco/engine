@@ -22,7 +22,10 @@
 #include "engine/physics/broadphase/aabb.h"
 #include "engine/physics/broadphase/sweep_and_prune.h"
 #include "engine/physics/broadphase/uniform_grid.h"
+#include "engine/physics/collision/box_box.h"
+#include "engine/physics/collision/capsule.h"
 #include "engine/physics/collision/convex.h"
+#include "engine/physics/collision/convex_manifold.h"
 #include "engine/physics/collision/primitives.h"
 #include "engine/physics/collision/support.h"
 #include "engine/physics/dynamics/body.h"
@@ -34,6 +37,7 @@ namespace {
 
 constexpr Real kBaumgarte = Real(0.2);    // position-correction fraction
 constexpr Real kSlop      = Real(0.005);  // allowed penetration before correction
+constexpr Real kMaxCorrection = Real(2);  // cap on Baumgarte correction velocity (m/s)
 constexpr Real kAabbMargin = Real(0.01);  // broadphase AABB fattening
 
 struct BodyData {
@@ -101,6 +105,12 @@ public:
             b.invInertiaLocal = solidSphereInvInertia(d.mass, d.collider.sphere.radius);
         else if (dynamic && d.collider.type == ColliderDesc::Type::Box)
             b.invInertiaLocal = solidBoxInvInertia(d.mass, d.collider.box.halfExtents);
+        else if (dynamic && d.collider.type == ColliderDesc::Type::ConvexHull) {
+            Vec3 lo(1e30f), hi(-1e30f);
+            for (const Vec3& v : d.collider.convexHull.vertices) { lo = glm::min(lo, v); hi = glm::max(hi, v); }
+            b.invInertiaLocal = solidBoxInvInertia(d.mass, (hi - lo) * Real(0.5));   // AABB approx
+        } else if (dynamic && d.collider.type == ColliderDesc::Type::Capsule)
+            b.invInertiaLocal = solidCapsuleInvInertia(d.mass, d.collider.capsule.radius, d.collider.capsule.halfHeight);
         else
             b.invInertiaLocal = Mat3(Real(0));
 
@@ -196,28 +206,48 @@ private:
         for (uint32_t i = 0; i < bodies_.size(); ++i) {
             const BodyData& b = bodies_[i];
             if (!b.alive) continue;
+            Aabb box;
+            bool finite = true;
             if (b.collider.type == ColliderDesc::Type::Sphere) {
-                Aabb box = Aabb::fromSphere(b.position, b.collider.sphere.radius);
-                box.expand(kAabbMargin);
-                finiteIdx_.push_back(i);
-                finiteAabb_.push_back(box);
+                box = Aabb::fromSphere(b.position, b.collider.sphere.radius);
             } else if (b.collider.type == ColliderDesc::Type::Box) {
                 const Mat3 R = glm::mat3_cast(b.orientation);
                 Mat3 absR;
-                for (int c = 0; c < 3; ++c)
-                    for (int r = 0; r < 3; ++r) absR[c][r] = std::fabs(R[c][r]);
+                for (int cc = 0; cc < 3; ++cc)
+                    for (int rr = 0; rr < 3; ++rr) absR[cc][rr] = std::fabs(R[cc][rr]);
                 const Vec3 ext = absR * b.collider.box.halfExtents;
-                Aabb box{ b.position - ext, b.position + ext };
-                box.expand(kAabbMargin);
-                finiteIdx_.push_back(i);
-                finiteAabb_.push_back(box);
-            } else if (b.collider.type == ColliderDesc::Type::Plane) {
+                box = Aabb{ b.position - ext, b.position + ext };
+            } else if (b.collider.type == ColliderDesc::Type::ConvexHull) {
+                const Mat3 R = glm::mat3_cast(b.orientation);
+                Vec3 lo(1e30f), hi(-1e30f);
+                for (const Vec3& v : b.collider.convexHull.vertices) {
+                    const Vec3 w = b.position + R * v;
+                    lo = glm::min(lo, w); hi = glm::max(hi, w);
+                }
+                box = Aabb{ lo, hi };
+            } else if (b.collider.type == ColliderDesc::Type::Capsule) {
+                const Vec3 axis = b.orientation * Vec3(0, b.collider.capsule.halfHeight, 0);
+                const Vec3 r(b.collider.capsule.radius);
+                box = Aabb{ glm::min(b.position - axis, b.position + axis) - r,
+                            glm::max(b.position - axis, b.position + axis) + r };
+            } else {   // Plane (infinite half-space) — tested against every finite body directly
                 planeIdx_.push_back(i);
+                finite = false;
             }
+            if (!finite) continue;
+
+            if (def_.continuousDetection && b.invMass != Real(0)) {   // swept AABB (CCD)
+                const Vec3 d = b.linVel * h;
+                box.min += glm::min(d, Vec3(0));
+                box.max += glm::max(d, Vec3(0));
+            }
+            box.expand(kAabbMargin);
+            finiteIdx_.push_back(i);
+            finiteAabb_.push_back(box);
         }
 
         if (def_.broadphase == BroadphaseKind::UniformGrid)
-            broadphase::uniformGrid(finiteAabb_, pairs_);
+            broadphase::uniformGrid(finiteAabb_, pairs_, pool_);
         else
             broadphase::sweepAndPrune(finiteAabb_, pairs_);
 
@@ -299,15 +329,49 @@ private:
         }
     }
 
-    // Pure narrowphase: computes a small contact manifold for a body pair into `out` (no
-    // shared writes → safe to run in parallel across pairs). Dispatches per shape pair:
-    // sphere-sphere / sphere-plane / sphere-box via exact primitives, box-plane as a multi-
-    // point clip (stable resting), box-box via GJK+EPA.
-    void narrowphase(uint32_t i, uint32_t j, Real, PairResult& out) const {
+    SupportShape supportOf(const BodyData& b) const {
+        using T = ColliderDesc::Type;
+        switch (b.collider.type) {
+            case T::Box:  return SupportShape::box(b.position, b.orientation, b.collider.box.halfExtents);
+            case T::ConvexHull:
+                return SupportShape::hull(b.position, b.orientation,
+                                          b.collider.convexHull.vertices.data(),
+                                          static_cast<int>(b.collider.convexHull.vertices.size()));
+            case T::Capsule:
+                return SupportShape::capsule(b.position, b.orientation,
+                                             b.collider.capsule.radius, b.collider.capsule.halfHeight);
+            default:      return SupportShape::sphere(b.position, b.collider.sphere.radius);
+        }
+    }
+
+    // World-space vertices of a polytope collider (box: 8 corners; hull: transformed verts).
+    void worldVerts(const BodyData& b, std::vector<Vec3>& out) const {
+        out.clear();
+        if (b.collider.type == ColliderDesc::Type::Box) {
+            const Vec3 he = b.collider.box.halfExtents;
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sy = -1; sy <= 1; sy += 2)
+                    for (int sz = -1; sz <= 1; sz += 2)
+                        out.push_back(b.position + b.orientation * Vec3(sx * he.x, sy * he.y, sz * he.z));
+        } else if (b.collider.type == ColliderDesc::Type::ConvexHull) {
+            for (const Vec3& v : b.collider.convexHull.vertices)
+                out.push_back(b.position + b.orientation * v);
+        }
+    }
+
+    // Pure narrowphase: computes a small contact manifold for a body pair into `out`. Plane
+    // (half-space) pairs use exact/clip tests; sphere-sphere and sphere-box are exact; all other
+    // convex pairs (box-box, hull-hull, box-hull, sphere-hull) go through GJK + EPA.
+    void narrowphase(uint32_t i, uint32_t j, Real h, PairResult& out) const {
         using T = ColliderDesc::Type;
         out.count = 0;
         const BodyData& A = bodies_[i];
         const BodyData& B = bodies_[j];
+
+        // Speculative margin (CCD): generate contacts up to the distance the pair could close
+        // this substep, so a fast body is stopped at the surface instead of tunnelling.
+        const Real specMargin = def_.continuousDetection
+            ? (glm::length(A.linVel) + glm::length(B.linVel)) * h : Real(0);
 
         auto add = [&](uint32_t a, uint32_t b, const Contact& c) {
             if (out.count >= 4) return;
@@ -327,34 +391,84 @@ private:
             ++out.count;
         };
 
+        // --- half-space plane vs a finite shape (multi-contact for stable resting) ---
+        if (A.collider.type == T::Plane || B.collider.type == T::Plane) {
+            const uint32_t pi = (A.collider.type == T::Plane) ? i : j;   // plane
+            const uint32_t oi = (A.collider.type == T::Plane) ? j : i;   // other
+            const BodyData& P = bodies_[pi];
+            const BodyData& O = bodies_[oi];
+            Contact cs[4];
+            int n = 0;
+            if (O.collider.type == T::Sphere) {
+                if (collide::sphereVsPlane(O.position, O.collider.sphere, P.collider.plane, specMargin, cs[0])) n = 1;
+            } else if (O.collider.type == T::Box) {
+                n = collide::boxVsPlane(O.position, O.orientation, O.collider.box, P.collider.plane, specMargin, cs);
+            } else if (O.collider.type == T::ConvexHull) {
+                thread_local std::vector<Vec3> wv;
+                wv.clear();
+                for (const Vec3& v : O.collider.convexHull.vertices) wv.push_back(O.position + O.orientation * v);
+                n = collide::pointsVsPlane(wv.data(), static_cast<int>(wv.size()), P.collider.plane, specMargin, cs);
+            } else if (O.collider.type == T::Capsule) {
+                n = collide::capsuleVsPlane(O.position, O.orientation, O.collider.capsule, P.collider.plane, specMargin, cs);
+            }
+            for (int k = 0; k < n; ++k) add(pi, oi, cs[k]);   // normal plane -> other
+            return;
+        }
+
+        // --- finite vs finite ---
         Contact c;
         if (A.collider.type == T::Sphere && B.collider.type == T::Sphere) {
-            if (collide::sphereVsSphere(A.position, A.collider.sphere, B.position, B.collider.sphere, Real(0), c))
+            if (collide::sphereVsSphere(A.position, A.collider.sphere, B.position, B.collider.sphere, specMargin, c))
                 add(i, j, c);
-        } else if (A.collider.type == T::Sphere && B.collider.type == T::Plane) {
-            if (collide::sphereVsPlane(A.position, A.collider.sphere, B.collider.plane, Real(0), c))
-                add(j, i, c);   // normal plane(j) -> sphere(i)
-        } else if (A.collider.type == T::Plane && B.collider.type == T::Sphere) {
-            if (collide::sphereVsPlane(B.position, B.collider.sphere, A.collider.plane, Real(0), c))
-                add(i, j, c);   // normal plane(i) -> sphere(j)
-        } else if (A.collider.type == T::Box && B.collider.type == T::Sphere) {
-            if (collide::sphereVsBox(A.position, A.orientation, A.collider.box, B.position, B.collider.sphere, Real(0), c))
-                add(i, j, c);   // normal box(i) -> sphere(j)
         } else if (A.collider.type == T::Sphere && B.collider.type == T::Box) {
-            if (collide::sphereVsBox(B.position, B.orientation, B.collider.box, A.position, A.collider.sphere, Real(0), c))
+            if (collide::sphereVsBox(B.position, B.orientation, B.collider.box, A.position, A.collider.sphere, specMargin, c))
                 add(j, i, c);   // normal box(j) -> sphere(i)
-        } else if (A.collider.type == T::Box && B.collider.type == T::Plane) {
-            Contact cs[4];
-            const int n = collide::boxVsPlane(A.position, A.orientation, A.collider.box, B.collider.plane, Real(0), cs);
-            for (int k = 0; k < n; ++k) add(j, i, cs[k]);   // normal plane(j) -> box(i)
-        } else if (A.collider.type == T::Plane && B.collider.type == T::Box) {
-            Contact cs[4];
-            const int n = collide::boxVsPlane(B.position, B.orientation, B.collider.box, A.collider.plane, Real(0), cs);
-            for (int k = 0; k < n; ++k) add(i, j, cs[k]);   // normal plane(i) -> box(j)
+        } else if (A.collider.type == T::Box && B.collider.type == T::Sphere) {
+            if (collide::sphereVsBox(A.position, A.orientation, A.collider.box, B.position, B.collider.sphere, specMargin, c))
+                add(i, j, c);   // normal box(i) -> sphere(j)
         } else if (A.collider.type == T::Box && B.collider.type == T::Box) {
-            const auto sa = SupportShape::box(A.position, A.orientation, A.collider.box.halfExtents);
-            const auto sb = SupportShape::box(B.position, B.orientation, B.collider.box.halfExtents);
-            if (collide::convexVsConvex(sa, sb, c)) add(i, j, c);   // normal box(i) -> box(j)
+            Contact cs[4];
+            const int n = collide::boxVsBox(A.position, A.orientation, A.collider.box,
+                                            B.position, B.orientation, B.collider.box, cs);
+            for (int k = 0; k < n; ++k) add(i, j, cs[k]);   // normal A -> B
+        } else if (A.collider.type == T::Capsule && B.collider.type == T::Sphere) {
+            if (collide::capsuleVsSphere(A.position, A.orientation, A.collider.capsule, B.position, B.collider.sphere, specMargin, c))
+                add(i, j, c);   // capsule(i) -> sphere(j)
+        } else if (A.collider.type == T::Sphere && B.collider.type == T::Capsule) {
+            if (collide::capsuleVsSphere(B.position, B.orientation, B.collider.capsule, A.position, A.collider.sphere, specMargin, c))
+                add(j, i, c);   // capsule(j) -> sphere(i)
+        } else if (A.collider.type == T::Capsule && B.collider.type == T::Capsule) {
+            if (collide::capsuleVsCapsule(A.position, A.orientation, A.collider.capsule,
+                                          B.position, B.orientation, B.collider.capsule, specMargin, c))
+                add(i, j, c);   // A -> B
+        } else if (A.collider.type == T::Capsule && (B.collider.type == T::Box || B.collider.type == T::ConvexHull)) {
+            Contact cs[2];
+            const int nc = collide::capsuleVsConvex(A.position, A.orientation, A.collider.capsule, supportOf(B), specMargin, cs);
+            if (nc > 0) for (int k = 0; k < nc; ++k) add(j, i, cs[k]);       // convex(j) -> capsule(i)
+            else if (collide::convexVsConvex(supportOf(A), supportOf(B), c)) add(i, j, c);   // deep overlap fallback
+        } else if ((A.collider.type == T::Box || A.collider.type == T::ConvexHull) && B.collider.type == T::Capsule) {
+            Contact cs[2];
+            const int nc = collide::capsuleVsConvex(B.position, B.orientation, B.collider.capsule, supportOf(A), specMargin, cs);
+            if (nc > 0) for (int k = 0; k < nc; ++k) add(i, j, cs[k]);       // convex(i) -> capsule(j)
+            else if (collide::convexVsConvex(supportOf(A), supportOf(B), c)) add(i, j, c);
+        } else {
+            const bool aPoly = (A.collider.type == T::Box || A.collider.type == T::ConvexHull);
+            const bool bPoly = (B.collider.type == T::Box || B.collider.type == T::ConvexHull);
+            if (aPoly && bPoly) {
+                // box-hull / hull-box / hull-hull → EPA normal + polytope face-clip manifold
+                thread_local std::vector<Vec3> va, vb;
+                worldVerts(A, va);
+                worldVerts(B, vb);
+                Contact epa;
+                if (collide::convexVsConvex(supportOf(A), supportOf(B), epa)) {
+                    Contact cs[4];
+                    const int nc = collide::polytopeManifold(va, vb, epa, cs);
+                    for (int k = 0; k < nc; ++k) add(i, j, cs[k]);   // normal A -> B
+                }
+            } else {
+                // a curved shape is involved (sphere/capsule vs box/hull) → single EPA point
+                if (collide::convexVsConvex(supportOf(A), supportOf(B), c)) add(i, j, c);
+            }
         }
     }
 
@@ -381,7 +495,11 @@ private:
                             - (A.linVel + glm::cross(A.angVel, rA));
             const Real vn = glm::dot(vrel, n);
             const Real kn = effectiveMass(A, B, IinvA, IinvB, rA, rB, n);
-            const Real bias = (kBaumgarte / kSubDt_) * std::max(c.penetration - kSlop, Real(0));
+            // Penetrating → softened Baumgarte push-out; separated (speculative) → permit approach
+            // only up to the current gap this substep (prevents tunnelling without floating).
+            const Real bias = (c.penetration >= Real(0))
+                ? std::min((kBaumgarte / kSubDt_) * std::max(c.penetration - kSlop, Real(0)), kMaxCorrection)
+                : c.penetration / kSubDt_;
             Real lambda = (kn > kEpsilon) ? (bias + c.restitutionBias - vn) / kn : Real(0);
 
             const Real oldImpulse = c.normalImpulse;
