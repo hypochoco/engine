@@ -9,6 +9,7 @@
 #include "engine/core/core.h"
 
 #include "harness/harness.h"
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 
@@ -40,6 +41,18 @@ TST_CASE(core, unit, geometry) {
     // Quad + minimal model wiring compile & behave.
     const MeshData quad = primitives::makeQuad();
     TST_REQUIRE(quad.indices.size() == 6);
+
+    // Box: 6 faces × 4 verts = 24 vertices, 6 × 6 = 36 indices; per-face unit normals; corners
+    // sit at the given half-extents.
+    const MeshData box = primitives::makeBox(glm::vec3(0.5f, 1.0f, 2.0f));
+    TST_REQUIRE(box.vertices.size() == 24);
+    TST_REQUIRE(box.indices.size() == 36);
+    for (const auto& v : box.vertices) {
+        TST_REQUIRE(std::fabs(glm::length(v.normal) - 1.0f) < 1e-4f);
+        TST_REQUIRE(std::fabs(std::fabs(v.position.x) - 0.5f) < 1e-4f);
+        TST_REQUIRE(std::fabs(std::fabs(v.position.y) - 1.0f) < 1e-4f);
+        TST_REQUIRE(std::fabs(std::fabs(v.position.z) - 2.0f) < 1e-4f);
+    }
 
     ModelData model;
     model.meshes.push_back(sphere);

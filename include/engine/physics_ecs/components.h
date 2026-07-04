@@ -19,6 +19,18 @@ struct RigidBody {
     physics::BodyHandle body;
 };
 
+// Links an entity to a joint in the PhysicsWorld (articulation bridge, Phase B4).
+struct Joint {
+    physics::JointHandle joint;
+};
+
+// Per-joint actuator command written to the world each step by actuatorFlushSystem. Meaning
+// depends on the joint's actuator mode (target angle for PDTarget, torque for Torque).
+struct JointCommand {
+    physics::Real target = 0;
+    physics::Real torque = 0;
+};
+
 // Resource: a non-owning pointer to the world the systems drive (the app owns the world).
 struct PhysicsWorldRef {
     physics::PhysicsWorld* world = nullptr;

@@ -39,6 +39,7 @@ constexpr Real kBaumgarte = Real(0.2);    // position-correction fraction
 constexpr Real kSlop      = Real(0.005);  // allowed penetration before correction
 constexpr Real kMaxCorrection = Real(2);  // cap on Baumgarte correction velocity (m/s)
 constexpr Real kAabbMargin = Real(0.01);  // broadphase AABB fattening
+constexpr Real kJointBaumgarte = Real(0.2);  // joint position-drift correction fraction (no slop)
 
 struct BodyData {
     Vec3            position{0};
@@ -50,6 +51,8 @@ struct BodyData {
     PhysicsMaterial material{};
     BodyType        type = BodyType::Static;
     ColliderDesc    collider{};
+    uint32_t        collisionCategory = 0x0001;
+    uint32_t        collisionMask     = 0xFFFFFFFFu;
     uint32_t        generation = 0;
     bool            alive = false;
 };
@@ -70,6 +73,44 @@ struct PairResult {
     int          count = 0;
     Constraint   c[4];
     ContactEvent e[4];
+};
+
+// Persistent joint (Phase B). Unlike contacts (rebuilt each step), joints live across steps and
+// warm-start from their accumulated impulses. Solved serially in creation order (deterministic).
+// Cached fields (rA/rB/K/bias) are recomputed each substep in prepareJoints(); the *Impulse
+// accumulators carry across steps for warm-starting.
+struct JointData {
+    JointType type = JointType::Ball;
+    uint32_t  a = 0, b = 0;          // body indices
+    Vec3      localAnchorA{0}, localAnchorB{0};
+    Vec3      localAxisA{0, 0, 1}, localAxisB{0, 0, 1};
+    Quat      refRel{1, 0, 0, 0};    // reference relative orientation qA*·qB captured at creation (Fixed)
+
+    // limits (B2) + actuator (B3)
+    bool      enableLimit = false;
+    Real      lowerLimit = 0, upperLimit = 0;
+    Actuator  actuator{};
+
+    // warm-start accumulators (persist across steps)
+    Vec3      pointImpulse{0};        // accumulated point-to-point impulse
+    Vec3      angImpulse{0};          // accumulated angular impulse (hinge: in axis-perp plane; fixed: 3-axis)
+    Real      limitImpulse = 0;       // accumulated hinge-limit impulse about the axis (one-sided)
+
+    // per-substep cached solve data (recomputed in prepareJoints)
+    Vec3      rA{0}, rB{0};           // world anchor offsets from body centers
+    Mat3      pointK{Real(0)};        // inverse of the point-to-point effective-mass matrix
+    Vec3      pointBias{0};           // Baumgarte velocity bias for the anchor error
+    Vec3      axis{0, 0, 1};          // world hinge axis (from body A), for Revolute
+    Vec3      t1{1, 0, 0}, t2{0, 1, 0}; // world axes spanning the plane perpendicular to `axis`
+    Mat3      angK{Real(0)};          // inverse angular effective-mass matrix (Fixed 3-axis)
+    Vec3      angBias{0};             // angular Baumgarte bias
+    Real      kt1 = 0, kt2 = 0;       // scalar angular effective masses (hinge 2-axis)
+    Real      kAxis = 0;              // scalar effective mass about the hinge axis (limit)
+    int       limitState = 0;         // 0 none, +1 at lower (push +), -1 at upper (push -)
+    Real      limitBias = 0;          // Baumgarte bias for an active limit
+
+    uint32_t  generation = 0;
+    bool      alive = false;
 };
 
 class SequentialImpulseWorld final : public PhysicsWorld {
@@ -97,6 +138,8 @@ public:
         b.material = d.material;
         b.type = d.type;
         b.collider = d.collider;
+        b.collisionCategory = d.collisionCategory;
+        b.collisionMask = d.collisionMask;
         b.alive = true;
 
         const bool dynamic = (d.type == BodyType::Dynamic) && d.mass > kEpsilon;
@@ -125,6 +168,64 @@ public:
         freeList_.push_back(h.index);
     }
 
+    JointHandle createJoint(const JointDef& d) override {
+        if (!valid(d.a) || !valid(d.b)) return JointHandle{};
+        uint32_t index;
+        if (!jointFreeList_.empty()) { index = jointFreeList_.back(); jointFreeList_.pop_back(); }
+        else { index = static_cast<uint32_t>(joints_.size()); joints_.emplace_back(); }
+
+        JointData& j = joints_[index];
+        const uint32_t gen = j.generation;   // preserve generation across slot reuse
+        j = JointData{};
+        j.generation = gen;
+        j.type = d.type;
+        j.a = d.a.index;
+        j.b = d.b.index;
+        j.localAnchorA = d.localAnchorA;
+        j.localAnchorB = d.localAnchorB;
+        j.localAxisA = glm::normalize(d.localAxisA);
+        j.localAxisB = glm::normalize(d.localAxisB);
+        j.enableLimit = d.enableLimit;
+        j.lowerLimit = d.lowerLimit;
+        j.upperLimit = d.upperLimit;
+        j.actuator = d.actuator;
+        // Reference relative orientation qA*·qB, captured at creation (Fixed keeps this).
+        j.refRel = glm::normalize(glm::conjugate(bodies_[j.a].orientation) * bodies_[j.b].orientation);
+        j.alive = true;
+        return JointHandle{ index, j.generation };
+    }
+
+    void destroyJoint(JointHandle h) override {
+        if (!jointValid(h)) return;
+        joints_[h.index].alive = false;
+        ++joints_[h.index].generation;
+        jointFreeList_.push_back(h.index);
+    }
+
+    void setJointActuator(JointHandle h, const Actuator& a) override {
+        if (jointValid(h)) joints_[h.index].actuator = a;
+    }
+    void setJointTarget(JointHandle h, Real target) override {
+        if (jointValid(h)) joints_[h.index].actuator.target = target;
+    }
+    void setJointTorque(JointHandle h, Real torque) override {
+        if (jointValid(h)) joints_[h.index].actuator.torque = torque;
+    }
+    void setJointTargets(std::span<const Real> targets) override {
+        const size_t n = std::min(targets.size(), joints_.size());
+        for (size_t i = 0; i < n; ++i) if (joints_[i].alive) joints_[i].actuator.target = targets[i];
+    }
+    void setJointTorques(std::span<const Real> torques) override {
+        const size_t n = std::min(torques.size(), joints_.size());
+        for (size_t i = 0; i < n; ++i) if (joints_[i].alive) joints_[i].actuator.torque = torques[i];
+    }
+    JointState jointState(JointHandle h) const override {
+        if (!jointValid(h) || joints_[h.index].type != JointType::Revolute) return {};
+        const HingeState hs = hingeState(joints_[h.index]);
+        return JointState{ hs.q, hs.qd };
+    }
+    std::span<const JointState> jointStates() const override { return jointStates_; }
+
     void setGravity(Vec3 g) override { def_.gravity = g; }
 
     void step(Real dt) override {
@@ -134,15 +235,29 @@ public:
         events_.clear();
 
         for (int s = 0; s < substeps; ++s) {
-            // 1. Integrate velocities (gravity).
+            // 1. Integrate velocities (gravity) + apply joint actuator torques (B3).
             forEachDynamic([&](BodyData& b) { b.linVel += def_.gravity * h; });
+            applyActuators(h);
 
             // 2. Broadphase + narrowphase -> constraints.
             buildConstraints(h);
 
-            // 3. Sequential-impulse velocity solve, graph-colored (parallel within a color).
-            for (int it = 0; it < def_.velocityIterations; ++it)
+            // 2b. Joints: cache per-substep solve data + warm-start from accumulated impulses.
+            prepareJoints(h);
+
+            // 3. Sequential-impulse velocity solve. Joints solved serially (creation order,
+            //    deterministic) before the graph-colored contacts each iteration.
+            for (int it = 0; it < def_.velocityIterations; ++it) {
+                solveJoints();
                 solveColored();
+            }
+
+            // 3b. Optional velocity damping (drag) on dynamic bodies, so undamped DOFs settle.
+            if (def_.linearDamping > Real(0) || def_.angularDamping > Real(0)) {
+                const Real ld = std::max(Real(0), Real(1) - def_.linearDamping * h);
+                const Real ad = std::max(Real(0), Real(1) - def_.angularDamping * h);
+                forEachDynamic([&](BodyData& b) { b.linVel *= ld; b.angVel *= ad; });
+            }
 
             // 4. Integrate positions + orientations (Dynamic + Kinematic; Kinematic advances by
             //    its scripted velocity, unaffected by gravity/impulses).
@@ -153,6 +268,7 @@ public:
         }
 
         for (uint32_t i = 0; i < bodies_.size(); ++i) writeOutputs(i);
+        writeJointStates();
     }
 
     std::span<const engine::Transform> poses() const override { return poses_; }
@@ -172,6 +288,17 @@ private:
             && bodies_[h.index].generation == h.generation;
     }
 
+    bool jointValid(JointHandle h) const {
+        return h.valid() && h.index < joints_.size() && joints_[h.index].alive
+            && joints_[h.index].generation == h.generation;
+    }
+
+    // Category/mask collision filter (B4): both directions must pass. Lets an articulation's
+    // jointed limbs (same category, masking that category out) skip colliding with each other.
+    static bool collisionFilter(const BodyData& A, const BodyData& B) {
+        return (A.collisionCategory & B.collisionMask) != 0u
+            && (B.collisionCategory & A.collisionMask) != 0u;
+    }
     void writeOutputs(uint32_t i) {
         const BodyData& b = bodies_[i];
         poses_[i].position = b.position;
@@ -272,11 +399,13 @@ private:
             const uint32_t i = finiteIdx_[pa];
             const uint32_t j = finiteIdx_[pb];
             if (bodies_[i].invMass == Real(0) && bodies_[j].invMass == Real(0)) continue;
+            if (!collisionFilter(bodies_[i], bodies_[j])) continue;
             candidatePairs_.emplace_back(i, j);
         }
         for (uint32_t p : planeIdx_)
             for (uint32_t f : finiteIdx_) {
                 if (bodies_[p].invMass == Real(0) && bodies_[f].invMass == Real(0)) continue;
+                if (!collisionFilter(bodies_[p], bodies_[f])) continue;
                 candidatePairs_.emplace_back(p, f);
             }
 
@@ -570,6 +699,225 @@ private:
         if (B.invMass != Real(0)) { B.linVel += B.invMass * P; B.angVel += IinvB * glm::cross(rB, P); }
     }
 
+    // --- joint helpers (Phase B) ---
+
+    // Cross-product matrix: skew(v) * x == cross(v, x). glm is column-major (m[col][row]).
+    static Mat3 skew(const Vec3& v) {
+        Mat3 s(Real(0));
+        s[0][0] = 0;     s[1][0] = -v.z;  s[2][0] =  v.y;
+        s[0][1] =  v.z;  s[1][1] = 0;     s[2][1] = -v.x;
+        s[0][2] = -v.y;  s[1][2] =  v.x;  s[2][2] = 0;
+        return s;
+    }
+
+    // Orthonormal basis (t1, t2) spanning the plane perpendicular to unit vector n.
+    static void basisPerp(const Vec3& n, Vec3& t1, Vec3& t2) {
+        const Vec3 ref = (std::fabs(n.x) <= std::fabs(n.y) && std::fabs(n.x) <= std::fabs(n.z))
+            ? Vec3(1, 0, 0)
+            : (std::fabs(n.y) <= std::fabs(n.z) ? Vec3(0, 1, 0) : Vec3(0, 0, 1));
+        t1 = glm::normalize(glm::cross(n, ref));
+        t2 = glm::cross(n, t1);
+    }
+
+    static void applyAngularImpulse(BodyData& A, BodyData& B, const Mat3& IinvA,
+                                    const Mat3& IinvB, const Vec3& L) {
+        if (A.invMass != Real(0)) A.angVel -= IinvA * L;
+        if (B.invMass != Real(0)) B.angVel += IinvB * L;
+    }
+
+    // Hinge angle (about the axis, from the creation-time reference) + rate + world axis.
+    struct HingeState { Vec3 axisW; Real q; Real qd; };
+    HingeState hingeState(const JointData& j) const {
+        const BodyData& A = bodies_[j.a];
+        const BodyData& B = bodies_[j.b];
+        HingeState hs;
+        hs.axisW = glm::mat3_cast(A.orientation) * j.localAxisA;
+        const Quat qRel = glm::normalize(glm::conjugate(A.orientation) * B.orientation);
+        const Quat qErr = glm::normalize(qRel * glm::conjugate(j.refRel));   // drift, A-local
+        const Vec3 v(qErr.x, qErr.y, qErr.z);
+        hs.q  = Real(2) * std::atan2(glm::dot(v, j.localAxisA), qErr.w);       // twist about axis
+        hs.qd = glm::dot(B.angVel - A.angVel, hs.axisW);
+        return hs;
+    }
+
+    // Actuators (B3): apply each Revolute joint's actuator torque about its hinge axis as an
+    // external angular impulse (RL torque semantics), equal-and-opposite on the two bodies. Runs
+    // in the velocity-integration phase (alongside gravity), before the constraint solve.
+    void applyActuators(Real h) {
+        for (JointData& j : joints_) {
+            if (!j.alive) continue;
+            if (j.actuator.mode == ActuatorMode::None) continue;
+            if (j.type == JointType::Fixed) continue;   // no free DOF to actuate
+            BodyData& A = bodies_[j.a];
+            BodyData& B = bodies_[j.b];
+            if (A.invMass == Real(0) && B.invMass == Real(0)) continue;
+            const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
+            const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+
+            if (j.type == JointType::Revolute) {
+                const HingeState hs = hingeState(j);
+                Real tau = (j.actuator.mode == ActuatorMode::Torque)
+                    ? j.actuator.torque
+                    : j.actuator.kp * (j.actuator.target - hs.q)
+                    + j.actuator.kd * (j.actuator.targetVel - hs.qd);
+                if (j.actuator.maxTorque > Real(0))
+                    tau = std::clamp(tau, -j.actuator.maxTorque, j.actuator.maxTorque);
+                applyAngularImpulse(A, B, IinvA, IinvB, (tau * h) * hs.axisW);   // +τ→B, -τ→A
+            } else {   // Ball: 3-DOF spherical actuation
+                Vec3 tau3;
+                if (j.actuator.mode == ActuatorMode::Torque) {
+                    tau3 = j.actuator.ballTorque;
+                } else {   // PDTarget toward a desired relative orientation
+                    const Quat qRel = glm::normalize(glm::conjugate(A.orientation) * B.orientation);
+                    const Quat qErr = glm::normalize(j.actuator.ballTarget * glm::conjugate(qRel));
+                    const Vec3 eWorld = glm::mat3_cast(A.orientation) * so3LogMap(qErr);   // A-local → world
+                    tau3 = j.actuator.kp * eWorld - j.actuator.kd * (B.angVel - A.angVel);
+                }
+                if (j.actuator.maxTorque > Real(0)) {
+                    const Real len = glm::length(tau3);
+                    if (len > j.actuator.maxTorque) tau3 *= j.actuator.maxTorque / len;
+                }
+                applyAngularImpulse(A, B, IinvA, IinvB, tau3 * h);
+            }
+        }
+    }
+
+    // Refresh the bulk joint-state readback (observation). Indexed by joint slot; called after
+    // integration each step. Allocation-free once sized.
+    void writeJointStates() {
+        jointStates_.assign(joints_.size(), JointState{});
+        for (size_t i = 0; i < joints_.size(); ++i) {
+            if (joints_[i].alive && joints_[i].type == JointType::Revolute) {
+                const HingeState hs = hingeState(joints_[i]);
+                jointStates_[i] = JointState{ hs.q, hs.qd };
+            }
+        }
+    }
+
+    // Cache per-substep solve data (anchor offsets, effective-mass matrices, Baumgarte bias) and
+    // warm-start from the accumulated impulses. Runs once per substep before the iteration loop.
+    void prepareJoints(Real h) {
+        const Real invH = (h > kEpsilon) ? Real(1) / h : Real(0);
+        for (JointData& j : joints_) {
+            if (!j.alive) continue;
+            BodyData& A = bodies_[j.a];
+            BodyData& B = bodies_[j.b];
+            if (A.invMass == Real(0) && B.invMass == Real(0)) continue;
+
+            const Mat3 RA = glm::mat3_cast(A.orientation);
+            const Mat3 RB = glm::mat3_cast(B.orientation);
+            const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
+            const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+
+            // Point-to-point: K = (imA+imB)I - skew(rA)·IinvA·skew(rA) - skew(rB)·IinvB·skew(rB).
+            j.rA = RA * j.localAnchorA;
+            j.rB = RB * j.localAnchorB;
+            const Mat3 sA = skew(j.rA);
+            const Mat3 sB = skew(j.rB);
+            const Mat3 K = Mat3(A.invMass + B.invMass) - sA * IinvA * sA - sB * IinvB * sB;
+            j.pointK = glm::inverse(K);
+            const Vec3 anchorA = A.position + j.rA;
+            const Vec3 anchorB = B.position + j.rB;
+            j.pointBias = (kJointBaumgarte * invH) * (anchorB - anchorA);   // drive anchors together
+
+            applyImpulse(A, B, IinvA, IinvB, j.rA, j.rB, j.pointImpulse);   // warm start (point)
+
+            if (j.type == JointType::Revolute) {
+                const Vec3 aA = RA * j.localAxisA;
+                const Vec3 aB = RB * j.localAxisB;
+                j.axis = aA;
+                basisPerp(aA, j.t1, j.t2);
+                const Mat3 Isum = IinvA + IinvB;
+                j.kt1 = glm::dot(j.t1, Isum * j.t1);
+                j.kt2 = glm::dot(j.t2, Isum * j.t2);
+                j.angBias = (kJointBaumgarte * invH) * glm::cross(aA, aB);   // axis misalignment
+                applyAngularImpulse(A, B, IinvA, IinvB, j.angImpulse);       // warm start (angular)
+
+                // hinge limit (B2): one-sided constraint about the axis when past a limit.
+                j.limitState = 0;
+                if (j.enableLimit && j.lowerLimit <= j.upperLimit) {
+                    j.kAxis = glm::dot(aA, Isum * aA);
+                    const Real q = hingeState(j).q;
+                    if (q <= j.lowerLimit) {
+                        j.limitState = +1;
+                        j.limitBias = (kJointBaumgarte * invH) * (q - j.lowerLimit);   // < 0 → push up
+                    } else if (q >= j.upperLimit) {
+                        j.limitState = -1;
+                        j.limitBias = (kJointBaumgarte * invH) * (q - j.upperLimit);   // > 0 → push down
+                    }
+                }
+                if (j.limitState != 0) applyAngularImpulse(A, B, IinvA, IinvB, j.limitImpulse * j.axis);
+                else                   j.limitImpulse = 0;
+            } else if (j.type == JointType::Fixed) {
+                j.angK = glm::inverse(IinvA + IinvB);
+                const Quat qRel = glm::normalize(glm::conjugate(A.orientation) * B.orientation);
+                const Quat qErr = glm::normalize(qRel * glm::conjugate(j.refRel));  // drift, A-local
+                j.angBias = (kJointBaumgarte * invH) * (RA * so3LogMap(qErr));       // -> world
+                applyAngularImpulse(A, B, IinvA, IinvB, j.angImpulse);
+            } else {
+                j.angImpulse = Vec3(0);
+            }
+        }
+    }
+
+    // One serial Gauss-Seidel sweep over joints (creation order → deterministic). Point-to-point
+    // then the type-specific angular part; each accumulates into the warm-start impulse.
+    void solveJoints() {
+        for (JointData& j : joints_) {
+            if (!j.alive) continue;
+            BodyData& A = bodies_[j.a];
+            BodyData& B = bodies_[j.b];
+            if (A.invMass == Real(0) && B.invMass == Real(0)) continue;
+            const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
+            const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+
+            // Angular part first, then point-to-point last, so the anchor (linear) constraint is
+            // satisfied at the end of each iteration (angular impulses perturb the anchor velocity
+            // via ω, so solving them first and the point last converges far more stably).
+            if (j.type == JointType::Revolute) {
+                if (j.kt1 > kEpsilon) {
+                    const Vec3 wrel = B.angVel - A.angVel;
+                    const Real L = -(glm::dot(wrel, j.t1) + glm::dot(j.angBias, j.t1)) / j.kt1;
+                    const Vec3 imp = L * j.t1;
+                    j.angImpulse += imp;
+                    applyAngularImpulse(A, B, IinvA, IinvB, imp);
+                }
+                if (j.kt2 > kEpsilon) {
+                    const Vec3 wrel = B.angVel - A.angVel;
+                    const Real L = -(glm::dot(wrel, j.t2) + glm::dot(j.angBias, j.t2)) / j.kt2;
+                    const Vec3 imp = L * j.t2;
+                    j.angImpulse += imp;
+                    applyAngularImpulse(A, B, IinvA, IinvB, imp);
+                }
+                // hinge limit (B2): one-sided impulse about the axis (push back into range only).
+                if (j.limitState != 0 && j.kAxis > kEpsilon) {
+                    const Vec3 wrel = B.angVel - A.angVel;
+                    const Real wAxis = glm::dot(wrel, j.axis);
+                    Real dL = -(wAxis + j.limitBias) / j.kAxis;
+                    const Real old = j.limitImpulse;
+                    j.limitImpulse = (j.limitState > 0) ? std::max(old + dL, Real(0))
+                                                        : std::min(old + dL, Real(0));
+                    dL = j.limitImpulse - old;
+                    applyAngularImpulse(A, B, IinvA, IinvB, dL * j.axis);
+                }
+            } else if (j.type == JointType::Fixed) {
+                const Vec3 wrel = B.angVel - A.angVel;
+                const Vec3 imp = j.angK * (-(wrel + j.angBias));
+                j.angImpulse += imp;
+                applyAngularImpulse(A, B, IinvA, IinvB, imp);
+            }
+
+            // point-to-point (last)
+            {
+                const Vec3 vrel = (B.linVel + glm::cross(B.angVel, j.rB))
+                                - (A.linVel + glm::cross(A.angVel, j.rA));
+                const Vec3 dP = j.pointK * (-(vrel + j.pointBias));
+                j.pointImpulse += dP;
+                applyImpulse(A, B, IinvA, IinvB, j.rA, j.rB, dP);
+            }
+        }
+    }
+
     WorldDef def_;
     Real     kSubDt_ = Real(1) / Real(60);   // set per step for the Baumgarte term
     core::ThreadPool* pool_ = nullptr;
@@ -577,6 +925,9 @@ private:
     std::vector<BodyData>         bodies_;
     std::vector<uint32_t>         freeList_;
     std::vector<Constraint>       constraints_;
+    std::vector<JointData>        joints_;        // persistent (Phase B)
+    std::vector<uint32_t>         jointFreeList_;
+    std::vector<JointState>       jointStates_;   // bulk readback (B3), indexed by joint slot
     std::vector<engine::Transform> poses_;
     std::vector<Vec3>             linVelOut_;
     std::vector<Vec3>             angVelOut_;

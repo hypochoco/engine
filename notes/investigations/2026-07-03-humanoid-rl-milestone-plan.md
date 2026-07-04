@@ -110,28 +110,74 @@ Unblocks watching/driving everything and is explicitly requested.
 - **A4 Background**: surface `RenderView::clearColor` at the scene/ECS level (a `Background`
   resource/component). Verify visually + a pixel test.
 
-### Phase B — Articulated physics (the core)
-- **B0 Design doc**: settle Option A vs B (see above); define joint types + actuator model.
-- **B1 Constraints**: add bilateral **joint constraints** to the impulse solver — **ball/socket**
-  (point-to-point), **hinge/revolute** (axis + angular limits), **fixed/weld**; warm-start;
-  clamp like contacts. Unit tests (double pendulum energy behavior, hinge limit, chain rest).
-- **B2 Actuators**: per-joint **PD servo** (target angle/velocity, torque limit) + direct torque
-  control. This is the RL **action** surface.
-- **B3 Articulation model + builder**: a data description (bodies = capsules/boxes, joints
-  {type, frames, axis, limits}, actuators) + a programmatic builder that instantiates it into a
-  `PhysicsWorld`. Consider URDF/MJCF import **later** (downstream).
-- **B4 Humanoid preset**: torso/head/upper+lower arms/upper+lower legs/feet as capsules+boxes,
-  ball hips/shoulders, hinge knees/elbows/ankles.
-- **B5 Tests**: passive **ragdoll** collapses & rests on the ground (no explosion, |ω|→0); a
-  scripted **PD "stand"** holds a pose; determinism preserved (bit-identical serial vs parallel).
+### Phase B — Articulated physics (the core) — APPROVED PLAN (2026-07-03), grounded in the solver
 
-### Phase C — Terrain (parallel with B)
-- **C1 Heightfield collider**: `Heightfield` shape (grid of heights + spacing) + narrowphase
-  (sphere/capsule/box vs the local triangles/cells); reuse manifold generation.
-- **C2 Procedural generation**: terrain generators in `core::geometry` (slopes, stairs, gaps,
-  value/Perlin noise) producing **both** the heightfield (collision) and a render `MeshData`.
-- **C3 Render**: draw the terrain as a lit static mesh; a visual test of a ball/capsule rolling
-  and settling on rough terrain.
+Maximal-coordinate **joint constraints + actuators** on the existing sequential-impulse solver
+(decision: [2026-07-03-articulation-approach.md](2026-07-03-articulation-approach.md)). Reviewed
+against `notes/core/goals.md` (games / ML-parallel / 100k / determinism / plain-data boundary) —
+holds up; see "Alignment + 3 refinements" below.
+
+**How joints fit the existing solver** (`src/physics/backends/realtime/sequential_impulse_world.cpp`):
+per-substep loop is (1) integrate velocities (gravity) → (2) `buildConstraints` (contacts, rebuilt
+each step) → (3) N velocity iterations of `solveColored()` → (4) integrate positions/orientations
+(exp-map). Joints are velocity constraints in the **same loop**, but **persistent** (created once,
+alive across steps) — so they get a persistent store + **cross-step warm-starting** (contacts
+don't). Reuses `effectiveMass`/`applyImpulse`/`worldInvInertia` and the Baumgarte push-out style.
+
+- **B0 Design doc** ✅ DONE (articulation-approach.md; constraints-first, reduced-coord deferred).
+- **B1 Joint constraints core** (this pass): `JointHandle`/`JointType{Ball,Revolute,Fixed}`/
+  `JointDef` (bodies + local anchor per body + local hinge axis per body) in `world.h`;
+  `createJoint`/`destroyJoint` virtuals. Backend: persistent `joints_` vector (index-stable,
+  free-list) with warm-start accumulators; **serial** solve in the iteration loop (before the
+  colored contacts), deterministic in creation order. Constraints: **ball** = point-to-point (3,
+  3×3 K-matrix + Baumgarte from world-anchor error); **hinge** = point-to-point + 2 angular
+  (kill relative ω off the hinge axis, Baumgarte from axis misalignment); **fixed** =
+  point-to-point + 3 angular (lock relative orientation to the creation-time reference).
+  **Per-world, allocation-free per step, no mutable statics** (refinement 2). Unit tests: ball
+  anchors coincide (no drift under gravity), hinge off-axis relative rotation ≈ 0, fixed keeps
+  relative pose.
+- **B2 Joint limits**: hinge min/max angle as a **one-sided** constraint (like a contact at the
+  limit). Test: swings to and stops at the clamp.
+- **B3 Actuators + state read**: per-DOF mode ∈ {`Torque`, `PDTarget(kp,kd,targetPos,targetVel)`}
+  + torque limit, applied as **external angular impulses in the velocity-integration phase**
+  (RL torque semantics); explicit PD + substepping first (SPD if jittery). Read-path: joint
+  `q`/`qd` (single + **bulk SoA span**, mirroring `poses()`), **and bulk SoA actuator write**
+  (refinement 1 — batched action tensor, not just per-joint setters). Backend-agnostic so the
+  future Featherstone backend serves the same `q/qd`/torque API. Tests: PD "stand" holds a target
+  angle vs gravity; torque mode → expected angular accel.
+- **B4 ECS bridge + articulation builder + humanoid preset + self-collision filtering**:
+  `Joint{JointHandle}` component (joint-as-entity) + `JointActuatorCommand` flush system (where
+  actions land); data description (bodies/joints/actuators) → spawns entities + world bodies +
+  joints; humanoid preset (~15 capsule/box limbs; ball hips/shoulders, hinge knees/elbows/
+  ankles). **Self-collision filtering** (REQUIRED): a `collisionGroup`/`mask` on `BodyDef`
+  consulted in the candidate-pair filter so jointed parent↔child limbs don't fight the joint.
+- **B5 Tests + demo**: passive **ragdoll** collapses & rests on the flat plane (no explosion,
+  |ω|→0, energy non-increasing); scripted **PD "stand"** holds a pose; **determinism** (bit-
+  identical serial vs parallel — joints serial in creation order + contacts colored). Visual:
+  ragdoll / PD-stand on the plane with the fly camera.
+
+**Alignment + 3 refinements (reviewed vs core goals):**
+1. **Bulk SoA actuator write + q/qd readback** (B3) — matches "batched observation/action
+   tensors"; per-joint setters kept for interactive/game use.
+2. **Per-world, allocation-free, no-statics joint solve** (B1) — ML throughput is *across worlds*
+   (VecEnv, Phase D), not intra-world; a 15-body humanoid steps single-threaded and that's
+   correct. Warm-start impulses live in the persistent `joints_` vector (no per-step heap churn);
+   use per-world member scratch (not `thread_local`) so concurrent worlds are unambiguously safe.
+3. **Maximal-coordinate compromise (known, mitigated)**: more solver DOF/drift per humanoid than
+   reduced coords, but the `q/qd` accessor still exports the *minimal* observation (read joint
+   angles/rates, not redundant body poses), and the reduced-coordinate Featherstone backend
+   (deferred) is the throughput/stability/gradient answer — a transparent backend swap via the
+   backend-agnostic API. 100k free bodies unchanged (joints are additive); many ragdolls in one
+   giant world → fold joints into graph-coloring (escape hatch).
+
+### Phase C — Terrain ⏸ DEFERRED (2026-07-03), revisit after B/D
+A flat `Plane` is enough to get the humanoid balancing + walking; varied terrain is a
+refinement, not a prerequisite. Full design + rationale + the "GJK/EPA ≠ arbitrary mesh
+collider" analysis: [2026-07-03-terrain-collision-deferred.md](2026-07-03-terrain-collision-deferred.md).
+Revisit when locomotion needs slopes/stairs/rough ground (e.g. an RL terrain curriculum).
+- (deferred) C1 Heightfield collider (sphere→capsule; AABB-reject broadphase like Plane).
+- (deferred) C2 Procedural generation in `core::geometry` → heightfield + render mesh.
+- (deferred) C3 Render terrain as a lit static mesh; body-settles-on-terrain test.
 
 ### Phase D — RL-ready env interface (depends on B+C, ECS command buffer)
 Mechanism only — reward/task/training live downstream.
@@ -183,10 +229,12 @@ reaching into internals. Prefer plain-data (SoA float spans, POD structs) at the
   model-free PPO/SAC. Reduced-coordinate (Option B) would make it cleaner if pursued.
 
 ## Suggested sequencing
-1. **Phase A** (input + lighting + background) — quick, high leverage, makes everything watchable.
-2. **B0 design doc** (articulation decision) in parallel with A.
-3. **Phase B** (joints → actuators → humanoid) — long pole.
-4. **Phase C** (terrain) — overlaps B.
+1. ~~**Phase A** (input + lighting + background)~~ ✅ DONE (2026-07-03).
+2. ~~**B0 design doc** (articulation decision)~~ ✅ DONE — constraints-first, reduced-coord deferred
+   ([2026-07-03-articulation-approach.md](2026-07-03-articulation-approach.md)).
+3. **Phase B** (joints → actuators → humanoid) — the long pole; **next up**. On flat ground.
+4. ~~Phase C (terrain)~~ ⏸ **DEFERRED** — flat `Plane` suffices for now; revisit after B/D.
 5. **D0 ECS command buffer** — can start anytime; needed before the rest of D.
-6. **Phase D** (env → vec-env → obs/action → determinism) — integrates B+C.
-7. Re-evaluate: is the engine "enough"? If yes, **spin up the downstream sim repo**.
+6. **Phase D** (env → vec-env → obs/action → determinism) — integrates B (on flat ground).
+7. Re-evaluate: is the engine "enough"? If yes, **spin up the downstream sim repo**. (Fold terrain
+   back in when locomotion needs varied ground.)

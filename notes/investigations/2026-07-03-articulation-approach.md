@@ -106,6 +106,40 @@ the `PhysicsWorld` boundary (both backends implement them):
 - **Articulation builder + humanoid preset:** data description (bodies/joints/actuators) →
   instantiated into a `PhysicsWorld`; URDF/MJCF import later (likely downstream).
 
+## Solver engineering notes (learned building B1, 2026-07-03)
+
+Two non-obvious lessons from implementing maximal-coordinate joints on the sequential-impulse
+solver — both matter for B2–B5 and for anyone touching the joint solve later:
+
+1. **Solve the angular part before the point-to-point part, every iteration.** A joint's angular
+   impulses change a body's angular velocity, which in turn perturbs the *anchor* velocity
+   (`v_anchor = v_com + ω × r`). If the linear (point-to-point) constraint is solved first and the
+   angular second, each iteration leaves the anchor freshly violated by the angular correction,
+   and the coupled solve converges poorly or diverges. Solving angular first and the point
+   constraint **last** means the anchor (linear) constraint is satisfied at the end of each
+   iteration → far more stable. (This is why `solveJoints()` does angular → point.)
+
+2. **Divergence in a stiff joint is usually an inertia-ratio problem, not a constraint bug.** The
+   first `Fixed`-joint cantilever test exploded to ~1e4 in 240 steps. Root cause was **not** the
+   constraint math — it was a pathological collider: a 0.1 m sphere has `invInertia = 1/(0.4·m·r²)
+   = 250`, so the point impulse's induced spin `IinvB·(rB × P)` is amplified ~250× on a 1 m lever,
+   destabilizing the coupled linear/angular solve. A realistically-sized body (r = 0.5 →
+   `invInertia = 10`) holds the same cantilever rock-solid. Takeaway: extreme mass/inertia ratios
+   (point masses on long levers) need more iterations/substeps, exactly like stiff contact stacks;
+   real humanoid limbs (boxes/capsules whose size ≈ their lever) are well within the stable regime.
+   When a joint test blows up, check the inertia/lever ratio before suspecting the solver.
+
+3. **Explicit PD on a lightly-loaded compliant chain can be unstable at aggressive targets
+   (learned building B5).** Driving the humanoid's *knees* to a bent target held cleanly and
+   symmetrically, but driving the *elbows* (a light forearm hanging off a PD-compliant ball
+   shoulder — a soft double pendulum) to a large bent target overshot and went L/R-asymmetric
+   (2.11 vs 1.71 rad): explicit PD adds energy when the plant is soft and under-damped. Mitigations
+   we already have: higher `kd`, more substeps, or stiffer parent joints; the real fix is
+   **stable PD (SPD)** — an implicit PD that stays stable at high gains — which is the natural B-phase
+   follow-up if precise high-gain pose tracking is needed. For now: gravity-stable targets and
+   moderate gains hold reliably (the PD-stand test commands bent knees against gravity + neutral
+   elbows).
+
 ## Differentiable physics — how it plays into ML here
 
 (See also the deferred Phase 3 in the physics plan.) Differentiable physics means the simulator

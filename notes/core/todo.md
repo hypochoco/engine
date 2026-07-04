@@ -71,21 +71,55 @@ Qt/other later) and headless/ML use:
       **reduced-coordinate (Featherstone) `PhysicsWorld` backend later** (deferred, but integral
       once training starts — smaller observations → throughput). Keep joint/actuator + obs/action
       API backend-agnostic.
-- [ ] **Joint constraints** on the impulse solver: ball/socket (point-to-point), hinge/revolute
-      (axis + angular limits), fixed/weld; warm-start + clamp like contacts.
-- [ ] **Actuators**: per-joint PD servo (target angle/vel, torque limit) + direct torque — the
-      RL **action** surface.
-- [ ] **Articulation model + builder**: data description (bodies/joints/actuators) +
-      programmatic builder into a `PhysicsWorld`. (URDF/MJCF import later, likely downstream.)
-- [ ] **Humanoid preset** (capsule/box limbs, ball hips/shoulders, hinge knees/elbows/ankles).
-- [ ] **Tests**: passive ragdoll rests without exploding; PD "stand" holds a pose; determinism
-      preserved (bit-identical serial vs parallel).
+  Full reviewed plan (grounded in the solver + checked vs core goals) in the milestone plan
+  §"Phase B — APPROVED PLAN". Joints = persistent velocity constraints in the same solver loop
+  as contacts, warm-started across steps; **per-world, allocation-free, no statics** (VecEnv-safe).
+- [ ] **B1 Joint constraints core** ← IN PROGRESS: `JointHandle`/`JointType{Ball,Revolute,Fixed}`/
+      `JointDef` + `createJoint`/`destroyJoint` in `world.h`; persistent `joints_` store +
+      serial warm-started solve (ball = point-to-point 3×3 K; hinge = point + 2 angular; fixed =
+      point + 3 angular lock) + Baumgarte. Tests: ball anchors coincide, hinge off-axis ≈ 0,
+      fixed keeps relative pose.
+- [x] **B2 Joint limits** ✅ (2026-07-03): hinge min/max angle as a one-sided constraint about
+      the axis. Test: pendulum settles exactly at the clamp (`hinge_limit_stops`).
+- [x] **B3 Actuators + state read** ✅ (2026-07-03): per-Revolute {Torque, PDTarget(kp,kd,target,
+      targetVel)} + `maxTorque` (external angular impulse pre-solve). Read `q/qd` single
+      (`jointState`) + **bulk SoA span** (`jointStates`); **bulk SoA actuator write**
+      (`setJointTargets/Torques`) + single setters. Tests: PD holds a target angle vs gravity,
+      torque drives the joint, bulk write/read roundtrip. Ball/Fixed actuation + multi-DOF q/qd
+      deferred to B4 (humanoid hips/shoulders).
+- [x] **B4 ECS bridge + builder + humanoid preset + self-collision filtering** ✅ (2026-07-03):
+      `collisionCategory`/`collisionMask` on `BodyDef` (limbs mask each other out); plain-data
+      `ArticulationDef`/`JointSpec` + `buildArticulation` + `makeHumanoid` preset (13 limbs,
+      12 joints) in `physics/dynamics/articulation.h`; 3-DOF ball spherical-PD/torque actuation;
+      `WorldDef::linear/angularDamping` (drag so free DOFs settle); ECS `Joint`/`JointCommand`
+      components + `actuatorFlushSystem` + `spawnArticulation` bridge. Tests: collision_filter,
+      ragdoll_settles, ball_actuator_holds_orientation, articulation_ecs. Flat per-joint ball
+      q/qd SoA for RL obs deferred (derivable from body poses) until the downstream obs format.
+- [x] **B5 Tests + demo** ✅ (2026-07-03): `ragdoll_settles` (passive ragdoll collapses + rests,
+      |v|,|ω|→0, no explosion); `pd_stand_holds_pose` (pinned pelvis, PD drives bent knees vs
+      gravity + holds neutral elbows); `articulation_determinism` (serial vs parallel bit-identical
+      with joints+actuators, err 0); visual `humanoid` (PD-held humanoid on the plane, boxes +
+      fly camera). Added `primitives::makeBox` + `WorldDef` damping. Engineering notes (solve
+      order, inertia-ratio stiffness, explicit-PD-on-soft-chains) in the articulation note.
 
-### Phase C — Terrain (overlaps B)
-- [ ] **Heightfield collider** + narrowphase (sphere/capsule/box vs heightfield cells).
-- [ ] **Procedural terrain generation** in `core::geometry` (slopes/stairs/gaps/noise) →
-      **both** heightfield (collision) and render `MeshData`.
-- [ ] **Render terrain** as a lit static mesh; visual test of a body settling on rough terrain.
+**Phase B (articulated physics) COMPLETE** ✅ — maximal-coordinate joints (ball/hinge/fixed) +
+limits + actuators (revolute PD/torque + ball spherical PD) + q/qd read + bulk SoA action/obs +
+self-collision filtering + articulation builder/humanoid preset + ECS bridge, all deterministic
+and green. Next: **Phase D** (env interface) on the flat plane; reduced-coordinate Featherstone
+backend + terrain (Phase C) remain deferred.
+
+### Phase C — Terrain ⏸ DEFERRED (2026-07-03) — revisit after B/D
+Deferred: a flat `Plane` is enough to get a humanoid balancing + walking; varied terrain is a
+refinement, not a prerequisite. Design + rationale + the "GJK/EPA ≠ arbitrary mesh collider"
+analysis preserved in
+[2026-07-03-terrain-collision-deferred.md](../investigations/2026-07-03-terrain-collision-deferred.md).
+Revisit when locomotion needs slopes/stairs/rough ground (e.g. an RL terrain curriculum).
+- [ ] (deferred) Heightfield collider (sphere→capsule; AABB-reject broadphase like Plane;
+      analytic surface normal to dodge the internal-edge problem).
+- [ ] (deferred) Procedural terrain generation in `core::geometry` → heightfield + render mesh.
+- [ ] (deferred) Render terrain as a lit static mesh; body-settles-on-terrain test.
+- [ ] (later, separate/larger) General concave triangle-mesh collider (convex decomposition, or
+      per-triangle + BVH + internal-edge filtering). Convex meshes already work via `ConvexHull`.
 
 ### Phase D — RL-ready env interface (depends on B+C + ECS command buffer)
 - [ ] **ECS command buffer + add/remove-component** (also the standing ECS next-step): deferred
@@ -250,8 +284,11 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       open decision: maximal-coord constraints (reuse the impulse solver) vs reduced-coord
       Featherstone/ABA (RL-grade, differentiable-friendly). Needs a design doc first. See
       [2026-07-03-humanoid-rl-milestone-plan.md](../investigations/2026-07-03-humanoid-rl-milestone-plan.md).
-- [ ] **Terrain collision** (Milestone 2, Phase C). Heightfield collider + narrowphase; general
-      triangle-mesh collider possibly later.
+- [ ] **Terrain collision** (Milestone 2, Phase C) — ⏸ **DEFERRED** (2026-07-03): flat `Plane`
+      suffices for the humanoid for now. Heightfield collider + narrowphase; general concave
+      triangle-mesh collider (decomposition or per-triangle+BVH+edge-filtering) is a separate
+      larger item — note that **convex** meshes already work via `ConvexHull` (GJK/EPA).
+      Design + analysis: [2026-07-03-terrain-collision-deferred.md](../investigations/2026-07-03-terrain-collision-deferred.md).
 
 ## Infra / quality
 

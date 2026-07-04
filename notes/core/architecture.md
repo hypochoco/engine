@@ -6,6 +6,10 @@ Last synced with code: 2026-07-03.
 ## Build & layout
 
 - C++23, CMake `>= 3.25`, `compile_commands.json` exported.
+- **Default build type = RelWithDebInfo** (optimized) when none is given — a plain
+  `cmake -S . -B build` would otherwise be unoptimized (no `-O`/`NDEBUG`), which runs physics
+  ~20-50× slower and makes interactive visuals stutter/slow-mo. Override with
+  `-DCMAKE_BUILD_TYPE=Debug`. (Multi-config generators pick per-build.)
 - Split `include/` (public headers) vs `src/` (implementation).
 - Per-module build files live under a single top-level **`modules/`** dir (`modules/<name>/
   CMakeLists.txt`, aggregated by `modules/CMakeLists.txt`), separate from their source under
@@ -36,9 +40,6 @@ engine/
 
 ```
 engine::engine (INTERFACE)
-├── engine::core        (STATIC) → glm, tinyobjloader, stb, Threads
-│                                  geometry (vertex/mesh/material/model/primitives),
-│                                  memory/Handle, math/Transform, threading (ThreadPool + parallelSort)
 ├── engine::core        (STATIC)    → glm, tinyobjloader, stb, Threads
 │                                     geometry, memory/Handle, math/{Transform,Camera}, Time, threading
 ├── engine::ecs         (STATIC)    → engine::core   (archetype World, queries, resources, Schedule)
@@ -144,6 +145,43 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   **sequential-impulse (PGS)** contact solver (restitution, Coulomb friction, Baumgarte),
   substeps × velocity iterations. Friction at the contact point applies torque ⇒ **true
   rolling**.
+- **Joints** (Milestone 2, Phase B1, 2026-07-03): maximal-coordinate **bilateral constraints**
+  solved in the same velocity loop as contacts, but **persistent** (created once via
+  `createJoint(JointDef)`; kept in an index-stable `joints_` store) and **warm-started across
+  steps**. Types: **Ball** (point-to-point, 3×3 K-matrix), **Revolute/hinge** (point + 2 angular
+  axes), **Fixed/weld** (point + 3-axis orientation lock to a creation-time reference). Solved
+  **serially in creation order** (deterministic) — angular part before the point part each
+  iteration for stable coupling — **per-world, allocation-free, no statics** (VecEnv-safe).
+  Baumgarte `kJointBaumgarte=0.2`, no slop. Stiff mass/inertia ratios (e.g. a point-mass on a
+  long lever) need more iterations/substeps, as with contacts.
+  **Limits (B2)**: Revolute min/max angle enforced as a one-sided constraint about the axis.
+  **Actuators (B3)**: per Revolute joint, mode ∈ {`Torque`, `PDTarget(kp,kd,target,targetVel)`}
+  + `maxTorque` clamp, applied about the hinge axis as an external angular impulse in the
+  velocity-integration phase (RL torque semantics). **State read-path**: `JointState{q,qd}`
+  (hinge angle/rate about the axis) via `jointState(h)` + bulk `jointStates()` span; **bulk
+  action write** via `setJointTargets/Torques(span)` (batched observation/action for VecEnv).
+  Tests: `tst/physics/unit/joints.cpp` (ball anchors coincide; hinge confines to axis + preserves
+  on-axis spin; fixed holds a cantilever; hinge limit settles at the clamp; PD holds a target
+  angle vs gravity; torque drives the joint; bulk write/read roundtrip).
+  **Ball actuation (B4)**: 3-DOF spherical PD (`actuator.ballTarget`) or direct `ballTorque`,
+  clamped to `maxTorque`, applied as a 3-DOF angular impulse. Multi-DOF ball `q/qd` for RL obs is
+  derivable from the exposed body poses/`angularVelocities` (flat per-joint SoA is a follow-up).
+- **Self-collision filtering (B4)**: `BodyDef::collisionCategory`/`collisionMask` (default = collide
+  with all); a pair collides iff `(A.cat & B.mask) && (B.cat & A.mask)`. Articulation limbs share a
+  category and mask it out so they don't fight their joints (still collide with the ground).
+- **Optional velocity damping (B4)**: `WorldDef::linear/angularDamping` (default 0; drag applied to
+  dynamic bodies each substep) so undamped joint DOFs (a ragdoll's free-spinning limb) settle.
+- **Articulation (B4, `dynamics/articulation.h`)**: plain-data `ArticulationDef` (bodies +
+  `JointSpec`s referencing bodies by index) → `buildArticulation(world)` → handles;
+  `makeHumanoid()` preset = 13 capsule/box limbs + 12 joints (ball waist/hips/shoulders, fixed
+  neck, hinge elbows/knees/ankles with limits). Headless `tst/physics/integration/ragdoll.cpp`
+  (passive ragdoll collapses + settles on the plane).
+- **Humanoid behaviours (B5)**: `tst/physics/integration/humanoid_control.cpp` — `pd_stand_holds_pose`
+  (pinned pelvis; PD servos drive bent knees against gravity + hold neutral elbows) and
+  `articulation_determinism` (serial vs pooled/parallel bit-identical with joints+actuators).
+  Visual: `tst/physics/visual/humanoid.cpp` (PD-held humanoid standing on the plane; limbs drawn
+  as boxes via the new `primitives::makeBox`; fly camera). `makeBox(halfExtents)` added to
+  `core::geometry` (per-face normals) — the box primitive the engine previously lacked.
 - **Broadphase** (Phase 2, `broadphase/`, selectable via `WorldDef::broadphase`):
   - **Sweep-and-prune** (single-axis): great for small/clustered scenes; ~O(n^5/3) for a 3-D
     cube of bodies (active list holds a whole slab).
@@ -177,6 +215,12 @@ races). `core` links `Threads::Threads`. Two physics consumers:
 Depends on `engine::physics` + `engine::ecs` (separate from `scene`, which pulls graphics).
 `RigidBody{ BodyHandle }` component (no pose — Q2); `PhysicsWorldRef`/`FixedStep` resources;
 `stepSystem` + `syncSystem` (bulk world poses → `Transform`) added to an `ecs::Schedule`.
+**Articulation bridge (B4)**: `Joint{ JointHandle }` + `JointCommand{ target, torque }`
+components; `actuatorFlushSystem` writes each joint's command to the world (run before
+`stepSystem`); `spawnArticulation(ecsWorld, physicsWorld, ArticulationDef)` builds the bodies +
+joints and mirrors them into the ECS (an entity per body with `RigidBody`+`Transform`, per joint
+with `Joint`+`JointCommand`). Verified: `tst/physics/integration/articulation_ecs.cpp` (humanoid
+built in ECS; actuator→step→sync schedule; Transforms track poses exactly, ragdoll settles).
 
 ### Milestone status — "ball rolling down a plane" ✅ (physics + sim)
 - `tst/physics/integration/milestone.cpp` (headless): sphere on a 30° incline via the ECS bridge

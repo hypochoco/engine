@@ -18,4 +18,8 @@ void stepSystem(ecs::World& world);
 // Copies world body poses into each entity's Transform (reads PhysicsWorldRef).
 void syncSystem(ecs::World& world);
 
+// Writes each <Joint, JointCommand> entity's command into the PhysicsWorld actuator (Phase B4).
+// Run before stepSystem in a schedule (reads PhysicsWorldRef).
+void actuatorFlushSystem(ecs::World& world);
+
 } // namespace engine::physics_ecs

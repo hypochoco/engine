@@ -31,4 +31,16 @@ void syncSystem(ecs::World& world) {
         });
 }
 
+void actuatorFlushSystem(ecs::World& world) {
+    auto* ref = world.getResource<PhysicsWorldRef>();
+    if (!ref || !ref->world) return;
+    physics::PhysicsWorld& pw = *ref->world;
+
+    world.query<Joint, JointCommand>().each(
+        [&](ecs::Entity, Joint& j, JointCommand& c) {
+            pw.setJointTarget(j.joint, c.target);
+            pw.setJointTorque(j.joint, c.torque);
+        });
+}
+
 } // namespace engine::physics_ecs

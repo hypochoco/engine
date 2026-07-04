@@ -25,4 +25,7 @@ MeshData makePlane(float size = 1.0f, uint32_t subdivisions = 1);
 // `sectors` = longitude segments (>= 3). Smooth per-vertex normals.
 MeshData makeSphere(float radius = 0.5f, uint32_t rings = 16, uint32_t sectors = 32);
 
+// Axis-aligned box centered at origin with the given half-extents (per-face flat normals).
+MeshData makeBox(glm::vec3 halfExtents = glm::vec3(0.5f));
+
 } // namespace engine::primitives

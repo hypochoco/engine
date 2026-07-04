@@ -105,4 +105,31 @@ MeshData makeSphere(float radius, uint32_t rings, uint32_t sectors) {
     return m;
 }
 
+MeshData makeBox(glm::vec3 h) {
+    MeshData m;
+    // Six faces, each with its own outward normal (flat shading) → 24 vertices, 36 indices.
+    struct Face { glm::vec3 n, u, v; };   // normal + the two in-plane axes (half-extent scaled)
+    const Face faces[6] = {
+        { { 1, 0, 0}, {0, 0, -1}, {0, 1, 0} },   // +X
+        { {-1, 0, 0}, {0, 0,  1}, {0, 1, 0} },   // -X
+        { { 0, 1, 0}, {1, 0,  0}, {0, 0, 1} },   // +Y
+        { { 0,-1, 0}, {1, 0,  0}, {0, 0,-1} },   // -Y
+        { { 0, 0, 1}, {1, 0,  0}, {0, 1, 0} },   // +Z
+        { { 0, 0,-1}, {-1,0,  0}, {0, 1, 0} },   // -Z
+    };
+    for (const Face& f : faces) {
+        const glm::vec3 c = f.n * h;                    // face center
+        const glm::vec3 u = f.u * h;                    // half-edge along u
+        const glm::vec3 v = f.v * h;                    // half-edge along v
+        const auto base = static_cast<uint32_t>(m.vertices.size());
+        const glm::vec3 corners[4] = { c - u - v, c + u - v, c + u + v, c - u + v };
+        const glm::vec2 uvs[4] = { {0,0}, {1,0}, {1,1}, {0,1} };
+        for (int i = 0; i < 4; ++i)
+            m.vertices.push_back(Vertex{ corners[i], f.n, uvs[i], glm::vec3(1.0f) });
+        m.indices.insert(m.indices.end(),
+                         { base, base + 1, base + 2, base + 2, base + 3, base });
+    }
+    return m;
+}
+
 } // namespace engine::primitives
