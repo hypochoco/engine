@@ -41,10 +41,14 @@ struct DiffModel {
     bool floating = false;                  // free 6-DOF root?
     // Smoothed compliant ground plane (y=0, normal +y). Normal force = k·smoothRelu(pen)
     // − c·vₙ·σ(β·pen); β sets the smooth-relu / activation sharpness. Differentiable everywhere.
+    // Defaults SOFTENED (2026-07-04) for explicit-integrator stability at the env timestep: a lower
+    // activation sharpness β and higher normal damping c tame the contact-onset force spike (the
+    // dominant blow-up source through the articulated legs) with little effect on steady penetration.
+    // A stiffer, penetration-accurate contact needs the deferred semi-implicit/implicit solver.
     bool   contactGround = false;
-    double groundK = 3.0e3;
-    double groundC = 30.0;
-    double groundBeta = 800.0;
+    double groundK = 2.5e3;
+    double groundC = 80.0;
+    double groundBeta = 120.0;
     double groundMu = 0.8;         // Coulomb friction coefficient
     double frictionVref = 0.01;    // tangential-velocity regularization (m/s) — smooth Coulomb
 };
@@ -226,8 +230,9 @@ void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& ta
     }
 }
 
-// Per-link world COM position + world linear/angular velocity (energy/observation readout).
-template <class S> struct LinkWorld { V3<S> pos, linVel, angVel; };
+// Per-link world COM position + world orientation + world linear/angular velocity (rendering /
+// energy / observation readout).
+template <class S> struct LinkWorld { V3<S> pos, linVel, angVel; M3<S> rot; };
 
 template <class S>
 std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st) {
@@ -246,7 +251,7 @@ std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st)
             for (int d = 0; d < L.dof; ++d) vJ = vJ + scaled(jointScol(lift<S>(L.axes[d]), lift<S>(L.anchorC)), st.qd[static_cast<size_t>(L.qIndex + d)]);
             v[i] = plux(transpose(R_cp), p_cp) * v[L.parent] + vJ;
         }
-        out[static_cast<size_t>(i)] = { pos[i], Rw[i] * lin(v[i]), Rw[i] * ang(v[i]) };
+        out[static_cast<size_t>(i)] = { pos[i], Rw[i] * lin(v[i]), Rw[i] * ang(v[i]), Rw[i] };
     }
     return out;
 }

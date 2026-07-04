@@ -203,7 +203,18 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
         Jacobian finite, analytic rollout gradient == FD to 1.3e-9. **Phase F engine-side COMPLETE.**
   - [ ] (downstream) SHAC-style short-horizon analytic-policy-gradient smoke test — lives in the RL repo
         (reward/policy/optimizer) consuming `DiffEnvironment` + `alphaOrderGradient`.
-  - [ ] **F4** (reserve) IFT/exact contact gradients if the smoothed-contact bias limits results.
+  - [x] **Bug-hunting/hardening round DONE** (2026-07-04): unit `diff_invariants.cpp` + integration
+        `diff_validation.cpp` + benchmark `diff.cpp` + visual `diff_humanoid.cpp`. Verified converter ==
+        production reduced backend (9.2e-8 m), contact gradient == FD (3.7e-10), COM-ballistic, determinism.
+        Fixes: **softened contact defaults** (groundK 3e3→2.5e3, C 30→80, β 800→120) + **`DiffEnvironment`
+        auto substeps** (contact 48 / free 16) ⇒ passive humanoid drop stable at all substeps. Perf: diff
+        forward 0.70× reduced (faster); rolloutGradient ~linear in seeds (NA=21 ≈50× fwd); Jacobian 11 ms.
+        Note: [2026-07-04-differentiable-reduced.md](../investigations/2026-07-04-differentiable-reduced.md)
+        "Bug-hunting / hardening round".
+  - [ ] **F4 / semi-implicit contact** (deferred; the real fix): explicit soft contact is stability-limited —
+        soft-enough-to-be-stable is too soft to hold the humanoid's weight (feet penetrate ~0.1 m) and
+        aggressive actuation into contact still diverges past ~H=16–32 at the env timestep. A semi-
+        implicit/implicit contact solve decouples stiffness from h; pairs with IFT/exact contact gradients.
 - [x] contact-solve perf: **sparse LDLᵀ factorization of `H`** exploiting the DOF-ancestor tree
       (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
       reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts

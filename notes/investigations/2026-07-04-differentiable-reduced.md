@@ -346,3 +346,75 @@ humanoid runs differentiably through a `DiffEnvironment`. All header-only under
 `include/engine/physics/diff/` (`dual, linalg, articulated, zeroth_order, hybrid, jacobian,
 from_articulation, diff_environment`), quaternion-free, every gradient checked.
    - **F4 (reserve)** — IFT/exact contact gradients if the smoothed-contact bias limits results.
+
+
+---
+
+## Bug-hunting / hardening round (2026-07-04)
+
+A dedicated adversarial round after F3c, across all four test categories (all green, 124 tests):
+`tst/physics/unit/diff_invariants.cpp`, `tst/physics/integration/diff_validation.cpp`,
+`tst/physics/benchmark/diff.cpp`, `tst/physics/visual/diff_humanoid.cpp` (the whole humanoid rollout
+driven by the differentiable engine + rendered). Added `M3 rot` to `LinkWorld` (needed for rendering
+orientation; also useful for observations).
+
+**Correctness — clean:**
+- Converter vs the PRODUCTION reduced backend: a passive humanoid falls identically, **max body-pos
+  divergence 9.2e-8 m** over all 14 bodies ⇒ inertia/anchor/axis/restRel conventions are faithful.
+- Gradient THROUGH contact on the real humanoid vs central FD: **3.7e-10**.
+- COM stays ballistic under arbitrary internal joint torques (internal forces cancel) to the
+  integrator's momentum-drift order; rollout is bitwise deterministic; Dual gradients independent of
+  seed batching.
+
+**Findings:**
+1. **Contact instability at the env timestep (main finding).** Stiff foot contact routed through the
+   articulated legs blew up (NaN) at the old default `substeps=16` (h≈1 ms) for a *passive* humanoid
+   drop; a substep sweep showed ≥64 stable. Root cause = explicit-integration stiffness limit
+   (single free sphere was stable across k=1e3–3e5; the articulated chain is far stiffer), NOT a
+   logic bug. Aggravated by the sharp contact-onset (β=800).
+2. **Explicit-integrator drift (expected, characterized, not bugs):** COM ballistic only to ~3.7e-4
+   rel (matches the suite's accepted 5e-3 momentum tolerance); semi-implicit Euler shows a slow
+   *secular* energy drift on fast free rotation (~4.7 %/7.5 s) — non-symplectic for rigid-body
+   rotation; irrelevant to short controlled RL horizons.
+
+**Performance (single-thread, RelWithDebInfo):**
+- Forward differentiable substep **0.0029 ms vs 0.0042 ms reduced(float) — 0.70× (diff is FASTER**,
+  header-only + inlined), 345k substeps/s.
+- `rolloutGradient` forward-mode cost scales ~linearly in seed count: NA=1/4/21 → 1.18/2.9/**19.9 ms**
+  (~50× a forward rollout for the full 21 DOFs) ⇒ full-action gradients want reverse-mode/BPTT via
+  the per-step Jacobians or the hybrid, not one forward-mode pass. Few-seed gradients are cheap.
+- Per-step tangent Jacobian (54×75, column-wise `Dual<1>`) **11 ms/step** — heavy; optimizable
+  (batched dual / reverse-mode) if it ever gates training throughput.
+
+**Fixes applied (this round):**
+- **Softened contact defaults** in `DiffModel` (stability over penetration-accuracy, for now):
+  `groundK 3e3→2.5e3`, `groundC 30→80`, `groundBeta 800→120`. Softening the activation sharpness β
+  and raising normal damping c tames the contact-onset force spike (the blow-up driver) with little
+  effect on steady penetration. Result: the passive humanoid drop is now stable at ALL substep counts
+  (16→256, survives 300/300), contact gradients still match FD (3.9e-10), and the H=16 actuated
+  gradient dropped from 2.5e5 → 3e-2. (`diff_contact.cpp` tests hardcode their own contact params, so
+  fidelity tests are unaffected.)
+- **`DiffEnvironment` auto substeps**: `substeps<=0` (default) auto-selects **48 for contact-enabled**
+  envs (headroom) / **16 for free** envs (cheap). Explicit counts still override.
+
+**Known limitation / deferred (semi-implicit/implicit contact — Phase F4-ish):** soft-enough-to-be-
+stable explicit contact is too soft to hold the humanoid's full weight realistically — the two foot
+spheres penetrate ~0.1 m under body weight, and stiffening to fix that reduces the stable timestep.
+Aggressive actuation into contact still diverges past ~H=16–32 control steps at the env timestep. The
+proper fix is a semi-implicit/implicit contact solve so stiffness decouples from h (and IFT/exact
+contact gradients). Until then: soft contact + short horizons + the α-order hybrid cover the RL use.
+
+**Visual investigation follow-up (2026-07-04):** running the `diff_humanoid` visual showed the figure
+phasing through the floor, flailing, then vanishing. Traced to two things, neither a solver bug:
+(a) **feet-only contact geometry** — the converter attaches contact spheres only to the two feet, so
+the pelvis/torso/head/limbs have no collision; an *uncontrolled* humanoid collapses and, unsupported,
+sinks ~1 m below the plane (feet-only contact can't hold a fallen body up). Confirmed: giving every
+body a contact sphere makes the same passive drop pile ON the floor (pelvis settles ~0.057 m, min body
+y ~0.008 m). (b) **"vanishing"** = the visual applied a *constant* hip torque forever, pumping energy
+into the uncontrolled contact-coupled articulation → NaN at ~3.5 s (independent of substeps). Fixes:
+the visual now runs a **passive** ragdoll with **all-body contact spheres** (rests on the plane like
+the maximal-coordinate ragdoll); and the earlier finite/bounded stability criteria were too weak
+(finite-but-sunk passed) — added `diff_humanoid_rests_on_ground` (all-body contact) asserting
+`minBodyY > −0.1`. NOTE feet-only contact is fine for the intended CONTROLLED-humanoid RL use (upright,
+walking); the phase-through only bites an uncontrolled collapse. General multi-link contact geometry in
+the converter is the open item to review (a first step toward the deferred general-contact work).
