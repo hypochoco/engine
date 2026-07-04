@@ -241,6 +241,9 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       `makeHumanoid` preset with a mocap-suitable skeleton (more DOF / realistic proportions / joint limits
       matching a motion-capture retarget target) so imitation / mocap-tracking rewards work. Keep the
       `ArticulationDef` + converter (`articulationToDiffModel`) path so it flows to both backends + the diff engine.
+      Also the natural point to add **per-joint / per-contact heterogeneity** — today `DiffModel::jointDamping`
+      and `groundK/C/mu` are global-per-model; a richer model wants per-joint damping (stiff ankle vs loose
+      shoulder) + per-body contact material (grippy feet). Promote those scalars to `DiffLink`/`ContactSphere` then.
 - [ ] **Integrate with the training infrastructure (built elsewhere)** — connect the engine's
       env/config/gradient surfaces to the external trainer (reward/policy/optimizer, experiment configs,
       logging). Define the boundary: Python bindings + config `dump()` + obs/action layout + per-step
@@ -248,6 +251,26 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
 - [ ] **Another round of testing** (post-config, pre-training) — unit/integration/benchmark/visual pass
       focused on the config system (override/serialize/hash edge cases), the `Environment`/`VecEnv` boundary,
       and end-to-end batched-rollout determinism/reproducibility before the training stack lands.
+- [x] **Deep-dive testing: semi-implicit contact + contact force model** (2026-07-04). Report:
+      [2026-07-04-diff-semiimplicit-testing.md](../investigations/2026-07-04-diff-semiimplicit-testing.md).
+      Added `tst/physics/unit/diff_semiimplicit.cpp` (adhesion probe / smooth-dynamics damping / freefall
+      equivalence / determinism), a humanoid explicit-vs-semi rest-parity integration test, and
+      `ENGINE_SEMI`/`ENGINE_SUBSTEPS` toggles on the `diff_humanoid` visual. Tree green (141/0). Fixes
+      deferred (below).
+- [x] **FIX: contact normal force is adhesive during separation** — DONE (2026-07-04). Approach-gated
+      damping `σ(−groundDampBeta·vn)` (new `DiffModel::groundDampBeta`) switches damping off on separation
+      ⇒ `Fn ≥ 0` (non-adhesive), compression damping intact (low bounce). Measured Fn(vn=+2) −99.6 N→+68.4 N.
+      Guard `diff_ground_force_non_adhesive`.
+- [x] **FIX: semi-implicit damped the whole system → IMEX** — DONE (2026-07-04). SemiImplicit now treats
+      ONLY the stiff contact force implicitly (contact @ predicted state via `computeContactForcesWorld` +
+      `extContactWorld` arg on `diffForwardDynamics`), smooth dynamics stay explicit/symplectic. Contact-free
+      pendulum E/E₀ 0.63→1.007 (= explicit); stiff-contact stability + gradients retained. Guard
+      `diff_semiimplicit_imex_preserves_smooth_energy`.
+- [x] **Whole-system damping = optional PHYSICAL knob (not numerical)** — DONE (2026-07-04). Added
+      `DiffModel::jointDamping` (viscous `τ=−b·q̇`, default 0). Timestep-independent + differentiable
+      (verified identical at h and h/2); the diff humanoid doesn't need it for stability, it's for realism /
+      settling free DOFs / matching the RL backend (ties into cross-engine config unification). Guard
+      `diff_joint_damping_physical`. Report: [2026-07-04-diff-semiimplicit-testing.md](../investigations/2026-07-04-diff-semiimplicit-testing.md) (Resolution).
 - [x] contact-solve perf: **sparse LDLᵀ factorization of `H`** exploiting the DOF-ancestor tree
       (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
       reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts

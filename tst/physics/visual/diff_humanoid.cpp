@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -140,7 +141,22 @@ TST_CASE(physics, visual, diff_humanoid) {
     diff::DiffState<double> state = diff::makeState<double>(model);
     state.basePos = { 0, 0.99, 0 };
     const diff::V3<double> gravity{ 0, -9.81, 0 };
-    const int substeps = 64;
+    // Contact integration is switchable so the semi-implicit path (Feature 4) can be eyeballed against
+    // explicit — ENGINE_SEMI=1 selects semi-implicit; ENGINE_SUBSTEPS=N overrides the substep count
+    // (semi-implicit stays stable at fewer substeps than explicit, but is more numerically damped).
+    const bool semiImplicit = std::getenv("ENGINE_SEMI") != nullptr;
+    model.contactIntegration = semiImplicit ? diff::ContactIntegration::SemiImplicit : diff::ContactIntegration::Explicit;
+    const int substeps = std::getenv("ENGINE_SUBSTEPS") ? std::max(1, std::atoi(std::getenv("ENGINE_SUBSTEPS"))) : 64;
+    // Passive joint damping (physical, viscous τ=−b·q̇) so the uncontrolled ragdoll's limbs don't flail
+    // indefinitely before settling — a real body has soft-tissue joint damping. ENGINE_JOINT_DAMPING=0
+    // disables it (livelier flail); higher = calmer. Engine default is 0; this is the demo's choice.
+    model.jointDamping = std::getenv("ENGINE_JOINT_DAMPING") ? std::atof(std::getenv("ENGINE_JOINT_DAMPING")) : 0.3;
+    // Contact tuning. The engine DiffModel defaults (k=4e4, C=1000) are now the promoted low-bounce,
+    // low-penetration values; override live with ENGINE_GROUND_K / ENGINE_GROUND_C for experimentation.
+    if (std::getenv("ENGINE_GROUND_K")) model.groundK = std::atof(std::getenv("ENGINE_GROUND_K"));
+    if (std::getenv("ENGINE_GROUND_C")) model.groundC = std::atof(std::getenv("ENGINE_GROUND_C"));
+    std::printf("diff_humanoid: contact = %s, substeps = %d, jointDamping = %.3f, groundK = %.0f, groundC = %.0f\n",
+                semiImplicit ? "SemiImplicit" : "Explicit", substeps, model.jointDamping, model.groundK, model.groundC);
     const double substepDt = (1.0 / 60.0) / substeps;
     const std::vector<double> tau(static_cast<size_t>(model.ndofJoints), 0.0);   // passive ragdoll
     auto links = [&] { return diff::linkWorld<double>(model, state); };

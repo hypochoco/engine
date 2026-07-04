@@ -28,9 +28,10 @@ namespace engine::physics::diff {
 struct ContactSphere { V3<double> offset{ 0, 0, 0 }; double radius = 0.0; };
 
 // Contact-force time integration (Feature 4). Explicit: forces at start-of-substep (fast, but stiff
-// contact needs tiny h). SemiImplicit: a 2-pass predictor→corrector that re-evaluates the (stiff)
-// contact force at the PREDICTED end-of-substep configuration — an approximate backward-Euler step
-// that anticipates the penetration change and damps overshoot, so k can be larger for the same h.
+// contact needs tiny h). SemiImplicit: IMEX — the stiff CONTACT force is re-evaluated at the PREDICTED
+// end-of-substep state (an approximate backward-Euler step for contact only ⇒ larger k for the same h),
+// while the smooth articulated dynamics stay explicit/symplectic, so it does NOT inject numerical
+// damping into the whole system (only the contact term is treated implicitly).
 enum class ContactIntegration { Explicit, SemiImplicit };
 
 struct DiffLink {
@@ -54,18 +55,33 @@ struct DiffModel {
     int  ndofJoints = 0;                    // Σ joint dof (excludes the base)
     bool floating = false;                  // free 6-DOF root?
     // Smoothed compliant ground plane (y=0, normal +y). Normal force = k·smoothRelu(pen)
-    // − c·vₙ·σ(β·pen); β sets the smooth-relu / activation sharpness. Differentiable everywhere.
-    // `groundK` was briefly softened to 2.5e3 when contact was a single COM sphere per body (poorly
-    // conditioned — whole-body load through ~2 points). Feature 3 (shape-aware multi-point contact)
-    // distributes the load, so a stiff k is stable at the env timestep again (validated to 8e4 at
-    // substeps 16–48 in diff_contact_stability.cpp) ⇒ restored to 1e4 for ~mm penetration. For yet
-    // stiffer / larger-h regimes, ContactIntegration::SemiImplicit adds headroom.
+    // − c·vₙ·σ(β·pen)·σ(−βv·vₙ); β sets the smooth-relu / activation sharpness. Differentiable everywhere.
+    // Stiffness/damping history: k was 2.5e3 (single COM sphere, ill-conditioned) → 1e4 once Feature 3's
+    // shape-aware multi-point contact distributed the load. A soft k=1e4, though, lets a hard drop compress
+    // the spring ~11 cm (limbs visibly clip the floor) and store enough energy to bounce ~28 cm once contact
+    // is honestly non-adhesive. Stiffened to **4e4** (transient penetration ~3 cm) with **groundC=1000**
+    // (over-damped ⇒ the drop barely bounces), validated stable (explicit) to k=8e4 at substeps 16–48 in
+    // diff_contact_stability.cpp. SemiImplicit (IMEX) adds headroom for yet stiffer / larger-h regimes.
     bool   contactGround = false;
-    double groundK = 1.0e4;
-    double groundC = 150.0;        // normal damping (near-critical ~2√(k·m) for a ~1 kg contact) — low bounce
+    double groundK = 4.0e4;
+    double groundC = 1000.0;       // normal (compression) damping — over-damped for low bounce, no adhesion
     double groundBeta = 120.0;
+    // Velocity gate for the normal DAMPING term (s/m). Damping is switched off on SEPARATION
+    // (vn>0) via sigmoid(−groundDampBeta·vn), so the compliant contact is never ADHESIVE (the net
+    // normal force stays ≥ 0 — a unilateral contact can only push). Compression damping (approach,
+    // vn<0) is unaffected, so low-bounce settling is preserved. Smooth ⇒ differentiable.
+    double groundDampBeta = 40.0;
     double groundMu = 0.8;         // Coulomb friction coefficient
     double frictionVref = 0.01;    // tangential-velocity regularization (m/s) — smooth Coulomb
+    // Optional EXPLICIT PHYSICAL joint damping (viscous, τ = −jointDamping·q̇). Physical (not a
+    // numerical/integrator artifact) ⇒ timestep-independent, differentiable, and can be matched to the
+    // production backend so the diff sim and the RL sim agree. Default 0 (no damping). This — NOT the
+    // integrator — is the intended way to add whole-system damping for realism / settling free DOFs.
+    double jointDamping = 0.0;
+    // Contact-force time integration (Feature 4, now IMEX). Explicit: forces at start-of-substep.
+    // SemiImplicit: IMEX — the stiff CONTACT force is evaluated at the PREDICTED end-of-substep state
+    // (implicit ⇒ stable at higher k), while the smooth articulated dynamics stay explicit/symplectic
+    // (so it does NOT numerically damp the whole system — only the contact term is implicit).
     ContactIntegration contactIntegration = ContactIntegration::Explicit;
 };
 
@@ -109,17 +125,22 @@ template <class S> V6<S> jointScol(const V3<S>& axis, const V3<S>& anchorC) {
 
 template <class S> struct Accel { std::vector<S> qddot; V6<S> baseAccel; };
 
+// Forward declarations (defined below) so the IMEX contact integrator can read predicted-state
+// world kinematics.
+template <class S> struct LinkWorld;
+template <class S> std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st);
+
 // Smoothed compliant ground contact (plane y=0, normal +y) for a sphere of `radius` fixed at link-
 // local `localOffset` from the COM (Feature 2). Sphere center = com + Rw·offset; contact point =
-// center − r·n. Normal: k·softplus_β(pen)/β − c·vₙ·σ(β·pen). Friction: regularized Coulomb
-// Ft = −μ·Fspring·slip/√(|slip|²+ε²) where slip is the CONTACT-POINT tangential velocity
-// v_com + ω × ℓ, ℓ = (center−com) − r·n (so friction vanishes at rolling and offset spheres see the
-// correct point velocity). Force acts at the contact point ⇒ it torques the link. Returned as a
-// spatial force [τ; f] in the LINK frame; smooth everywhere ⇒ differentiable. `radius==0` is a valid
-// point contact.
+// center − r·n. Normal: k·softplus_β(pen)/β − c·vₙ·σ(β·pen)·σ(−βv·vₙ). The trailing σ(−βv·vₙ) is the
+// approach gate: damping acts on approach (vₙ<0) but switches off on separation (vₙ>0), so the net
+// normal force stays ≥ 0 (a unilateral contact can only push — never adhesive). Friction: regularized
+// Coulomb Ft = −μ·Fspring·slip/√(|slip|²+ε²) where slip is the CONTACT-POINT tangential velocity
+// v_com + ω × ℓ, ℓ = (center−com) − r·n. Force acts at the contact point ⇒ it torques the link.
+// Returned as a spatial force [τ; f] in the WORLD frame; smooth everywhere ⇒ differentiable.
 template <class S>
-V6<S> groundContactSpatial(const DiffModel& md, const V3<S>& com, const V3<S>& linVelWorld,
-                           const V3<S>& angVelWorld, const M3<S>& Rw, const V3<double>& localOffset, double radius) {
+V6<S> groundContactWorld(const DiffModel& md, const V3<S>& com, const V3<S>& linVelWorld,
+                         const V3<S>& angVelWorld, const M3<S>& Rw, const V3<double>& localOffset, double radius) {
     using std::sqrt;
     const V3<S> off = Rw * lift<S>(localOffset);           // COM → sphere center (world)
     const S pen = S(radius) - (com.y + off.y);             // penetration depth (>0 below the plane)
@@ -128,21 +149,59 @@ V6<S> groundContactSpatial(const DiffModel& md, const V3<S>& com, const V3<S>& l
     const S vn = cpVel.y;                                  // normal velocity (n = +y)
     const S b = S(md.groundBeta);
     const S sr = softplus(b * pen) / b;                    // smooth relu(pen) → spring compression
-    const S gate = sigmoid(b * pen);                       // damping/friction active only in contact
+    const S gate = sigmoid(b * pen);                       // in-contact gate (penetration)
+    const S approach = sigmoid(S(-md.groundDampBeta) * vn); // ≈1 approaching (vn<0), ≈0 separating (vn>0)
     const S Fspring = S(md.groundK) * sr;                  // elastic normal load (≥ 0)
-    const S Fn = Fspring - S(md.groundC) * vn * gate;      // net normal force
+    const S Fn = Fspring - S(md.groundC) * vn * gate * approach;  // net normal force (≥ 0, non-adhesive)
     const S eps = S(md.frictionVref);
     const S vtMag = sqrt(cpVel.x * cpVel.x + cpVel.z * cpVel.z + eps * eps);
     const S fscale = S(-md.groundMu) * Fspring * gate / vtMag;
     const V3<S> Fworld{ fscale * cpVel.x, Fn, fscale * cpVel.z };
     const V3<S> tauWorld = cross(lever, Fworld);           // τ = lever × F
-    return makeV6(transpose(Rw) * tauWorld, transpose(Rw) * Fworld);
+    return makeV6(tauWorld, Fworld);
 }
 
-// Generalized accelerations via ABA. Mirrors featherstone_world.cpp::computeAccelerations.
+// As above but returned as a spatial force [τ; f] in the LINK frame (back-compat convenience).
+template <class S>
+V6<S> groundContactSpatial(const DiffModel& md, const V3<S>& com, const V3<S>& linVelWorld,
+                           const V3<S>& angVelWorld, const M3<S>& Rw, const V3<double>& localOffset, double radius) {
+    const V6<S> w = groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, localOffset, radius);
+    return makeV6(transpose(Rw) * ang(w), transpose(Rw) * lin(w));
+}
+
+// Sum of a link's ground contact spatial forces (WORLD frame) given its world kinematics. Mirrors the
+// contact block of diffForwardDynamics: prefer the multi-point `contactPoints`, else the `contactRadius`
+// COM-sphere shorthand (never both — avoids double-counting the COM contact).
+template <class S>
+V6<S> linkGroundContactWorld(const DiffModel& md, const DiffLink& L, const V3<S>& com,
+                             const V3<S>& linVelWorld, const V3<S>& angVelWorld, const M3<S>& Rw) {
+    V6<S> f{};
+    if (!L.contactPoints.empty())
+        for (const ContactSphere& cs : L.contactPoints) f = f + groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, cs.offset, cs.radius);
+    else if (L.contactRadius > 0.0)
+        f = f + groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, V3<double>{ 0, 0, 0 }, L.contactRadius);
+    return f;
+}
+
+// Per-link ground contact spatial forces (WORLD frame) for a whole state — used by the IMEX contact
+// integrator to evaluate the (stiff) contact force at the PREDICTED state. Zero for non-contact links.
+template <class S>
+std::vector<V6<S>> computeContactForcesWorld(const DiffModel& md, const DiffState<S>& st) {
+    const auto lw = linkWorld<S>(md, st);
+    std::vector<V6<S>> out(md.links.size());
+    if (!md.contactGround) return out;
+    for (size_t i = 0; i < md.links.size(); ++i)
+        out[i] = linkGroundContactWorld(md, md.links[i], lw[i].pos, lw[i].linVel, lw[i].angVel, lw[i].rot);
+    return out;
+}
+
+// Generalized accelerations via ABA. Mirrors featherstone_world.cpp::computeAccelerations. If
+// `extContactWorld` is provided (IMEX contact integrator), the per-link ground contact forces are
+// taken from it (evaluated at the predicted state, WORLD frame) instead of the current state.
 template <class S>
 Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
-                             const std::vector<S>& tau, const V3<double>& gravity) {
+                             const std::vector<S>& tau, const V3<double>& gravity,
+                             const std::vector<V6<S>>* extContactWorld = nullptr) {
     const int n = static_cast<int>(md.links.size());
     std::vector<M6<S>> Xup(n), IA(n);
     std::vector<V6<S>> v(n), c(n), pA(n), a(n);
@@ -177,13 +236,17 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
         const V6<S> crfIv = transpose(crm(v[i])) * (IA[i] * v[i]);
         const V6<S> fgrav = makeV6(zeroV3<S>(), transpose(Rw[i]) * (S(L.mass) * g));
         pA[i] = scaled(crfIv, S(-1)) + scaled(fgrav, S(-1));
-        if (md.contactGround && (L.contactRadius > 0.0 || !L.contactPoints.empty())) {   // compliant ground contact
-            const V3<S> linVelWorld = Rw[i] * lin(v[i]);
-            const V3<S> angVelWorld = Rw[i] * ang(v[i]);
-            if (L.contactRadius > 0.0)
-                pA[i] = pA[i] + scaled(groundContactSpatial(md, pos[i], linVelWorld, angVelWorld, Rw[i], V3<double>{ 0, 0, 0 }, L.contactRadius), S(-1));
-            for (const ContactSphere& cs : L.contactPoints)
-                pA[i] = pA[i] + scaled(groundContactSpatial(md, pos[i], linVelWorld, angVelWorld, Rw[i], cs.offset, cs.radius), S(-1));
+        if (md.contactGround) {                                       // compliant ground contact
+            V6<S> fWorld{};
+            if (extContactWorld) {
+                fWorld = (*extContactWorld)[static_cast<size_t>(i)];  // IMEX: contact force @ predicted state
+            } else if (L.contactRadius > 0.0 || !L.contactPoints.empty()) {
+                const V3<S> linVelWorld = Rw[i] * lin(v[i]);
+                const V3<S> angVelWorld = Rw[i] * ang(v[i]);
+                fWorld = linkGroundContactWorld(md, L, pos[i], linVelWorld, angVelWorld, Rw[i]);
+            }
+            const V6<S> fLink = makeV6(transpose(Rw[i]) * ang(fWorld), transpose(Rw[i]) * lin(fWorld));
+            pA[i] = pA[i] + scaled(fLink, S(-1));
         }
     }
 
@@ -194,7 +257,7 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
         const int dof = L.dof;
         if (dof > 0) {
             S D[9];
-            for (int aa = 0; aa < dof; ++aa) { U[i][aa] = IA[i] * Scol[i][aa]; uv[i][aa] = tau[static_cast<size_t>(L.qIndex + aa)] - dot(Scol[i][aa], pA[i]); }
+            for (int aa = 0; aa < dof; ++aa) { U[i][aa] = IA[i] * Scol[i][aa]; uv[i][aa] = tau[static_cast<size_t>(L.qIndex + aa)] - S(md.jointDamping) * st.qd[static_cast<size_t>(L.qIndex + aa)] - dot(Scol[i][aa], pA[i]); }
             for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) D[aa * dof + bb] = dot(Scol[i][aa], U[i][bb]);
             S Di[9]; invertSmall(D, dof, Di);
             for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) Dinv[i][static_cast<size_t>(aa * 3 + bb)] = Di[aa * dof + bb];
@@ -253,17 +316,20 @@ void diffIntegrateConfig(const DiffModel& md, DiffState<S>& st, double h) {
 }
 
 // One substep. Explicit: semi-implicit Euler (velocity update from start-of-step forces, then config
-// advance). SemiImplicit (Feature 4): predictor→corrector — advance a trial state, re-evaluate the
-// dynamics (⇒ contact force) at that PREDICTED configuration, and take the real velocity/config step
-// with the predicted-state forces (approx. backward Euler ⇒ stable at higher contact stiffness).
+// advance). SemiImplicit (Feature 4, IMEX): predictor→corrector — take an explicit trial step, then
+// re-evaluate ONLY the stiff CONTACT force at that predicted state and take the real step with the
+// smooth dynamics at the current state + contact at the predicted state. So the contact term is
+// treated implicitly (stable at higher k) while the smooth articulated dynamics stay explicit/
+// symplectic (no numerical damping of the whole system — that was the pre-IMEX behavior).
 template <class S>
 void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& tau,
                  const V3<double>& gravity, double h) {
-    if (md.contactIntegration == ContactIntegration::SemiImplicit) {
-        DiffState<S> trial = st;
+    if (md.contactIntegration == ContactIntegration::SemiImplicit && md.contactGround) {
+        DiffState<S> trial = st;                                             // predictor: explicit trial step
         diffApplyAccel(md, trial, diffForwardDynamics(md, st, tau, gravity), h);
         diffIntegrateConfig(md, trial, h);
-        const Accel<S> acc = diffForwardDynamics(md, trial, tau, gravity);   // forces at predicted state
+        const std::vector<V6<S>> fc = computeContactForcesWorld(md, trial);  // stiff contact @ predicted state
+        const Accel<S> acc = diffForwardDynamics(md, st, tau, gravity, &fc); // smooth @ st, contact @ predicted (IMEX)
         diffApplyAccel(md, st, acc, h);
         diffIntegrateConfig(md, st, h);
     } else {

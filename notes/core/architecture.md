@@ -289,7 +289,11 @@ the maximal/reduced `PhysicsWorld`s. Under `include/engine/physics/diff/`:
   friction at the contact point (differentiable everywhere). **Multi-point** (`ContactSphere` list per
   link) with a per-collider **shape decomposition** (`DiffContact::{None,Feet,All}`: capsule→2 end-caps,
   box→8 corners) so shapes rest without clip-through. **`ContactIntegration::{Explicit,SemiImplicit}`**
-  (2-pass predictor→corrector for stiff contact). Defaults `groundK=1e4, C=150, β=120, μ=0.8`.
+  (SemiImplicit = IMEX: only the stiff contact force is treated implicitly, smooth dynamics stay
+  explicit/symplectic). Normal force is **non-adhesive** (damping gated off on separation) and
+  **physical joint damping** `jointDamping` is available (τ=−b·q̇, default 0). Defaults `groundK=4e4,
+  C=1000` (stiff + over-damped ⇒ ~3 cm transient impact penetration, low bounce, no clip-through),
+  `β=120, μ=0.8`. See notes/investigations/2026-07-04-diff-semiimplicit-testing.md.
 - **`zeroth_order.h`** antithetic Gaussian-smoothing ES gradient; **`hybrid.h`** `alphaOrderGradient`
   (min-variance blend of analytic first-order + zeroth-order — Suh et al.); **`jacobian.h`** per-step
   tangent Jacobian `∂s_{t+1}/∂(s_t,a_t)` (exact `Dual<1>` per column, SO(3) exp/vee).
