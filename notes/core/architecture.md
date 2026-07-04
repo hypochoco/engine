@@ -51,6 +51,7 @@ engine::engine (INTERFACE)
 ├── engine::scene       (STATIC) → engine::ecs + engine::graphics   (ECS↔render bridge; extract)
 ├── engine::physics     (STATIC) → engine::core   (shapes/collision/broadphase/solver, PhysicsWorld)
 └── engine::physics_ecs (STATIC) → engine::physics + engine::ecs    (RigidBody + step/sync systems)
+└── engine::physics_env (STATIC) → engine::physics + engine::core   (Environment + VecEnv; ECS-free RL layer)
 ```
 
 Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdirectory`;
@@ -227,6 +228,32 @@ components; `actuatorFlushSystem` writes each joint's command to the world (run 
 joints and mirrors them into the ECS (an entity per body with `RigidBody`+`Transform`, per joint
 with `Joint`+`JointCommand`). Verified: `tst/physics/integration/articulation_ecs.cpp` (humanoid
 built in ECS; actuator→step→sync schedule; Transforms track poses exactly, ragdoll settles).
+
+### physics_env — RL env layer (`engine::physics_env`, Phase D, 2026-07-04)
+Headless, **ECS-free** RL interface (deps `engine::physics` + `engine::core` only). The mechanism
+for training; **no reward/termination/task** (those are downstream — the env exposes raw state).
+- **`Environment`** (`physics_env/environment.h`): a thin layer over one `PhysicsWorld` + an
+  `Articulation` (+ ground plane). `reset(seed)` (in-place: `setBodyState` to authored pose +
+  `clearState` + zero actions + optional randomization hook + `refreshState`), `setAction(span)`
+  (Torque control — revolute 1 DOF, ball 3 DOF, fixed 0; `actDim=21` for the humanoid), `step()`
+  (one control step = `substeps` physics substeps). **Raw-state accessors**: `jointStates()` (q/qd),
+  `rootPose()`, root lin/ang velocity, per-body `bodyContactFlags()`. Downstream composes its obs
+  from these; an **optional default flat packer** (`defaultObsDim()=53`: root pose 7 + twist 6 +
+  q,qd + contacts) is a convenience for tests/examples, not the contract.
+- **`VecEnv`** (`physics_env/vec_env.h`): N independent `Environment`s (each a single-threaded
+  `PhysicsWorld`) stepped across a `core::ThreadPool` via `parallelFor` (**no nesting** — the ML
+  throughput lever is parallel *worlds*). Contiguous SoA batches: `actions()[N*actDim]` (caller
+  writes), `observations()[N*obsDim]` (default packer). `reset(seed)` (per-env `seed+i`),
+  `resetMasked(mask)`, `step()`.
+- **In-place reset support** added to `PhysicsWorld`: `setBodyState`, `clearState`, `refreshState`,
+  `setJointBallTorque`.
+- **D0 solver perf**: per-body world inverse inertia is now cached once per substep
+  (`computeWorldInvInertia`) and read by the contact/joint/actuator/limit solves, instead of
+  recomputing `R·I⁻¹·Rᵀ` per body per constraint per iteration — bit-identical (determinism tests
+  still 0), win scales with contacts×iterations.
+- Tests: `tst/physics_env/unit/environment.cpp` (dims 21/53, bounded random rollout, deterministic
+  0.0), `tst/physics_env/integration/vec_env.cpp` (parallel==serial, bit-identical), benchmark
+  `tst/physics_env/benchmark/vec_env.cpp` (N=1→1024; ~8.7k→68.7k env-steps/s on 13 workers).
 
 ### Milestone status — "ball rolling down a plane" ✅ (physics + sim)
 - `tst/physics/integration/milestone.cpp` (headless): sphere on a 30° incline via the ECS bridge

@@ -159,14 +159,25 @@ public:
     // SoA writes indexed by JointHandle.index (for vectorized envs). setJointActuator replaces
     // the whole actuator config; setJointTarget/Torque update just the command each step.
     virtual void setJointActuator(JointHandle, const Actuator&) = 0;
-    virtual void setJointTarget(JointHandle, Real target)       = 0;   // PDTarget command
-    virtual void setJointTorque(JointHandle, Real torque)       = 0;   // Torque command
+    virtual void setJointTarget(JointHandle, Real target)       = 0;   // PDTarget command (revolute)
+    virtual void setJointTorque(JointHandle, Real torque)       = 0;   // Torque command (revolute)
+    virtual void setJointBallTorque(JointHandle, Vec3 torque)   = 0;   // Torque command (ball, 3-DOF)
     virtual void setJointTargets(std::span<const Real> targets) = 0;   // bulk PDTarget commands
     virtual void setJointTorques(std::span<const Real> torques) = 0;   // bulk Torque commands
 
     // Joint state read-path (Phase B3) — the observation. Single + bulk (indexed by handle.index).
     virtual JointState jointState(JointHandle) const           = 0;
     virtual std::span<const JointState> jointStates() const    = 0;
+
+    // In-place reset support (Phase D env). setBodyState overwrites a body's pose + velocity;
+    // clearState zeros solver warm-start (joint accumulators + cached joint states) and contact
+    // events — together they restart an episode deterministically without destroy/recreate.
+    virtual void setBodyState(BodyHandle, const Vec3& position, const Quat& orientation,
+                              const Vec3& linearVelocity, const Vec3& angularVelocity) = 0;
+    virtual void clearState() = 0;
+    // Recompute bulk readback (poses/velocities/joint q,qd) from current state WITHOUT advancing
+    // time — so observations are valid immediately after an in-place reset (before the first step).
+    virtual void refreshState() = 0;
 
     // Bulk, index-stable readback (indexed by BodyHandle.index) — one virtual call per array,
     // no per-body dispatch even at scale (§4).

@@ -211,6 +211,9 @@ public:
     void setJointTorque(JointHandle h, Real torque) override {
         if (jointValid(h)) joints_[h.index].actuator.torque = torque;
     }
+    void setJointBallTorque(JointHandle h, Vec3 torque) override {
+        if (jointValid(h)) joints_[h.index].actuator.ballTorque = torque;
+    }
     void setJointTargets(std::span<const Real> targets) override {
         const size_t n = std::min(targets.size(), joints_.size());
         for (size_t i = 0; i < n; ++i) if (joints_[i].alive) joints_[i].actuator.target = targets[i];
@@ -226,6 +229,25 @@ public:
     }
     std::span<const JointState> jointStates() const override { return jointStates_; }
 
+    void setBodyState(BodyHandle h, const Vec3& p, const Quat& q, const Vec3& lv,
+                      const Vec3& av) override {
+        if (!valid(h)) return;
+        BodyData& b = bodies_[h.index];
+        b.position = p; b.orientation = q; b.linVel = lv; b.angVel = av;
+        writeOutputs(h.index);
+    }
+    void clearState() override {
+        for (JointData& j : joints_) {
+            j.pointImpulse = Vec3(0); j.angImpulse = Vec3(0); j.limitImpulse = Real(0);
+        }
+        events_.clear();
+        for (JointState& js : jointStates_) js = JointState{};
+    }
+    void refreshState() override {
+        for (uint32_t i = 0; i < bodies_.size(); ++i) writeOutputs(i);
+        writeJointStates();
+    }
+
     void setGravity(Vec3 g) override { def_.gravity = g; }
 
     void step(Real dt) override {
@@ -235,6 +257,12 @@ public:
         events_.clear();
 
         for (int s = 0; s < substeps; ++s) {
+            // 0. Cache each body's world inverse inertia for this substep. Orientation is constant
+            //    during the velocity solve (positions integrate in step 4), so this is computed
+            //    ONCE and read by the contact solver, joints, actuators, and limits — instead of
+            //    recomputing R·I⁻¹·Rᵀ per body per constraint per iteration (D0 perf).
+            computeWorldInvInertia();
+
             // 1. Integrate velocities (gravity) + apply joint actuator torques (B3).
             forEachDynamic([&](BodyData& b) { b.linVel += def_.gravity * h; });
             applyActuators(h);
@@ -333,6 +361,17 @@ private:
         };
         if (pool_ && n >= threshold_) pool_->parallelFor(n, one, 1024);
         else for (size_t i = 0; i < n; ++i) one(i);
+    }
+
+    // Cache per-body world inverse inertia (R·I⁻¹_local·Rᵀ) for the current substep. Read by the
+    // contact + joint + actuator + limit solves. Dead/static bodies get 0 (never written anyway).
+    void computeWorldInvInertia() {
+        worldInvInertia_.resize(bodies_.size());
+        for (size_t i = 0; i < bodies_.size(); ++i) {
+            const BodyData& b = bodies_[i];
+            worldInvInertia_[i] = (b.alive && b.invMass != Real(0))
+                ? worldInvInertia(b.orientation, b.invInertiaLocal) : Mat3(Real(0));
+        }
     }
 
     // Fills constraints_ for the current configuration. normal always points a -> b. Finite
@@ -629,8 +668,8 @@ private:
         BodyData& B = bodies_[c.b];
         const Vec3 rA = c.point - A.position;
         const Vec3 rB = c.point - B.position;
-        const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
-        const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+        const Mat3& IinvA = worldInvInertia_[c.a];
+        const Mat3& IinvB = worldInvInertia_[c.b];
         const Vec3& n = c.normal;
 
         // --- normal impulse ---
@@ -751,8 +790,8 @@ private:
             BodyData& A = bodies_[j.a];
             BodyData& B = bodies_[j.b];
             if (A.invMass == Real(0) && B.invMass == Real(0)) continue;
-            const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
-            const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+            const Mat3& IinvA = worldInvInertia_[j.a];
+            const Mat3& IinvB = worldInvInertia_[j.b];
 
             if (j.type == JointType::Revolute) {
                 const HingeState hs = hingeState(j);
@@ -806,8 +845,8 @@ private:
 
             const Mat3 RA = glm::mat3_cast(A.orientation);
             const Mat3 RB = glm::mat3_cast(B.orientation);
-            const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
-            const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+            const Mat3& IinvA = worldInvInertia_[j.a];
+            const Mat3& IinvB = worldInvInertia_[j.b];
 
             // Point-to-point: K = (imA+imB)I - skew(rA)·IinvA·skew(rA) - skew(rB)·IinvB·skew(rB).
             j.rA = RA * j.localAnchorA;
@@ -868,8 +907,8 @@ private:
             BodyData& A = bodies_[j.a];
             BodyData& B = bodies_[j.b];
             if (A.invMass == Real(0) && B.invMass == Real(0)) continue;
-            const Mat3 IinvA = worldInvInertia(A.orientation, A.invInertiaLocal);
-            const Mat3 IinvB = worldInvInertia(B.orientation, B.invInertiaLocal);
+            const Mat3& IinvA = worldInvInertia_[j.a];
+            const Mat3& IinvB = worldInvInertia_[j.b];
 
             // Angular part first, then point-to-point last, so the anchor (linear) constraint is
             // satisfied at the end of each iteration (angular impulses perturb the anchor velocity
@@ -928,6 +967,7 @@ private:
     std::vector<JointData>        joints_;        // persistent (Phase B)
     std::vector<uint32_t>         jointFreeList_;
     std::vector<JointState>       jointStates_;   // bulk readback (B3), indexed by joint slot
+    std::vector<Mat3>             worldInvInertia_;  // per-body cache, recomputed each substep (D0)
     std::vector<engine::Transform> poses_;
     std::vector<Vec3>             linVelOut_;
     std::vector<Vec3>             angVelOut_;

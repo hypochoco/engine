@@ -180,19 +180,27 @@ Revisit when locomotion needs slopes/stairs/rough ground (e.g. an RL terrain cur
 - (deferred) C3 Render terrain as a lit static mesh; body-settles-on-terrain test.
 
 ### Phase D — RL-ready env interface (depends on B+C, ECS command buffer)
-Mechanism only — reward/task/training live downstream.
-- **D0 ECS command buffer + add/remove-component** (also a standing ECS backlog item): needed to
-  build and **reset** episodes (spawn/despawn humanoid + terrain entities) deterministically.
-- **D1 `Environment` abstraction**: headless `reset()` / `step(actions)` over a `PhysicsWorld`
-  (+ optional offscreen render for video). No reward/termination baked in — those are
-  **callbacks/hooks** the downstream repo supplies.
-- **D2 Vectorized envs**: `VecEnv` of N independent `Environment`s stepped on the `ThreadPool`
-  (builds directly on the existing parallel-worlds path). Batched, SoA.
-- **D3 Observation/action tensors**: extract per-env **SoA float buffers** — joint `q/qd`, root
-  pose/velocity, contact flags, terrain samples → `obs[N × obsDim]`; apply `act[N × actDim]` →
-  actuator targets/torques. This is the binding-friendly contract downstream code consumes.
-- **D4 Determinism review**: same seed + actions ⇒ identical rollouts across the batch (fixed
-  step, stable iteration/coloring order — mostly already true; verify end-to-end).
+Mechanism only — reward/task/training live downstream. **Detailed reviewed plan:**
+[2026-07-04-phase-d-plan.md](2026-07-04-phase-d-plan.md). The headless `Environment` drives a
+`PhysicsWorld` **directly (ECS-free)**, so the ECS command buffer originally listed here is **not
+needed** for RL (reset happens between steps). Sub-phases:
+- **D0 Solver perf micro-opt**: cache per-body world inverse inertia once per substep (contacts +
+  joints read it) instead of recomputing per-constraint-per-iteration. Bit-identical; measure.
+- **D1 `Environment`** (ECS-free): `reset(seed)`/`setAction(span)`/`step()`/`observe(span)`; fixed
+  obs (root pose+twist + joint q/qd + foot contacts) / action layout; no reward/termination (hooks
+  only). In-place state reset preferred over rebuild.
+- **D2 `VecEnv`**: N single-threaded worlds on the `ThreadPool` (`parallelFor`, no nesting);
+  batched SoA `obs[N×obsDim]`/`act[N×actDim]` (contiguous, zero-copy for downstream C/Python).
+- **D3 Determinism + throughput review**: same seed+actions ⇒ identical rollout; random-rollout
+  test; env-steps/sec benchmark; re-evaluate "engine is enough" → spin up downstream repo.
+
+### Phase E — Reduced-coordinate Featherstone backend (own track, after D)
+Split out of D so it can slip without blocking RL-readiness. A second `PhysicsWorld`
+(`Backend::Reduced`) behind the same Environment/obs-action API. Built incrementally: **E0** ABA
+spatial-algebra core (no contacts) → **E1** contact coupling (the hard part) → **E2** humanoid +
+actuators → **E3** behind VecEnv. Rationale + decision:
+[articulation-approach.md](2026-07-03-articulation-approach.md); details in the Phase D plan doc.
+Differentiability is a further extension, later.
 
 ## The split (engine vs downstream simulation repo)
 

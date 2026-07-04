@@ -69,4 +69,5 @@ target_link_libraries(engine INTERFACE
     engine::scene
     engine::physics
     engine::physics_ecs
+    engine::physics_env
 )

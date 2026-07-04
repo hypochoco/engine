@@ -121,15 +121,36 @@ Revisit when locomotion needs slopes/stairs/rough ground (e.g. an RL terrain cur
 - [ ] (later, separate/larger) General concave triangle-mesh collider (convex decomposition, or
       per-triangle + BVH + internal-edge filtering). Convex meshes already work via `ConvexHull`.
 
-### Phase D — RL-ready env interface (depends on B+C + ECS command buffer)
-- [ ] **ECS command buffer + add/remove-component** (also the standing ECS next-step): deferred
-      structural changes to build/**reset** episodes deterministically.
-- [ ] **`Environment`** abstraction: headless `reset()`/`step(actions)` over a `PhysicsWorld`;
-      reward/termination are **downstream callbacks**, not baked in.
-- [ ] **`VecEnv`**: N independent envs stepped on the `ThreadPool` (builds on parallel worlds).
-- [ ] **Obs/action tensors**: per-env **SoA float buffers** — joint `q/qd`, root pose/vel,
-      contacts, terrain samples → `obs[N×obsDim]`; apply `act[N×actDim]` → actuators.
-- [ ] **Determinism review** end-to-end (same seed + actions ⇒ identical batched rollouts).
+### Phase D — RL-ready env interface (on the flat plane) ✅ DONE (2026-07-04)
+Reviewed plan: [2026-07-04-phase-d-plan.md](../investigations/2026-07-04-phase-d-plan.md). Headless
+`Environment` drives a `PhysicsWorld` **directly (ECS-free)** in the new `engine::physics_env` module.
+- [x] **D0 Solver perf micro-opt**: per-body world inverse inertia cached once per substep
+      (`computeWorldInvInertia`), read by contacts + joints + actuators + limits. Bit-identical
+      (determinism tests still 0.0); win scales with contacts×iterations.
+- [x] **D1 `Environment`** (`engine::physics_env`, ECS-free, mirrors `physics_ecs`): `reset(seed)`
+      in-place / `setAction` (Torque; actDim=21) / `step` + raw-state accessors (q/qd, root pose+twist,
+      contact flags); obs composition downstream + optional default packer (obsDim=53). PhysicsWorld
+      gained setBodyState/clearState/refreshState/setJointBallTorque. Tests: dims, bounded rollout,
+      deterministic (0.0).
+- [x] **D2 `VecEnv`**: N single-threaded worlds on the `ThreadPool` (`parallelFor`, no nesting);
+      contiguous SoA `actions()[N×actDim]`/`observations()[N×obsDim]`; reset/resetMasked/step. Test:
+      parallel == serial, bit-identical (0.0) at N=24.
+- [x] **D3 Determinism + throughput**: single-env + parallel-vs-serial determinism both 0.0;
+      benchmark `physics_env.vec_env_throughput` — N=1→1024 ≈ 8.7k→68.7k env-steps/s (13 workers).
+      **Engine now has "enough" for the downstream RL repo** (env + batched obs/action).
+
+**Phase D COMPLETE** ✅ — RL-ready mechanism (ECS-free `Environment`/`VecEnv`, in-place reset, raw
+batched state + Torque actions, parallel-worlds throughput, determinism) on the flat plane.
+
+### Phase E — Reduced-coordinate Featherstone backend (own track, after D)
+Second `PhysicsWorld` (`Backend::Reduced`) behind the same Environment/obs-action API; the largest
+single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decision:
+[articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
+- [ ] **E0** ABA spatial-algebra core (no contacts); validate a free chain/pendulum vs maximal.
+- [ ] **E1** contact coupling (contact-space inertia + LCP/PGS, or soft-constraint); validate resting.
+- [ ] **E2** humanoid + actuators (q/qd *are* the state); ragdoll settles + PD-stand holds.
+- [ ] **E3** behind `VecEnv`; obs/action API unchanged; determinism holds; benchmark vs maximal.
+- [ ] (later) differentiability / analytic gradients on top of the reduced model.
 
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 
