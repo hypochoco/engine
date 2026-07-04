@@ -41,8 +41,9 @@ TST_CASE(physics_env, unit, env_dims) {
     // Humanoid actuated DOFs: 5 ball joints (waist + 2 shoulders + 2 hips) ×3 + 6 hinges
     // (2 elbows + 2 knees + 2 ankles) ×1 = 21. Fixed chest/neck contribute 0.
     TST_REQUIRE(env.actDim() == 21);
-    // Default obs: root pose(7) + twist(6) + q[13] + qd[13] + contact flags[14] = 53.
-    TST_REQUIRE(env.defaultObsDim() == 53);
+    // Default obs is DOF-complete: root pose(7) + twist(6) + positions[6 hinge + 5 ball×3 = 21]
+    // + velocities[21] + contact flags[14] = 69.
+    TST_REQUIRE(env.defaultObsDim() == 69);
 
     env.reset(0);
     std::vector<float> obs(env.defaultObsDim());

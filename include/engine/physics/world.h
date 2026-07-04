@@ -113,12 +113,16 @@ struct Actuator {
     Vec3 ballTorque{0};            // Torque mode: commanded 3-DOF torque (world frame)
 };
 
-// Joint state (Phase B3) — the minimal observation. For a Revolute joint `q` is the hinge angle
-// (radians, from the creation-time reference) and `qd` the angular rate about the axis. For
-// Ball/Fixed joints these are 0 for now (multi-DOF ball readout is a follow-up).
+// Joint state (Phase B3) — the observation primitive. For a Revolute joint `q` is the hinge angle
+// (radians, from the creation-time reference) and `qd` the angular rate about the axis. For a Ball
+// joint the multi-DOF fields carry the state: `rotation` is the rest-relative orientation as a
+// rotation vector (axis·angle) and `angularVelocity` the relative angular velocity; `q`/`qd` are 0.
+// Fixed joints leave everything 0.
 struct JointState {
     Real q  = 0;
     Real qd = 0;
+    Vec3 rotation{0};          // Ball: rest-relative orientation as a rotation vector
+    Vec3 angularVelocity{0};   // Ball: relative angular velocity (child frame)
 };
 
 struct JointDef {
@@ -162,6 +166,7 @@ public:
     virtual void setJointTarget(JointHandle, Real target)       = 0;   // PDTarget command (revolute)
     virtual void setJointTorque(JointHandle, Real torque)       = 0;   // Torque command (revolute)
     virtual void setJointBallTorque(JointHandle, Vec3 torque)   = 0;   // Torque command (ball, 3-DOF)
+    virtual void setJointBallTarget(JointHandle, Quat target)   = 0;   // PDTarget command (ball, orientation)
     virtual void setJointTargets(std::span<const Real> targets) = 0;   // bulk PDTarget commands
     virtual void setJointTorques(std::span<const Real> torques) = 0;   // bulk Torque commands
 

@@ -254,18 +254,21 @@ for training; **no reward/termination/task** (those are downstream — the env e
 - **`Environment`** (`physics_env/environment.h`): a thin layer over one `PhysicsWorld` + an
   `Articulation` (+ ground plane). `reset(seed)` (in-place: `setBodyState` to authored pose +
   `clearState` + zero actions + optional randomization hook + `refreshState`), `setAction(span)`
-  (Torque control — revolute 1 DOF, ball 3 DOF, fixed 0; `actDim=21` for the humanoid), `step()`
-  (one control step = `substeps` physics substeps). **Raw-state accessors**: `jointStates()` (q/qd),
-  `rootPose()`, root lin/ang velocity, per-body `bodyContactFlags()`. Downstream composes its obs
-  from these; an **optional default flat packer** (`defaultObsDim()=53`: root pose 7 + twist 6 +
-  q,qd + contacts) is a convenience for tests/examples, not the contract.
+  (revolute 1 DOF, ball 3 DOF, fixed 0; `actDim=21` for the humanoid), `step()`
+  (one control step = `substeps` physics substeps). **Action mode** (`EnvConfig::actionMode`):
+  `Torque` (raw joint torques) or `PDTarget` (action = desired joint position — revolute angle /
+  ball orientation as a rotation vector — tracked by a PD servo with `kp`/`kd`). **Raw-state
+  accessors**: `jointStates()` (revolute q/qd + ball `rotation`/`angularVelocity`), `rootPose()`,
+  root lin/ang velocity, per-body `bodyContactFlags()`. Downstream composes its obs from these; an
+  **optional DOF-complete default packer** (`defaultObsDim()=69` for the humanoid: root pose 7 +
+  twist 6 + joint positions[21] + velocities[21] + contacts[14]) is a convenience, not the contract.
 - **`VecEnv`** (`physics_env/vec_env.h`): N independent `Environment`s (each a single-threaded
   `PhysicsWorld`) stepped across a `core::ThreadPool` via `parallelFor` (**no nesting** — the ML
   throughput lever is parallel *worlds*). Contiguous SoA batches: `actions()[N*actDim]` (caller
   writes), `observations()[N*obsDim]` (default packer). `reset(seed)` (per-env `seed+i`),
   `resetMasked(mask)`, `step()`.
 - **In-place reset support** added to `PhysicsWorld`: `setBodyState`, `clearState`, `refreshState`,
-  `setJointBallTorque`.
+  `setJointBallTorque`, `setJointBallTarget`.
 - **D0 solver perf**: per-body world inverse inertia is now cached once per substep
   (`computeWorldInvInertia`) and read by the contact/joint/actuator/limit solves, instead of
   recomputing `R·I⁻¹·Rᵀ` per body per constraint per iteration — bit-identical (determinism tests

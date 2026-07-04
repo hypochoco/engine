@@ -180,7 +180,21 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       iters at equal quality; flat-humanoid contact-solve −26% (0.989→0.732 ms), reduced env-steps/s
       +18–22%. End-to-end vs original dense-inverse ≈ 1.9× (N=1024 16.5k→31.3k). Analysis + results:
       [2026-07-04-reduced-contact-pgs.md](../investigations/2026-07-04-reduced-contact-pgs.md).
-- [ ] (later) Ball q/qd readout in `JointState` (multi-DOF observation).
+- [x] reduced-backend coverage hardening (2026-07-04): added `tst/physics/integration/reduced_joints.cpp`
+      (fixed/revolute-torque/revolute-PD/off-axis hinge/capsule) + visual gallery
+      `tst/physics/visual/reduced_joints.cpp`. Surfaced + fixed two bugs: **joint limits** (were
+      ignored → now impulse-based one-sided constraints in the generalized solver) and **WorldDef
+      damping on the floating base** (linearDamping ignored → now damps `baseTwist_`). Stress env
+      `substeps` 24→48 for the stiffer limited dynamics. See the reduced-coordinate design doc.
+- [x] **Ball q/qd multi-DOF readout** (2026-07-04): `JointState` gained `rotation` (rest-relative
+      orientation as a rotation vector) + `angularVelocity`; populated by both backends (reduced from
+      `locRot`/`qd`, realtime from `refRel`/poses). Default obs packer is now **DOF-complete**
+      (revolute→q,qd; ball→rotvec,ω), so humanoid `obsDim` 53→69.
+- [x] **PD-target action mode** for the env (2026-07-04): `EnvConfig::actionMode {Torque,PDTarget}`
+      + `kp`/`kd`; PDTarget interprets the action as a desired joint position (revolute angle / ball
+      orientation-rotvec), tracked by the actuator PD servo. Added `setJointBallTarget` to the
+      `PhysicsWorld` interface + both backends. Tests: `reduced_ball_state_readout`,
+      `reduced_env_pd_target_tracks` (knee tracks a commanded bend).
 
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 

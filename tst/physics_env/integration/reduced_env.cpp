@@ -27,7 +27,9 @@ physics_env::EnvConfig reducedHumanoid() {
     physics_env::EnvConfig c;
     c.articulation = physics::makeHumanoid();
     c.backend = physics::Backend::Reduced;
-    c.substeps = 24;        // reduced ABA needs a finer step than maximal PGS under strong torque
+    c.substeps = 48;        // reduced ABA needs a fine step under strong torque; hard joint limits
+                            // add constraint stiffness ⇒ finer than the pre-limit 24 (else a rare
+                            // ±15-torque stream can diverge). Deterministic given fixed seeds.
     c.maxTorque = 40.0f;
     return c;
 }
@@ -36,9 +38,9 @@ physics_env::EnvConfig reducedHumanoid() {
 TST_CASE(physics_env, integration, reduced_env_finite_and_deterministic) {
     physics_env::Environment a(reducedHumanoid());
     physics_env::Environment b(reducedHumanoid());
-    // Same actDim/obsDim as the maximal backend (API unchanged): 21 / 53 for the humanoid.
+    // Same actDim/obsDim as the maximal backend (API unchanged): 21 / 69 for the humanoid.
     TST_REQUIRE(a.actDim() == 21);
-    TST_REQUIRE(a.defaultObsDim() == 53);
+    TST_REQUIRE(a.defaultObsDim() == 69);
 
     a.reset(11);
     b.reset(11);
@@ -86,4 +88,29 @@ TST_CASE(physics_env, integration, reduced_vecenv_parallel_determinism) {
     std::printf("reduced_vecenv: N=%zu parallel-vs-serial maxErr=%.3e\n", N, maxErr);
     for (float v : parallel.observations()) TST_REQUIRE(std::isfinite(v));
     TST_REQUIRE(maxErr == 0.0f);
+}
+
+TST_CASE(physics_env, integration, reduced_env_pd_target_tracks) {
+    // #4: PD-target action mode — the action is a desired joint position, tracked by a PD servo.
+    // Pin the pelvis and command a knee bend; the knee angle should converge to the target.
+    physics_env::EnvConfig cfg = reducedHumanoid();
+    cfg.actionMode = physics_env::ActionMode::PDTarget;
+    cfg.kp = 200.0f; cfg.kd = 20.0f; cfg.maxTorque = 200.0f;
+    cfg.articulation.bodies[0].type = physics::BodyType::Static;   // pin pelvis for a clean hold
+    physics_env::Environment env(cfg);
+    env.reset(0);
+
+    std::vector<float> action(env.actDim(), 0.0f);
+    action[17] = -1.0f; action[18] = -1.0f;   // knee L/R (revolute) targets = −1 rad (bend)
+    for (int i = 0; i < 400; ++i) { env.setAction(action); env.step(); }
+
+    const auto js = env.jointStates();
+    const float kneeL = js[9].q, kneeR = js[10].q;    // joints 9,10 = knees (revolute)
+    const float elbowL = js[5].q;                     // joint 5 = elbow, target 0 ⇒ stays ~0
+    std::printf("reduced_pd_track: kneeL=%.3f kneeR=%.3f (target -1.0) elbowL=%.3f (target 0)\n",
+                kneeL, kneeR, elbowL);
+    TST_REQUIRE(std::isfinite(kneeL) && std::isfinite(kneeR));
+    TST_REQUIRE(std::fabs(kneeL - (-1.0f)) < 0.2f);   // PD tracks the commanded knee bend
+    TST_REQUIRE(std::fabs(kneeR - (-1.0f)) < 0.2f);
+    TST_REQUIRE(std::fabs(elbowL) < 0.2f);            // un-commanded joints hold neutral
 }

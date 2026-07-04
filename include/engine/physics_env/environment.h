@@ -9,9 +9,11 @@
 //  termination, or task**: the downstream trainer composes its observation from the raw state and
 //  computes reward/termination itself. Reset is **in-place** (no destroy/recreate).
 //
-//  Actuation is TORQUE control (the common RL action space): revolute joints take 1 value, ball
-//  joints 3, fixed 0; the action vector concatenates them in joint order. Per-DOF magnitude is
-//  clamped by the solver's actuator `maxTorque`.
+//  Actuation is selectable (`EnvConfig::actionMode`): TORQUE control (raw joint torques) or
+//  PD-TARGET control (the action is a desired joint position — revolute angle / ball orientation as
+//  a rotation vector — tracked by a PD servo with `kp`/`kd`). Either way revolute joints take 1
+//  value and ball joints 3; the action vector concatenates them in joint order. Per-DOF magnitude
+//  is clamped by the solver's actuator `maxTorque`.
 //
 
 #pragma once
@@ -28,6 +30,9 @@
 
 namespace engine::physics_env {
 
+// How the action vector is interpreted (see the file header).
+enum class ActionMode { Torque, PDTarget };
+
 struct EnvConfig {
     physics::ArticulationDef articulation;                 // e.g. physics::makeHumanoid()
     physics::Vec3  gravity{0, physics::Real(-9.81), 0};
@@ -37,6 +42,9 @@ struct EnvConfig {
     physics::Real  linearDamping = physics::Real(0.05);
     physics::Real  angularDamping = physics::Real(0.1);
     physics::Real  maxTorque = physics::Real(150);         // per-DOF torque clamp
+    ActionMode     actionMode = ActionMode::Torque;        // Torque (default) or PDTarget
+    physics::Real  kp = physics::Real(150);                // PD position gain (PDTarget mode)
+    physics::Real  kd = physics::Real(15);                 // PD velocity gain (PDTarget mode)
     bool           groundPlane = true;
     physics::Real  groundFriction = physics::Real(0.9);
     physics::Backend backend = physics::Backend::Realtime;

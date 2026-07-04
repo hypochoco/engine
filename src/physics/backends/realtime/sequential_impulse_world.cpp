@@ -216,6 +216,9 @@ public:
     void setJointBallTorque(JointHandle h, Vec3 torque) override {
         if (jointValid(h)) joints_[h.index].actuator.ballTorque = torque;
     }
+    void setJointBallTarget(JointHandle h, Quat target) override {
+        if (jointValid(h)) joints_[h.index].actuator.ballTarget = glm::normalize(target);
+    }
     void setJointTargets(std::span<const Real> targets) override {
         const size_t n = std::min(targets.size(), joints_.size());
         for (size_t i = 0; i < n; ++i) if (joints_[i].alive) joints_[i].actuator.target = targets[i];
@@ -828,9 +831,18 @@ private:
     void writeJointStates() {
         jointStates_.assign(joints_.size(), JointState{});
         for (size_t i = 0; i < joints_.size(); ++i) {
-            if (joints_[i].alive && joints_[i].type == JointType::Revolute) {
-                const HingeState hs = hingeState(joints_[i]);
-                jointStates_[i] = JointState{ hs.q, hs.qd };
+            const JointData& j = joints_[i];
+            if (!j.alive) continue;
+            if (j.type == JointType::Revolute) {
+                const HingeState hs = hingeState(j);
+                jointStates_[i].q = hs.q; jointStates_[i].qd = hs.qd;
+            } else if (j.type == JointType::Ball) {          // rest-relative rotvec + child-frame ω
+                const BodyData& A = bodies_[j.a];
+                const BodyData& B = bodies_[j.b];
+                const Quat qRel = glm::normalize(glm::conjugate(A.orientation) * B.orientation);
+                const Quat qDev = glm::normalize(glm::conjugate(j.refRel) * qRel);
+                jointStates_[i].rotation = so3LogMap(qDev);
+                jointStates_[i].angularVelocity = glm::mat3_cast(glm::conjugate(B.orientation)) * (B.angVel - A.angVel);
             }
         }
     }

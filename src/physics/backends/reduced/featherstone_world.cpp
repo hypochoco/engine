@@ -187,6 +187,8 @@ struct Joint {
     Real  qd[3]{0, 0, 0};                                // per-DOF rate (child-frame along axis)
     Actuator actuator{};
     int   qIndex = -1;
+    bool  enableLimit = false;                           // revolute (dof==1) angle limit [lo,hi]
+    Real  lowerLimit = 0, upperLimit = 0;
 
     Quat relRot() const { return glm::normalize(restRel * locRot); }
 };
@@ -196,7 +198,7 @@ class FeatherstoneWorld final : public PhysicsWorld {
 public:
     explicit FeatherstoneWorld(const WorldDef& def)
         : gravity_(def.gravity), substeps_(def.substeps > 0 ? def.substeps : 1),
-          angularDamping_(def.angularDamping) {}
+          linearDamping_(def.linearDamping), angularDamping_(def.angularDamping) {}
 
     BodyHandle createBody(const BodyDef& d) override {
         Link l;
@@ -222,6 +224,7 @@ public:
         j.parent = static_cast<int>(d.a.index);
         j.child  = static_cast<int>(d.b.index);
         j.actuator = d.actuator;
+        j.enableLimit = d.enableLimit; j.lowerLimit = d.lowerLimit; j.upperLimit = d.upperLimit;
         j.dof = (d.type == JointType::Ball) ? 3 : (d.type == JointType::Revolute ? 1 : 0);
         j.anchorP = d.localAnchorA; j.anchorC = d.localAnchorB;
 
@@ -254,6 +257,7 @@ public:
     void setJointTarget(JointHandle h, Real t) override { if (h.index < joints_.size()) joints_[h.index].actuator.target = t; }
     void setJointTorque(JointHandle h, Real t) override { if (h.index < joints_.size()) joints_[h.index].actuator.torque = t; }
     void setJointBallTorque(JointHandle h, Vec3 t) override { if (h.index < joints_.size()) joints_[h.index].actuator.ballTorque = t; }
+    void setJointBallTarget(JointHandle h, Quat t) override { if (h.index < joints_.size()) joints_[h.index].actuator.ballTarget = glm::normalize(t); }
     void setJointTargets(std::span<const Real> t) override { for (size_t i = 0; i < t.size() && i < joints_.size(); ++i) joints_[i].actuator.target = t[i]; }
     void setJointTorques(std::span<const Real> t) override { for (size_t i = 0; i < t.size() && i < joints_.size(); ++i) joints_[i].actuator.torque = t[i]; }
 
@@ -290,7 +294,13 @@ public:
                     if (angularDamping_ > 0) j.qd[a] *= std::max(Real(0), Real(1) - angularDamping_ * h);
                 }
             }
-            if (floating_) baseTwist_ = addV(baseTwist_, scale(baseAccel_, h));
+            if (floating_) {
+                baseTwist_ = addV(baseTwist_, scale(baseAccel_, h));
+                const Real aa = (angularDamping_ > 0) ? std::max(Real(0), Real(1) - angularDamping_ * h) : Real(1);
+                const Real la = (linearDamping_  > 0) ? std::max(Real(0), Real(1) - linearDamping_  * h) : Real(1);
+                for (int a = 0; a < 3; ++a) baseTwist_.d[a] *= aa;   // angular part
+                for (int a = 3; a < 6; ++a) baseTwist_.d[a] *= la;   // linear part
+            }
             solveContacts(h);
             for (Joint& j : joints_) {                          // integrate positions
                 if (j.dof == 0) continue;
@@ -579,7 +589,17 @@ private:
 
     void solveContacts(Real h) {
         const std::vector<Contact> contacts = detectContacts();
-        if (contacts.empty()) return;
+        // Active revolute joint limits (impulse-based, one-sided): a DOF past a limit becomes a
+        // normal-like constraint pushing it back into range — solved with the contacts so the
+        // impulse propagates through H⁻¹ to the whole articulation (momentum-consistent).
+        struct Limit { int dof; Real sign; Real pen; };   // sign +1: lower (push q up); −1: upper
+        std::vector<Limit> limits;
+        for (const Joint& j : joints_) {
+            if (!j.enableLimit || j.dof != 1 || j.lowerLimit > j.upperLimit) continue;
+            if (j.q[0] < j.lowerLimit)      limits.push_back({ j.qIndex, Real(+1), j.lowerLimit - j.q[0] });
+            else if (j.q[0] > j.upperLimit) limits.push_back({ j.qIndex, Real(-1), j.q[0] - j.upperLimit });
+        }
+        if (contacts.empty() && limits.empty()) return;
         const int nd = ndof_;
         std::vector<Real> H = buildMassMatrix();
         bool sparse = sparseOk_;
@@ -598,7 +618,7 @@ private:
 
         struct Row { std::vector<Real> Jn, Jt1, Jt2, JnHi, Jt1Hi, Jt2Hi; Real An, At1, At2, Atc, biasN, fric; uint32_t key; Real ln = 0, l1 = 0, l2 = 0; };
         std::vector<Row> rows; rows.reserve(contacts.size());
-        constexpr Real kBeta = Real(0.2), kSlop = Real(0.001);
+        constexpr Real kBeta = Real(0.2), kSlop = Real(0.001), kMaxCorr = Real(4);
         for (const Contact& c : contacts) {
             Vec3 t1, t2; basisPerp(c.normal, t1, t2);
             Row r;
@@ -606,7 +626,7 @@ private:
             applyHinv(r.Jn, r.JnHi); applyHinv(r.Jt1, r.Jt1Hi); applyHinv(r.Jt2, r.Jt2Hi);
             r.An = dotN(r.Jn, r.JnHi); r.At1 = dotN(r.Jt1, r.Jt1Hi); r.At2 = dotN(r.Jt2, r.Jt2Hi);
             r.Atc = dotN(r.Jt1, r.Jt2Hi);                              // #4 friction-block coupling
-            r.biasN = -(kBeta / h) * std::max(Real(0), c.pen - kSlop); r.fric = c.friction; r.key = c.key;
+            r.biasN = -std::min(kMaxCorr, (kBeta / h) * std::max(Real(0), c.pen - kSlop)); r.fric = c.friction; r.key = c.key;
             rows.push_back(std::move(r));
         }
 
@@ -617,6 +637,16 @@ private:
             if (it == impulseCache_.end()) continue;
             r.ln = it->second[0]; r.l1 = it->second[1]; r.l2 = it->second[2];
             for (int i = 0; i < nd; ++i) qd[i] += r.JnHi[i] * r.ln + r.Jt1Hi[i] * r.l1 + r.Jt2Hi[i] * r.l2;
+        }
+
+        // Limit rows: one-sided normal constraints on a single DOF (Jl = ±e_k, no friction).
+        struct LRow { std::vector<Real> Jl, JlHi; Real A, bias; Real l = 0; };
+        std::vector<LRow> lrows; lrows.reserve(limits.size());
+        for (const Limit& lm : limits) {
+            LRow lr; lr.Jl.assign(static_cast<size_t>(nd), Real(0)); lr.Jl[lm.dof] = lm.sign;
+            applyHinv(lr.Jl, lr.JlHi); lr.A = dotN(lr.Jl, lr.JlHi);
+            lr.bias = -std::min(kMaxCorr, (kBeta / h) * std::max(Real(0), lm.pen - kSlop));   // Baumgarte back into range
+            lrows.push_back(std::move(lr));
         }
 
         constexpr int kIters = 12;                                    // fewer iters: warm-started + block friction
@@ -646,6 +676,14 @@ private:
                 if (mag > muN && mag > kEps) { const Real s = muN / mag; n1 *= s; n2 *= s; }
                 const Real ad1 = n1 - r.l1, ad2 = n2 - r.l2; r.l1 = n1; r.l2 = n2;
                 for (int i = 0; i < nd; ++i) qd[i] += r.Jt1Hi[i] * ad1 + r.Jt2Hi[i] * ad2;
+            }
+            for (LRow& lr : lrows) {                                  // joint limits (λ ≥ 0)
+                if (lr.A <= kEps) continue;
+                const Real vn = dotN(lr.Jl, qd);
+                Real dl = -(vn + lr.bias) / lr.A;
+                const Real nl = std::max(Real(0), lr.l + dl);
+                dl = nl - lr.l; lr.l = nl;
+                for (int i = 0; i < nd; ++i) qd[i] += lr.JlHi[i] * dl;
             }
         }
 
@@ -685,13 +723,23 @@ private:
         }
     }
     void writeJointStates() {
-        for (size_t i = 0; i < joints_.size(); ++i) { jointStates_[i].q = (joints_[i].dof == 1) ? joints_[i].q[0] : Real(0); jointStates_[i].qd = (joints_[i].dof == 1) ? joints_[i].qd[0] : Real(0); }
+        for (size_t i = 0; i < joints_.size(); ++i) {
+            const Joint& j = joints_[i];
+            JointState s{};
+            if (j.dof == 1) { s.q = j.q[0]; s.qd = j.qd[0]; }
+            else if (j.dof == 3) {                       // ball: rest-relative rotvec + child-frame ω
+                s.rotation = quatToRotvec(j.locRot);
+                s.angularVelocity = Vec3(j.qd[0], j.qd[1], j.qd[2]);
+            }
+            jointStates_[i] = s;
+        }
     }
 
     static constexpr Real kEps = Real(1e-12);
 
     Vec3 gravity_{0, Real(-9.81), 0};
     int  substeps_ = 1;
+    Real linearDamping_ = 0;
     Real angularDamping_ = 0;
 
     bool inited_ = false;

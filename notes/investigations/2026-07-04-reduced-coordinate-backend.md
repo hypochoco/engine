@@ -222,3 +222,36 @@ E1/E2/E3 tests stay green. **Result: ~1.5–1.65× env-steps/s** for the reduced
 locomotion case), where the O(ndof³) inverse dominated. In a degenerate all-bodies-flat rest (many
 contacts) the **PGS iteration** dominates instead of `H`, so sparse-H is ~neutral there — the next
 lever for that case is the PGS itself (block/Delassus solve or exploiting Jacobian sparsity).
+
+## Coverage hardening + bug fixes (2026-07-04)
+
+Added a focused reduced-backend test file (`tst/physics/integration/reduced_joints.cpp`) covering
+per-joint-type behavior (fixed weld, revolute Torque + PDTarget, off-axis hinge), capsule contact,
+and characterizations of gaps — plus a side-by-side visual gallery
+(`tst/physics/visual/reduced_joints.cpp`: single/double pendulum, 4-link chain, ball pendulum,
+fixed-weld+elbow arm). The new tests surfaced two real bugs, now fixed:
+
+1. **Joint limits were silently ignored.** `createJoint` never read `enableLimit/lower/upperLimit`,
+   so revolute limits (elbows/knees/ankles in `makeHumanoid`) did nothing → limbs could
+   hyperextend. Fixed with an **impulse-based one-sided limit constraint** in the generalized
+   solver: a DOF past its limit adds a row `Jl = ±e_k` (no friction, `λ ≥ 0`, Baumgarte back into
+   range) solved alongside contacts, so the impulse propagates through `H⁻¹` to the whole
+   articulation. A first attempt using a hard position/velocity clamp in `step()` blew up the
+   humanoid (zeroing a mid-chain DOF's velocity violates the articulation coupling / injects
+   energy) — the impulse form is momentum-consistent and stable. Also clamped the Baumgarte
+   correction velocity (`kMaxCorr`) for contacts + limits so a violent violation can't inject
+   unbounded energy.
+2. **`WorldDef` damping was not applied to the floating base.** The ctor ignored `linearDamping`
+   entirely, and `angularDamping` was applied only to joint DOFs — so a floating body never slowed.
+   Fixed: damp `baseTwist_` (angular + linear) each substep.
+
+Stiffer (limit-constrained) dynamics need a finer step under abusive torque, so the ±15-torque
+stress env test moved `substeps` 24 → 48 (deterministic; consistent with the existing "reduced ABA
+needs a finer step than maximal under strong torque" note). Full suite 92/0, ctest 7/7; reduced
+throughput unchanged (~31.8k env-steps/s at N=1024 — limits cost is nil unless a joint is at its
+limit).
+
+Ball q/qd readout — **RESOLVED** (2026-07-04): `JointState` now carries `rotation` (rest-relative
+orientation rotvec) + `angularVelocity` for ball joints, populated from `locRot`/`qd`; the env's
+default obs packer became DOF-complete (`obsDim` 53→69). A PD-target action mode + `setJointBallTarget`
+were added alongside so the env can be driven by desired joint positions (see `physics_env`).
