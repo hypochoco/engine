@@ -93,6 +93,40 @@ refactor pass must ultimately support.
 > a clean headless/offscreen *device* split + deferred rendering, parallel-world ML stepping,
 > and the ~100k-sphere instanced-at-scale case. See architecture.md "Milestone status".
 
+## Next milestone: "a physics humanoid walking on terrain" (RL-ready)
+
+Full plan: investigations/2026-07-03-humanoid-rl-milestone-plan.md.
+
+> An **articulated, physically-simulated humanoid** (jointed limbs, actuated, affected by
+> gravity/contact/friction) that can be **driven interactively (keyboard/mouse) or
+> programmatically (an action vector)**, standing and walking about **procedural terrain**,
+> rendered with **basic lighting + a controllable background**, and **steppable headless in
+> parallel batches** exposing **batched observation/action tensors**.
+
+This is the *engine-side* target: the mechanism and infrastructure that make an RL locomotion
+task possible. It deliberately **stops short of training** — the RL algorithm, reward shaping,
+curriculum, task definitions, Python bindings, and cloud orchestration live in a **downstream
+repo** (see "Direction: engine ↔ simulation split"). The MuJoCo "Humanoid" / DeepMind Control
+locomotion benchmarks are the mental model for scope. It forces the systems Milestone 1 left
+open: articulated dynamics + actuation, non-flat (terrain) collision, input, lighting, and a
+vectorized headless env interface. Phased plan (A input+graphics → B articulated physics →
+C terrain → D env interface) is in the investigation doc; backlog items in todo.md.
+
+Key open decision: **articulation approach** — maximal-coordinate joint *constraints* on the
+existing impulse solver (fast to a visible result, reuses everything) vs **reduced-coordinate**
+articulation (Featherstone/ABA; what real humanoid-RL uses; differentiable-friendly; a much
+bigger build). Recommendation: constraints first, then add reduced-coordinate as a second
+`PhysicsWorld` backend. Settle in a dedicated design doc before the physics phase.
+
+## Direction: engine ↔ simulation split
+
+This repo is the **engine** (a library). Once it has "enough" for the humanoid milestone
+(input, lighting, articulated physics + actuators, terrain, and a generic `Environment`/
+`VecEnv` mechanism with batched obs/action buffers), the **full simulation moves to a separate
+repo** that pulls the engine in as a dependency and owns the task/reward/RL-algorithm/cloud
+layers. Design consequence: keep the env/articulation/observation-action API **clean, stable,
+plain-data, and free of task/policy assumptions** at the boundary.
+
 ## Non-goals (for now)
 
 - Networking / multiplayer.

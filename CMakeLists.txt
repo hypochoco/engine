@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Metal/Vulkan use a 0..1 clip-space depth range; make glm match engine-wide so projection
+# matrices are consistent everywhere they're built (Camera::projectionMatrix, tests, ...).
+add_compile_definitions(GLM_FORCE_DEPTH_ZERO_TO_ONE)
+
 # external dependencies
 find_package(glm REQUIRED)
 find_package(Threads REQUIRED)
@@ -47,6 +51,9 @@ add_library(engine::engine ALIAS engine)
 
 target_link_libraries(engine INTERFACE
     engine::core
+    engine::input
+    engine::input_glfw
+    engine::controls
     engine::ecs
     engine::graphics
     engine::scene

@@ -503,3 +503,48 @@ honor them:
    live in structs/arrays — never hardcoded constants in the step.
 7. **Fixed timestep `h` is an explicit argument**, never baked into a kernel.
 8. **Deterministic + explicit-seed randomness** (Phase 0 kernels are deterministic anyway).
+
+---
+
+## 15. Differentiable physics — practical role in ML (Phase 3+)
+
+Added 2026-07-03. See also the articulation note
+([2026-07-03-articulation-approach.md](2026-07-03-articulation-approach.md)) — reduced
+coordinates and differentiability are natural to pursue together.
+
+**What it is.** The step exposes gradients, not just the next state:
+∂(next state, or a loss)/∂(actions, physical params θ, initial state). Implemented via the
+adjoint / implicit-function-theorem (analytic) or unrolled autodiff, with checkpointing.
+
+**How it plays into our ML goal.**
+- **Analytic-gradient policy learning.** Model-free RL (PPO/SAC) estimates the policy gradient
+  from *noisy sampled returns*. A differentiable sim lets you backprop a differentiable loss
+  *through the rollout* into the policy → far lower-variance, more informative gradients
+  (Brax / MuJoCo-MJX / DiffTaichi line of work).
+- **System identification / calibration.** Fit mass, friction, motor gains to reference/mocap
+  data by gradient descent through the sim.
+- **Trajectory optimization / motion tracking (imitation).** Directly optimize a control
+  sequence to match a target motion via gradients.
+
+**Practical effect — what "differentiable" buys us (and what it doesn't).**
+The headline benefit is **sample efficiency**: potentially *far fewer environment interactions
+(samples) to reach a given skill*, because an informative gradient beats averaging many noisy
+sampled returns. That is the sense in which "training is reduced" — reduced **sample
+complexity**. Caveats that keep it from being a free win:
+- **Not automatically less wall-clock.** A differentiable step costs more (the backward pass +
+  memory for checkpoints), so fewer-but-heavier steps. Net speedup depends on the task.
+- **Contacts are non-smooth.** Impulsive/stiff contact makes naive gradients noisy or biased;
+  practical diff-sims use **soft/compliant contact** or randomized smoothing. Contact-rich
+  locomotion is exactly where gradients are hardest — an active research area.
+- **Can get stuck.** Gradient methods can fall into local minima on discontinuous dynamics
+  where sampling-based RL explores better; hybrids exist.
+
+**Where it sits on our roadmap.** Model-free RL on the (eventually reduced-coordinate) sim is
+the **baseline and needs no differentiability**. Differentiable physics is an
+**accelerator/research layer** layered on later — most valuable *after* the reduced-coordinate
+backend exists (smooth, minimal, analytic state). It targets sample-efficiency and sysid, and
+is **not required** to train a walking policy. Stays deferred (Phase 3+).
+
+Design implications already captured (Q8): backend-owned state as a contiguous, index-stable
+tensor with a well-defined `state_{t+1}=f(state_t, θ)`; compliant contacts for smoother
+gradients; `physics::Real` localizes the scalar for a future double/dual-number switch.

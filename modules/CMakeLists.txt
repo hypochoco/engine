@@ -5,7 +5,10 @@
 # only the per-module build files.
 
 add_subdirectory(core)
+add_subdirectory(input)
+add_subdirectory(input_glfw)
 add_subdirectory(ecs)
+add_subdirectory(controls)
 add_subdirectory(graphics)
 add_subdirectory(scene)
 add_subdirectory(physics)

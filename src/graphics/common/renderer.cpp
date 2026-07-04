@@ -25,11 +25,21 @@
 
 namespace engine::render {
 
+// CPU mirror of the mesh shader's `Globals` constant buffer (binding 0). std140/constant-buffer
+// layout: mat4 (64B) then three vec4 (16B each) — all naturally 16-byte aligned. Column-major
+// matrices match slangc's -matrix-layout-column-major and glm.
+struct GlobalUniforms {
+    glm::mat4 viewProj{1.0f};
+    glm::vec4 lightDir{0.0f};     // xyz = normalized direction TO the light; w unused
+    glm::vec4 lightColor{1.0f};   // rgb = color * intensity; w unused
+    glm::vec4 ambient{0.0f};      // rgb = ambient term; w unused
+};
+
 struct Renderer::Impl {
     rhi::Device*   device   = nullptr;
     GeometryStore* geometry = nullptr;
 
-    rhi::BufferHandle       cameraUBO;         // glm::mat4 viewProj
+    rhi::BufferHandle       cameraUBO;         // GlobalUniforms (viewProj + light)
     rhi::BufferHandle       instanceBuffer;    // InstanceData[]
     uint32_t                instanceCapacity = 0;
     rhi::BufferHandle       materialBuffer;    // MaterialGPU[]
@@ -74,7 +84,7 @@ Renderer::Renderer(rhi::Device& device, GeometryStore& geometry) : impl_(std::ma
     impl_->device   = &device;
     impl_->geometry = &geometry;
     impl_->cameraUBO = device.createBuffer(
-        { .size = sizeof(glm::mat4), .usage = rhi::BufferUsage::Uniform,
+        { .size = sizeof(GlobalUniforms), .usage = rhi::BufferUsage::Uniform,
           .memory = rhi::MemoryMode::CpuToGpu });
 }
 Renderer::Renderer(Renderer&&) noexcept = default;
@@ -89,8 +99,13 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         I.ensureDepth(view.width, view.height);
 
         const glm::mat4 viewProj = view.proj * view.view;
+        GlobalUniforms g;
+        g.viewProj   = viewProj;
+        g.lightDir   = glm::vec4(glm::normalize(-view.light.direction), 0.0f);  // surface→light
+        g.lightColor = glm::vec4(view.light.color * view.light.intensity, 0.0f);
+        g.ambient    = glm::vec4(view.light.ambient, 0.0f);
         I.device->updateBuffer(I.cameraUBO, 0,
-                               std::as_bytes(std::span<const glm::mat4>(&viewProj, 1)));
+                               std::as_bytes(std::span<const GlobalUniforms>(&g, 1)));
         if (!view.instances.empty()) {
             I.ensureInstances(static_cast<uint32_t>(view.instances.size()));
             I.device->updateBuffer(I.instanceBuffer, 0, std::as_bytes(view.instances));

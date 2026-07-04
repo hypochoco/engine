@@ -39,8 +39,13 @@ engine::engine (INTERFACE)
 ├── engine::core        (STATIC) → glm, tinyobjloader, stb, Threads
 │                                  geometry (vertex/mesh/material/model/primitives),
 │                                  memory/Handle, math/Transform, threading (ThreadPool + parallelSort)
-├── engine::ecs         (STATIC) → engine::core   (archetype World, queries, resources, Schedule)
-├── engine::graphics    (STATIC) → engine::core, glfw, glm, tinyobjloader, stb,
+├── engine::core        (STATIC)    → glm, tinyobjloader, stb, Threads
+│                                     geometry, memory/Handle, math/{Transform,Camera}, Time, threading
+├── engine::ecs         (STATIC)    → engine::core   (archetype World, queries, resources, Schedule)
+├── engine::input       (INTERFACE) → engine::core, glm            (InputState + Key/MouseButton; GLFW-free)
+├── engine::input_glfw  (STATIC)    → engine::input, glfw          (GlfwInput adapter; future: input_qt)
+├── engine::controls    (STATIC)    → engine::ecs, engine::input, engine::core   (FlyController + system → Transform)
+├── engine::graphics    (STATIC)    → engine::core, glfw, glm, tinyobjloader, stb,
 │                                  (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan   (RHI + Metal backend)
 ├── engine::scene       (STATIC) → engine::ecs + engine::graphics   (ECS↔render bridge; extract)
 ├── engine::physics     (STATIC) → engine::core   (shapes/collision/broadphase/solver, PhysicsWorld)
@@ -223,6 +228,37 @@ consumers). Design: investigations/2026-07-03-ecs-plan.md.
 `core` additions: `core/memory/handle.h` (`Handle<Tag>`, shared by rhi + ecs — the rhi's
 `Handle` is now an alias) and `core/math/transform.h` (`engine::Transform`).
 
+## Input + controls (`engine::input`, `engine::input_glfw`, `engine::controls`, 2026-07-03)
+
+Keyboard/mouse (Milestone 2, Phase A), split by dependency so the neutral layer is windowing-
+backend-agnostic (GLFW today, Qt/other later) and headless/ML-friendly:
+- **`engine::input`** (INTERFACE, header-only; deps core + glm, **GLFW-free**):
+  `input::InputState` (`input/input.h`) — `Key`/`MouseButton` enums, level (`keyDown`) + edge
+  (`keyPressed`/`keyReleased`) queries, mouse pos + delta, scroll. Mutators (`newFrame`,
+  `setKey`, `setMouseButton`, `setMousePosition` (absolute), `addMouseDelta` (relative/event),
+  `addScroll`) form an adapter contract that fits **both** polling (GLFW) and event-driven (Qt)
+  backends, and scripted/ML input (fill it directly).
+- **`engine::input_glfw`** (STATIC; deps input + glfw): `input::GlfwInput` — polls a GLFW window
+  (passed as `void*`) into an `InputState`; scroll via a per-window callback registry; cursor
+  capture. A future `engine::input_qt` sits alongside it.
+- **`engine::controls`** (STATIC; deps ecs + input + core, **graphics-free**): input-driven ECS
+  controllers. `controls::FlyController` component + `controls::flyControllerSystem` (a
+  `void(World&)` system reading the `input::InputState` + `engine::Time` resources) drive an
+  entity's `engine::Transform` (WASD/QE/sprint/RMB-look). The controller only touches
+  `Transform` — it doesn't know the entity is a camera.
+- **Camera as an ECS entity**: `engine::Camera` (`core/math/camera.h`) is render-agnostic
+  *projection* data (perspective/ortho, fovY, near/far, `projectionMatrix(aspect)`; 0..1 depth
+  via engine-wide `GLM_FORCE_DEPTH_ZERO_TO_ONE`). A camera entity = `Transform` (pose) +
+  `Camera` (projection) + optional `FlyController`. `scene::extractViews` turns each
+  `<Transform, Camera>` into a `render::RenderView` (view = inverse(pose)); the app fills each
+  view's materials + target (invalid target ⇒ primary swapchain).
+- `engine::Time` (`core/time.h`): frame-dt resource for variable-rate systems (physics keeps
+  its own `FixedStep`).
+- Drivers: `tst/input/unit/input_state.cpp` (edges/deltas/scroll), `tst/controls/unit/
+  fly_controller.cpp` (ECS controller, headless), `tst/core/unit/camera.cpp` (projection);
+  `tst/graphics/visual/input_demo.cpp` (windowed: camera-entity + Schedule[input-pump → fly] +
+  extractViews + background/light toggles).
+
 ## Scene module (`engine::scene`, 2026-07-03)
 
 The ECS↔render bridge — the only module that depends on **both** `engine::ecs` and
@@ -234,6 +270,13 @@ The ECS↔render bridge — the only module that depends on **both** `engine::ec
   mesh), and fills `RenderItem[] + InstanceData[]` for a `render::RenderView`.
 - Driver: `tst/graphics/integration/scene.cpp` (ECS entities → extract → render → pixel-verified);
   `tst/graphics/visual/grid.cpp` is ECS-driven (a bob system + extraction each frame).
+- **Environment** (`scene/environment.h`, Phase A): `Background` + `SceneLighting` ECS resources
+  + `applyEnvironment(world, view)` copies them onto a `RenderView` (clearColor + directional
+  light). The Renderer packs `RenderView::light` into a `GlobalUniforms` (viewProj + light) at
+  binding 0; `mesh.slang` does ambient + Lambert shading (configurable, was hardcoded).
+- **`scene::extractViews`** (Phase A): builds one `RenderView` per `<Transform, engine::Camera>`
+  entity (view = inverse(pose), proj from Camera, environment applied); items/instances shared
+  from `extract`. Camera-as-entity → maps onto RenderView's multi-view design.
 
 ## What is NOT here yet
 

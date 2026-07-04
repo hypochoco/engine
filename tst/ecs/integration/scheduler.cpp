@@ -18,8 +18,7 @@
 
 namespace {
 struct Velocity { glm::vec3 v{0.0f}; };
-struct Time     { float dt = 0.0f; };
-}
+}   // uses the shared engine::Time resource (core/time.h) for dt
 
 TST_CASE(ecs, integration, scheduler) {
     using namespace engine;

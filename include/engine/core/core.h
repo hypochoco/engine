@@ -8,6 +8,8 @@
 #pragma once
 
 #include "engine/core/math/transform.h"
+#include "engine/core/math/camera.h"
+#include "engine/core/time.h"
 #include "engine/core/memory/handle.h"
 #include "engine/core/geometry/vertex.h"
 #include "engine/core/geometry/mesh.h"

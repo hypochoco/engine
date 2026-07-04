@@ -34,6 +34,69 @@ capability targets that make it exercise our goals — headless + deferred rende
 sims for training, and massive scale (~100k spheres). This is the yardstick for whether core
 is "good enough" and defines what the graphics refactor pass must support.
 
+## Next milestone: "a physics humanoid walking on terrain" (RL-ready)
+
+See goals.md + full plan: [2026-07-03-humanoid-rl-milestone-plan.md](../investigations/2026-07-03-humanoid-rl-milestone-plan.md).
+Articulated, actuated humanoid on procedural terrain, drivable by keyboard OR an action vector,
+lit + steppable headless in parallel batches with batched obs/action tensors. Engine-side
+mechanism only — reward/RL-algorithm/cloud/task live in a **downstream sim repo** (see goals.md
+"engine ↔ simulation split"). Big open decision: **articulation approach** (maximal-coordinate
+joint constraints vs reduced-coordinate Featherstone) — needs its own design doc before Phase B.
+
+### Phase A — Interaction + graphics basics ✅ DONE (2026-07-03)
+Backend-agnostic input + ECS-native camera. Split by dependency for extensibility (GLFW today,
+Qt/other later) and headless/ML use:
+- [x] **`engine::input`** (INTERFACE, GLFW-free): `InputState` (level + edge queries, mouse
+      pos/delta incl. `addMouseDelta` for event backends, scroll) + `Key`/`MouseButton`. Adapter
+      contract fits polling (GLFW) + event-driven (Qt) + scripted/ML. `tst/input/unit`.
+- [x] **`engine::input_glfw`** (adapter): `GlfwInput` polls a window (`void*`) → `InputState`;
+      scroll callback; cursor capture. Future `engine::input_qt` sits alongside.
+- [x] **`engine::controls`** (ecs + input + core, graphics-free): `FlyController` component +
+      `flyControllerSystem` (reads `InputState` + `Time` resources → drives `Transform`).
+      `tst/controls/unit/fly_controller.cpp`.
+- [x] **Camera as an ECS entity**: render-agnostic `engine::Camera` projection in `core::math`;
+      a camera entity = `Transform` + `Camera` (+ optional `FlyController`). `scene::extractViews`
+      turns `<Transform, Camera>` → `RenderView`. `engine::Time` frame-dt resource in core.
+      `tst/core/unit/camera.cpp`.
+- [x] **Lighting**: `render::DirectionalLight` on `RenderView`; renderer packs `GlobalUniforms`
+      (viewProj + light) into binding 0; `mesh.slang` does ambient + Lambert (configurable).
+- [x] **Background**: `scene::Background` + `scene::SceneLighting` resources + `applyEnvironment`.
+      Demo: `tst/graphics/visual/input_demo.cpp` (camera entity + Schedule[input-pump → fly] +
+      extractViews + background/light toggles).
+
+### Phase B — Articulated physics (the core; long pole)
+- [x] **B0 design doc**: DECIDED (2026-07-03) —
+      [2026-07-03-articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
+      **Maximal-coordinate joint constraints first** on the existing impulse solver; add a
+      **reduced-coordinate (Featherstone) `PhysicsWorld` backend later** (deferred, but integral
+      once training starts — smaller observations → throughput). Keep joint/actuator + obs/action
+      API backend-agnostic.
+- [ ] **Joint constraints** on the impulse solver: ball/socket (point-to-point), hinge/revolute
+      (axis + angular limits), fixed/weld; warm-start + clamp like contacts.
+- [ ] **Actuators**: per-joint PD servo (target angle/vel, torque limit) + direct torque — the
+      RL **action** surface.
+- [ ] **Articulation model + builder**: data description (bodies/joints/actuators) +
+      programmatic builder into a `PhysicsWorld`. (URDF/MJCF import later, likely downstream.)
+- [ ] **Humanoid preset** (capsule/box limbs, ball hips/shoulders, hinge knees/elbows/ankles).
+- [ ] **Tests**: passive ragdoll rests without exploding; PD "stand" holds a pose; determinism
+      preserved (bit-identical serial vs parallel).
+
+### Phase C — Terrain (overlaps B)
+- [ ] **Heightfield collider** + narrowphase (sphere/capsule/box vs heightfield cells).
+- [ ] **Procedural terrain generation** in `core::geometry` (slopes/stairs/gaps/noise) →
+      **both** heightfield (collision) and render `MeshData`.
+- [ ] **Render terrain** as a lit static mesh; visual test of a body settling on rough terrain.
+
+### Phase D — RL-ready env interface (depends on B+C + ECS command buffer)
+- [ ] **ECS command buffer + add/remove-component** (also the standing ECS next-step): deferred
+      structural changes to build/**reset** episodes deterministically.
+- [ ] **`Environment`** abstraction: headless `reset()`/`step(actions)` over a `PhysicsWorld`;
+      reward/termination are **downstream callbacks**, not baked in.
+- [ ] **`VecEnv`**: N independent envs stepped on the `ThreadPool` (builds on parallel worlds).
+- [ ] **Obs/action tensors**: per-env **SoA float buffers** — joint `q/qd`, root pose/vel,
+      contacts, terrain samples → `obs[N×obsDim]`; apply `act[N×actDim]` → actuators.
+- [ ] **Determinism review** end-to-end (same seed + actions ⇒ identical batched rollouts).
+
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 
 Build `engine::core` to a good state before touching graphics. See
@@ -143,8 +206,11 @@ details in the refactor investigation):
 
 - [ ] **Compute pipeline + compute-queue support.** Needed for ML workloads and some
       rendering; only graphics pipelines exist today.
-- [ ] **Parallel environment stepping / batching** for training throughput.
-- [ ] **Determinism review** for reproducible training.
+- [ ] **Parallel environment stepping / batching** for training throughput. → concretized by
+      Milestone 2 **Phase D** (`Environment`/`VecEnv` over parallel `PhysicsWorld`s + SoA
+      obs/action tensors). Foundation exists (parallel worlds, 7.7×).
+- [ ] **Determinism review** for reproducible training. → Milestone 2 **Phase D** (end-to-end
+      batched-rollout determinism); intra-world stepping is already bit-identical serial↔parallel.
 
 ## Physics
 
@@ -179,6 +245,13 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate
       (no replacement/inheritance); a `physics_ecs` bridge syncs world poses → Transform. ML
       path omits Transform entirely. (physics-plan Q2/Q3)
+- [ ] **Articulated bodies / joints + actuators** (Milestone 2, Phase B). Joint constraints
+      (ball/hinge/limits) + PD/torque actuators + articulation builder + humanoid preset. Big
+      open decision: maximal-coord constraints (reuse the impulse solver) vs reduced-coord
+      Featherstone/ABA (RL-grade, differentiable-friendly). Needs a design doc first. See
+      [2026-07-03-humanoid-rl-milestone-plan.md](../investigations/2026-07-03-humanoid-rl-milestone-plan.md).
+- [ ] **Terrain collision** (Milestone 2, Phase C). Heightfield collider + narrowphase; general
+      triangle-mesh collider possibly later.
 
 ## Infra / quality
 
@@ -199,7 +272,18 @@ Parked decisions we agreed to defer. Answer before the work they gate.
       multi-component iteration/cache, maps onto batched instancing + the 100k case; structural
       changes (rare in a sim) are its weak spot but acceptable. (ecs-plan §3)
 - [ ] **ML training model: many envs in-process vs separate processes.** Drives the
-      headless context design and how far determinism must reach.
+      headless context design and how far determinism must reach. (Lean: in-process vectorized
+      via `ThreadPool` first — Milestone 2 Phase D; multi-process/distributed is downstream/cloud.)
+- [~] **Articulation approach (Milestone 2): maximal-coordinate joint constraints vs
+      reduced-coordinate (Featherstone/ABA).** DECIDED (2026-07-03):
+      [2026-07-03-articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
+      **Constraints first** (Phase B — fast, reuses our solver, demonstrates the humanoid);
+      **reduced-coordinate deferred but integral once we train** — it minimizes observation size
+      (joint `q/qd` vs redundant body poses) → smaller policy inputs → higher throughput (a key
+      training bottleneck), plus drift-free stability + cleaner gradients. Added later as a second
+      `PhysicsWorld` backend; keep the joint/actuator + obs/action API backend-agnostic.
+- [ ] **Terrain representation: heightfield vs general triangle-mesh collider.** Heightfield
+      recommended (matches locomotion RL); tri-mesh possibly later.
 - [ ] **Offline renderer basis:** is `graphics_custom.cpp`'s offscreen helper set intended
       to grow into the offline/high-quality renderer?
 - [x] **Build-your-own RHI vs. adopt.** DECIDED (2026-07-02): build our own; no third-party

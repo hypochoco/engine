@@ -29,4 +29,14 @@ struct ExtractedScene {
 // items (single-pipeline scene for now). Deterministic order (mesh id).
 void extract(ecs::World& world, rhi::PipelineHandle pipeline, ExtractedScene& out);
 
+// Builds one render::RenderView per camera entity (<Transform, engine::Camera>): the view
+// matrix is the inverse of the camera's pose, the projection comes from the Camera (aspect =
+// width/height), and Background/SceneLighting resources are applied (see environment.h). The
+// items/instances spans point into `scene` (which must outlive the views); the caller fills in
+// each view's `materials` and `target` (e.g. the per-frame swapchain image). No camera entity
+// → no view.
+void extractViews(ecs::World& world, const ExtractedScene& scene,
+                  std::vector<render::RenderView>& outViews,
+                  uint32_t width, uint32_t height);
+
 } // namespace engine::scene
