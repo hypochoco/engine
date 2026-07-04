@@ -158,9 +158,21 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       Coulomb friction), dynamic-link colliders (sphere/box/capsule) vs static planes. Validated:
       sphere settles at its radius (no penetration, v→0), box holds on a 17° slope at μ=1 and slides
       at μ=0.05 (friction cone genuine). CRBA cross-checked via the KE identity.
-- [ ] **E2** humanoid + actuators: **Ball (3-DOF) joints**; q/qd *are* the state; ragdoll settles + PD-stand holds.
-- [ ] **E3** behind `VecEnv`; obs/action API unchanged; determinism (serial==parallel); benchmark vs maximal.
+- [x] **E2** humanoid + actuators: **Ball (3-DOF) joints**. DONE (2026-07-04): unified multi-DOF
+      rotation-joint model (relRot = restRel·locRot; per-axis S = [axis; −axis×anchorC]) generalizes
+      ABA/CRBA/Jacobian/integration from revolute to ball; provably reproduces revolute (E0/E1 stayed
+      green). Ball actuation (per-axis torque + spherical PD via quaternion error). `makeHumanoid`
+      (14 bodies/13 joints, floating pelvis) runs on `Backend::Reduced`: ragdoll settles on the
+      ground (bounded, at rest, no penetration); suspended humanoid holds its neutral pose via PD.
+      Tests: ball-pendulum energy 0.04%, ball actuation, humanoid ragdoll, humanoid PD-hold.
+- [x] **E3** behind `VecEnv`. DONE (2026-07-04): humanoid `Environment`/`VecEnv` run on
+      `Backend::Reduced` by flipping `EnvConfig.backend` only (API unchanged, actDim=21/obsDim=53);
+      finite random-torque rollout; single-env determinism + VecEnv parallel==serial bit-identical;
+      throughput benchmark reduced vs maximal (~2× slower/step — dense H⁻¹ contact solve dominates;
+      reduced needs finer substeps under strong torque). **Phase E COMPLETE.**
 - [ ] (later) differentiability / analytic gradients on top of the reduced model.
+- [ ] (later) contact-solve perf: sparse/factored `H` instead of dense O(ndof³) inverse; Ball q/qd
+      readout in `JointState` (multi-DOF observation).
 
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 

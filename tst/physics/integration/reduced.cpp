@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "engine/physics/dynamics/articulation.h"
 #include "engine/physics/world.h"
 #include "harness/harness.h"
 
@@ -332,4 +333,159 @@ TST_CASE(physics, integration, reduced_box_slides_when_slippery) {
     // Normal leans toward +x ⇒ steepest descent (down-slope) is +x and downward.
     TST_REQUIRE(finalP.x > settled.x + 0.1f);        // slid down-slope (+x)
     TST_REQUIRE(finalP.y < settled.y - 0.02f);       // and downhill (lower)
+}
+
+TST_CASE(physics, integration, reduced_ball_pendulum_energy) {
+    // E2: a Ball (3-DOF) jointed pendulum swings under gravity and conserves energy — exercises the
+    // multi-DOF ABA (3-column S, 3×3 D solve) + quaternion joint integration.
+    const Real m = 1.0f, r = 0.05f, L = 1.0f;
+    WorldDef wd; wd.gravity = Vec3(0, -kG, 0); wd.substeps = 16;
+    auto w = createPhysicsWorld(Backend::Reduced, wd);
+
+    BodyDef anchor; anchor.type = BodyType::Static;
+    const BodyHandle a = w->createBody(anchor);
+
+    const Vec3 com(0.6f * L, -0.8f * L, 0);          // built off-vertical ⇒ will swing
+    BodyDef bob; bob.type = BodyType::Dynamic; bob.mass = m;
+    bob.collider.type = ColliderDesc::Type::Sphere; bob.collider.sphere.radius = r;
+    bob.position = com;
+    const BodyHandle b = w->createBody(bob);
+
+    JointDef jd; jd.type = JointType::Ball; jd.a = a; jd.b = b;
+    jd.localAnchorA = Vec3(0); jd.localAnchorB = -com;
+    w->createJoint(jd);
+
+    const Real Ic = Real(0.4) * m * r * r;
+    auto energy = [&]() {
+        const Vec3 v = w->linearVelocities()[b.index], wv = w->angularVelocities()[b.index];
+        return Real(0.5) * m * glm::dot(v, v) + Real(0.5) * Ic * glm::dot(wv, wv) + m * kG * w->pose(b).position.y;
+    };
+    w->refreshState();
+    const Real E0 = energy();
+    Real maxDrift = 0, peMin = m * kG * com.y, peMax = peMin, minY = com.y;
+    const Real dt = Real(1) / Real(240);
+    for (int i = 0; i < 1200; ++i) { w->step(dt); maxDrift = std::max(maxDrift, std::fabs(energy() - E0));
+        const Real y = w->pose(b).position.y; minY = std::min(minY, y); peMin = std::min(peMin, m * kG * y); peMax = std::max(peMax, m * kG * y); }
+    const Real scale = std::max(Real(1), peMax - peMin);
+    std::printf("reduced_ball_pendulum: E0=%.4f maxDrift=%.4f scale=%.4f (%.2f%%) minY=%.3f\n",
+                E0, maxDrift, scale, 100.0f * maxDrift / scale, minY);
+    TST_REQUIRE(minY < -0.95f);                      // swung down through the bottom
+    TST_REQUIRE(maxDrift / scale < 0.02f);           // energy conserved
+}
+
+TST_CASE(physics, integration, reduced_ball_actuation) {
+    // E2: a torque commanded about the ball joint's z-axis rotates the child about z (zero gravity,
+    // fixed base). Validates ball actuation + the per-DOF generalized force mapping.
+    WorldDef wd; wd.gravity = Vec3(0); wd.substeps = 8;
+    auto w = createPhysicsWorld(Backend::Reduced, wd);
+
+    BodyDef anchor; anchor.type = BodyType::Static;
+    const BodyHandle a = w->createBody(anchor);
+    BodyDef bob; bob.type = BodyType::Dynamic; bob.mass = 1.0f;
+    bob.collider.type = ColliderDesc::Type::Sphere; bob.collider.sphere.radius = 0.1f;
+    bob.position = Vec3(1, 0, 0);
+    const BodyHandle b = w->createBody(bob);
+    JointDef jd; jd.type = JointType::Ball; jd.a = a; jd.b = b;
+    jd.localAnchorA = Vec3(0); jd.localAnchorB = Vec3(-1, 0, 0);
+    const JointHandle jh = w->createJoint(jd);
+
+    Actuator act; act.mode = ActuatorMode::Torque; act.ballTorque = Vec3(0, 0, 2.0f); act.maxTorque = 100.0f;
+    w->setJointActuator(jh, act);
+
+    const Real dt = Real(1) / Real(240);
+    for (int i = 0; i < 120; ++i) w->step(dt);       // 0.5 s
+    const Vec3 p = w->pose(b).position;
+    std::printf("reduced_ball_actuation: bob=(%.3f,%.3f,%.3f)\n", p.x, p.y, p.z);
+    // Torque about +z rotates (1,0,0) toward +y about the origin.
+    TST_REQUIRE(p.y > 0.1f);
+    TST_REQUIRE(p.x < 0.99f);
+    TST_REQUIRE(std::fabs(p.z) < 0.05f);             // stays in the xy plane
+}
+
+TST_CASE(physics, integration, reduced_humanoid_ragdoll_settles) {
+    // E2: the full 14-body / 13-joint humanoid (ball + revolute + fixed joints, floating pelvis
+    // base) built on the reduced backend, dropped onto the ground — it must crumple and settle
+    // (finite, bounded, comes to rest, feet on the ground), not explode.
+    WorldDef wd;
+    wd.gravity = Vec3(0, -kG, 0);
+    wd.substeps = 16;
+    wd.angularDamping = 1.5f;                         // ragdoll damping so it settles
+    auto w = createPhysicsWorld(Backend::Reduced, wd);
+
+    BodyDef ground;
+    ground.type = BodyType::Static;
+    ground.collider.type = ColliderDesc::Type::Plane;
+    ground.collider.plane = Plane{ Vec3(0, 1, 0), Real(0) };
+    ground.material.friction = 0.9f;
+    w->createBody(ground);
+
+    const physics::Articulation art = physics::buildArticulation(*w, physics::makeHumanoid(Vec3(0, 1.2f, 0)));
+    TST_REQUIRE(art.bodies.size() == 14);
+    TST_REQUIRE(art.joints.size() == 13);
+
+    const Real dt = Real(1) / Real(240);
+    Real maxAbs = 0;
+    for (int i = 0; i < 1200; ++i) {                 // 5 s
+        w->step(dt);
+        for (BodyHandle b : art.bodies) {
+            const Vec3 p = w->pose(b).position;
+            maxAbs = std::max({ maxAbs, std::fabs(p.x), std::fabs(p.y), std::fabs(p.z) });
+            TST_REQUIRE(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
+        }
+    }
+
+    // Settled: max body speed small; bounded; above the ground (no deep penetration).
+    Real maxSpeed = 0, minY = 1e9f, maxY = -1e9f;
+    const auto lv = w->linearVelocities();
+    for (BodyHandle b : art.bodies) {
+        maxSpeed = std::max(maxSpeed, glm::length(lv[b.index]));
+        minY = std::min(minY, w->pose(b).position.y);
+        maxY = std::max(maxY, w->pose(b).position.y);
+    }
+    std::printf("reduced_humanoid_ragdoll: maxAbs=%.3f maxSpeed=%.4f minY=%.3f maxY=%.3f\n",
+                maxAbs, maxSpeed, minY, maxY);
+    TST_REQUIRE(maxAbs < 3.0f);                       // never flew apart
+    TST_REQUIRE(maxSpeed < 0.3f);                     // came to rest
+    TST_REQUIRE(minY > -0.2f);                        // no deep penetration
+    TST_REQUIRE(maxY < 1.0f);                         // collapsed (pelvis started at 1.2)
+}
+
+TST_CASE(physics, integration, reduced_humanoid_pd_holds) {
+    // E2: a suspended humanoid (pelvis pinned = fixed base) with PD actuators on every joint holds
+    // its neutral pose against gravity instead of collapsing limp — validates PD actuation for
+    // revolute + ball joints in the reduced backend (mirrors the maximal-backend pd_stand test).
+    WorldDef wd;
+    wd.gravity = Vec3(0, -kG, 0);
+    wd.substeps = 16;
+    auto w = createPhysicsWorld(Backend::Reduced, wd);
+
+    physics::ArticulationDef def = physics::makeHumanoid(Vec3(0, 1.5f, 0));
+    def.bodies[0].type = BodyType::Static;            // pin the pelvis (suspend the humanoid)
+    const physics::Articulation art = physics::buildArticulation(*w, def);
+
+    Actuator pd;
+    pd.mode = ActuatorMode::PDTarget;
+    pd.kp = 400.0f; pd.kd = 40.0f; pd.maxTorque = 400.0f;
+    pd.target = 0.0f; pd.ballTarget = Quat(1, 0, 0, 0);   // neutral for revolute + ball
+    for (JointHandle j : art.joints) w->setJointActuator(j, pd);
+
+    const Real dt = Real(1) / Real(240);
+    for (int i = 0; i < 720; ++i) w->step(dt);        // 3 s to settle into the held pose
+
+    // Revolute knees (joints 9,10) and elbows (5,6) should hold near their neutral (q≈0) targets.
+    Real maxRevAngle = 0;
+    for (int k : { 5, 6, 9, 10, 11, 12 })
+        maxRevAngle = std::max(maxRevAngle, std::fabs(w->jointState(art.joints[k]).q));
+
+    // Feet (last two bodies) should stay near their neutral height, not droop to straight-down.
+    const Real footY = w->pose(art.bodies[12]).position.y;
+    Real maxSpeed = 0; const auto lv = w->linearVelocities();
+    for (BodyHandle b : art.bodies) maxSpeed = std::max(maxSpeed, glm::length(lv[b.index]));
+
+    std::printf("reduced_humanoid_pd_holds: maxRevAngle=%.3f footY=%.3f maxSpeed=%.4f\n",
+                maxRevAngle, footY, maxSpeed);
+    TST_REQUIRE(std::isfinite(footY));
+    TST_REQUIRE(maxRevAngle < 0.4f);                  // knees/elbows/ankles held near neutral
+    TST_REQUIRE(footY > 0.2f);                        // legs held roughly straight (not collapsed)
+    TST_REQUIRE(maxSpeed < 0.5f);                     // settled into the held pose
 }

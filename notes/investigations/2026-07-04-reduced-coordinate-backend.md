@@ -158,9 +158,47 @@ the articulation base; the tree root is the parentless link that is Dynamic or h
 v→0); a box **holds** on a 17° slope at μ=1 and **slides** down-slope at μ=0.05 (friction cone is
 doing real work, not numerical sticking).
 
-## E2 plan (next) — humanoid + Ball joints
-The humanoid needs **Ball (3-DOF) joints** in the reduced backend (currently only revolute/fixed).
-A ball joint's motion subspace is 3 angular DOFs (`S` = 3 columns); ABA/CRBA/Jacobian all generalize
-to multi-DOF joints (D becomes 3×3, solved per joint). Orientation coordinate: integrate the joint's
-relative quaternion from its 3 angular rates. Then `makeHumanoid` can build in the reduced backend;
-targets: ragdoll settles on the ground, PD-stand holds a pose — mirroring the maximal-backend tests.
+## E2 results (2026-07-04) — DONE (Ball joints + humanoid)
+
+**Unified multi-DOF rotation joint.** Fixed/Revolute/Ball share one model: `relRot = restRel·locRot`
+(child-in-parent = rest × joint-local rotation), with a motion-subspace column per DOF axis `a`:
+`S_a = [axis_a; −axis_a × anchorC]` (child frame). This **provably reproduces the revolute case**
+(the old joint-frame decomposition equals this formula — verified algebraically and by the E0/E1
+tests staying green after the rewrite). Ball = 3 child-frame axes; the joint velocity is the
+child-frame relative angular rate, and `locRot` integrates via `locRot · exp(Σ q̇ₐ·axisₐ · dt)`.
+
+ABA/CRBA/Jacobian generalized to `n_i`-DOF joints: `S` is `6×n_i`, `D = SᵀU` is `n_i×n_i` (solved
+per joint), `q̈` an `n_i`-vector. Actuation: revolute torque/PD (scalar); **ball** per-axis torque or
+**spherical PD** (`τ = kp·rotvec(target ⊗ locRot⁻¹) − kd·q̇`).
+
+**Validation** (`reduced.cpp`): ball-pendulum energy drift **0.04%**; a z-torque on a ball joint
+rotates the child in-plane about +z; the full **`makeHumanoid`** (14 bodies/13 joints — ball waist/
+shoulders/hips, revolute elbows/knees/ankles, fixed chest/neck, floating pelvis base) **ragdoll
+settles** on the ground (bounded, at rest, no penetration, collapsed from 1.2 m); a **suspended**
+humanoid (pinned pelvis) **holds its neutral pose** via PD on all joints (revolute angles ≤0.001 rad,
+legs held straight, fully settled).
+
+## E3 results (2026-07-04) — DONE (behind VecEnv) → Phase E COMPLETE
+
+The humanoid `Environment`/`VecEnv` run on `Backend::Reduced` by flipping `EnvConfig.backend` only —
+**no env-layer changes** (same `actDim=21`, `obsDim=53`, obs/action API). Validated
+(`tst/physics_env/integration/reduced_env.cpp`): random-torque rollout stays finite/bounded;
+single-env determinism bit-identical; `VecEnv` **parallel == serial** bit-identical (VecEnv-safe:
+per-env single-threaded world, no shared state).
+
+**Throughput** (`physics_env.reduced_vs_maximal_throughput`, 13 workers, substeps=16): maximal
+≈4.3k→32.6k env-steps/s (N=1→1024); reduced ≈2.0k→15.3k. At equal substeps the reduced backend is
+~2× slower per step — the **dense `H⁻¹` contact solve (O(ndof³) per substep)** dominates; the obvious
+optimization is a sparse/factored solve or an ABA-based operational-space inertia instead of a full
+inverse.
+
+**Stability tradeoff (documented):** under strong random torque the reduced ABA needs a **finer
+substep** than the maximal PGS (which is more dissipative) — e.g. substeps 8 diverged at ±25 torque
+but 32 was stable. Real RL torques are bounded; and this is the expected cost of a clean,
+low-dissipation integrator.
+
+**Phase E complete**: a reduced-coordinate Featherstone backend (ABA + CRBA + generalized-coordinate
+contacts, fixed/floating base, revolute/ball/fixed joints, torque/PD actuation) behind the same
+`PhysicsWorld`/`Environment`/`VecEnv` API, running the humanoid deterministically in parallel batches.
+Remaining future work: contact-solve perf (sparse `H`), Ball q/qd readout in `JointState` (multi-DOF
+observation), and differentiability on the reduced model.

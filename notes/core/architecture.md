@@ -155,14 +155,15 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   (`createPhysicsWorld`) dispatches on `Backend`; `createFeatherstoneWorld` is declared in the
   internal `backends/backends_internal.h`. Angular-first 6-vectors, full 6×6 spatial
   transforms/inertias (link frame at COM), gravity as an explicit per-link force, semi-implicit
-  Euler + quaternion base integration. **Scope E0-E1**: revolute/fixed joints, fixed + floating
-  base, actuators (torque/PD), and **contacts** — CRBA joint-space inertia `H` + generalized
+  Euler + quaternion base integration. **Scope E0-E2**: **Fixed/Revolute/Ball** rotation joints
+  (unified `relRot = restRel·locRot`, per-axis motion subspace), fixed + floating base, actuators
+  (torque/PD, spherical PD for ball), and **contacts** — CRBA joint-space inertia `H` + generalized
   contact Jacobians + a sequential-impulse **PGS in generalized coordinates** (normal + Coulomb
-  friction + Baumgarte) against static planes. **Not yet**: Ball 3-DOF joints (E2). Validated
-  (`tst/physics/integration/reduced.cpp`): pendulum period 0.5%, double-pendulum energy 0.54%,
-  floating free-chain momentum 0.1%/0.24%, sphere rests on a plane (no penetration), box
-  holds/slides on a slope by friction. `physics_env` can select it via `EnvConfig.backend` with no
-  env-layer changes. Roadmap:
+  friction + Baumgarte) against static planes. Validated (`tst/physics/integration/reduced.cpp`):
+  pendulum period 0.5%, double-pendulum + ball-pendulum energy ≤0.5%, floating free-chain momentum
+  0.1%/0.24%, sphere rests / box holds+slides by friction, and the full **`makeHumanoid`** (14
+  bodies/13 joints, floating pelvis) ragdoll-settles + holds a PD pose. `physics_env` can select it
+  via `EnvConfig.backend` with no env-layer changes (E3 wires it into `VecEnv`). Roadmap:
   [reduced-coordinate-backend.md](../investigations/2026-07-04-reduced-coordinate-backend.md).
 - **Joints** (Milestone 2, Phase B1, 2026-07-03): maximal-coordinate **bilateral constraints**
   solved in the same velocity loop as contacts, but **persistent** (created once via

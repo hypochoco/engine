@@ -2,18 +2,19 @@
 //  featherstone_world.cpp
 //  engine::physics / backends / reduced
 //
-//  Reduced-coordinate PhysicsWorld backend (Phase E). Represents an articulated body by its
-//  generalized coordinates q (joint angles + an optional floating 6-DOF base) and steps it with
-//  the Articulated-Body Algorithm (ABA), O(n) over the limb tree. Behind the same PhysicsWorld
-//  interface as the maximal (Realtime) backend. See notes/investigations/
+//  Reduced-coordinate PhysicsWorld backend (Phase E). Articulated body in generalized coordinates
+//  (joint DOFs + optional floating 6-DOF base), stepped with the Articulated-Body Algorithm (ABA),
+//  O(n). Same PhysicsWorld interface as the maximal (Realtime) backend. See notes/investigations/
 //  2026-07-04-reduced-coordinate-backend.md.
 //
-//  Scope now (E0): Revolute (1-DOF) / Fixed (0-DOF) joints, fixed OR floating base, gravity +
-//  joint-torque/PD actuators, no contacts. Ball (3-DOF) is E2; contacts are E1.
+//  Scope (E0-E2): Fixed (0-DOF) / Revolute (1-DOF) / Ball (3-DOF) rotation joints, fixed OR
+//  floating base, gravity + actuators (torque/PD), and contacts vs static planes (CRBA H +
+//  generalized-coordinate PGS). Rotation joints share one model: relRot = restRel · locRot, with a
+//  motion-subspace column per DOF axis a: S_a = [axis_a; −axis_a × anchorC] (child frame). This
+//  reproduces the revolute case exactly and generalizes to the ball's 3 axes.
 //
-//  Spatial algebra: angular-first 6-vectors [w; v], full 6x6 matrices for transforms/inertias
-//  (n is small; explicit matrices are far less bug-prone than block formulas). Link frame at COM.
-//  Gravity enters as an explicit per-link force (works uniformly for fixed + floating bases).
+//  Spatial algebra: angular-first 6-vectors [w; v], full 6x6 matrices (n small). Link frame at COM.
+//  Gravity is an explicit per-link force (uniform for fixed + floating bases).
 //
 
 #include <array>
@@ -31,9 +32,7 @@ namespace {
 // ------------------------------------------------------------------ spatial algebra (6D) -------
 struct Vec6 { Real d[6]; };
 
-inline Vec6 v6(const Vec3& ang, const Vec3& lin) {
-    return { ang.x, ang.y, ang.z, lin.x, lin.y, lin.z };
-}
+inline Vec6 v6(const Vec3& ang, const Vec3& lin) { return { ang.x, ang.y, ang.z, lin.x, lin.y, lin.z }; }
 inline Vec3 v6ang(const Vec6& v) { return Vec3(v.d[0], v.d[1], v.d[2]); }
 inline Vec3 v6lin(const Vec6& v) { return Vec3(v.d[3], v.d[4], v.d[5]); }
 
@@ -42,94 +41,46 @@ struct Mat6 {
     static Mat6 zero() { Mat6 r{}; for (auto& row : r.m) for (Real& x : row) x = 0; return r; }
 };
 
-// glm mat3 is column-major: math element (i,j) = M[j][i].
-inline Real at3(const Mat3& M, int i, int j) { return M[j][i]; }
-
+inline Real at3(const Mat3& M, int i, int j) { return M[j][i]; }   // glm col-major → math (i,j)
 inline void setBlock(Mat6& M, int r0, int c0, const Mat3& B, bool neg = false) {
-    for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < 3; ++j)
-            M.m[r0 + i][c0 + j] = neg ? -at3(B, i, j) : at3(B, i, j);
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) M.m[r0 + i][c0 + j] = neg ? -at3(B, i, j) : at3(B, i, j);
 }
+inline Mat3 skew(const Vec3& v) { return Mat3(0, v.z, -v.y,  -v.z, 0, v.x,  v.y, -v.x, 0); }
 
-inline Mat3 skew(const Vec3& v) {
-    return Mat3(0, v.z, -v.y,  -v.z, 0, v.x,  v.y, -v.x, 0);   // glm columns of math [[0,-z,y],...]
-}
-
-// Plücker MOTION transform from rotation E (parent→child vectors) and translation r (child origin
-// in parent frame): X = [[E,0],[-E*skew(r), E]].
-inline Mat6 plux(const Mat3& E, const Vec3& r) {
+inline Mat6 plux(const Mat3& E, const Vec3& r) {   // motion transform [[E,0],[-E skew(r),E]]
     Mat6 X = Mat6::zero();
-    setBlock(X, 0, 0, E);
-    setBlock(X, 3, 3, E);
-    setBlock(X, 3, 0, E * skew(r), /*neg=*/true);
+    setBlock(X, 0, 0, E); setBlock(X, 3, 3, E); setBlock(X, 3, 0, E * skew(r), /*neg=*/true);
     return X;
 }
-
 inline Mat6 spatialInertia(Real mass, const Mat3& Ic) {   // COM at frame origin
     Mat6 I = Mat6::zero();
-    setBlock(I, 0, 0, Ic);
-    I.m[3][3] = mass; I.m[4][4] = mass; I.m[5][5] = mass;
+    setBlock(I, 0, 0, Ic); I.m[3][3] = mass; I.m[4][4] = mass; I.m[5][5] = mass;
     return I;
 }
-
 inline Mat6 crm(const Vec6& v) {   // motion cross [[skew(w),0],[skew(vl),skew(w)]]
     const Vec3 w = v6ang(v), vl = v6lin(v);
-    Mat6 M = Mat6::zero();
-    setBlock(M, 0, 0, skew(w));
-    setBlock(M, 3, 3, skew(w));
-    setBlock(M, 3, 0, skew(vl));
+    Mat6 M = Mat6::zero(); setBlock(M, 0, 0, skew(w)); setBlock(M, 3, 3, skew(w)); setBlock(M, 3, 0, skew(vl));
     return M;
 }
-
 inline Vec6 mul(const Mat6& A, const Vec6& x) {
-    Vec6 r{};
-    for (int i = 0; i < 6; ++i) { Real s = 0; for (int j = 0; j < 6; ++j) s += A.m[i][j] * x.d[j]; r.d[i] = s; }
-    return r;
+    Vec6 r{}; for (int i = 0; i < 6; ++i) { Real s = 0; for (int j = 0; j < 6; ++j) s += A.m[i][j] * x.d[j]; r.d[i] = s; } return r;
 }
 inline Mat6 mul(const Mat6& A, const Mat6& B) {
     Mat6 r = Mat6::zero();
-    for (int i = 0; i < 6; ++i)
-        for (int k = 0; k < 6; ++k) {
-            const Real a = A.m[i][k];
-            if (a != 0) for (int j = 0; j < 6; ++j) r.m[i][j] += a * B.m[k][j];
-        }
+    for (int i = 0; i < 6; ++i) for (int k = 0; k < 6; ++k) { const Real a = A.m[i][k]; if (a != 0) for (int j = 0; j < 6; ++j) r.m[i][j] += a * B.m[k][j]; }
     return r;
 }
-inline Mat6 transpose(const Mat6& A) {
-    Mat6 r = Mat6::zero();
-    for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = A.m[j][i];
-    return r;
-}
-inline Mat6 addM(const Mat6& A, const Mat6& B) {
-    Mat6 r = Mat6::zero();
-    for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = A.m[i][j] + B.m[i][j];
-    return r;
-}
-inline Mat6 subM(const Mat6& A, const Mat6& B) {
-    Mat6 r = Mat6::zero();
-    for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = A.m[i][j] - B.m[i][j];
-    return r;
-}
-inline Vec6 addV(const Vec6& a, const Vec6& b) {
-    Vec6 r{}; for (int i = 0; i < 6; ++i) r.d[i] = a.d[i] + b.d[i]; return r;
-}
-inline Vec6 subV(const Vec6& a, const Vec6& b) {
-    Vec6 r{}; for (int i = 0; i < 6; ++i) r.d[i] = a.d[i] - b.d[i]; return r;
-}
-inline Vec6 scale(const Vec6& a, Real s) {
-    Vec6 r{}; for (int i = 0; i < 6; ++i) r.d[i] = a.d[i] * s; return r;
-}
-inline Real dot(const Vec6& a, const Vec6& b) {
-    Real s = 0; for (int i = 0; i < 6; ++i) s += a.d[i] * b.d[i]; return s;
-}
-inline Mat6 outerOverD(const Vec6& u, Real invD) {
-    Mat6 r = Mat6::zero();
-    for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = u.d[i] * u.d[j] * invD;
-    return r;
+inline Mat6 transpose(const Mat6& A) { Mat6 r = Mat6::zero(); for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = A.m[j][i]; return r; }
+inline Mat6 addM(const Mat6& A, const Mat6& B) { Mat6 r; for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = A.m[i][j] + B.m[i][j]; return r; }
+inline Mat6 subM(const Mat6& A, const Mat6& B) { Mat6 r; for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = A.m[i][j] - B.m[i][j]; return r; }
+inline Vec6 addV(const Vec6& a, const Vec6& b) { Vec6 r{}; for (int i = 0; i < 6; ++i) r.d[i] = a.d[i] + b.d[i]; return r; }
+inline Vec6 scale(const Vec6& a, Real s) { Vec6 r{}; for (int i = 0; i < 6; ++i) r.d[i] = a.d[i] * s; return r; }
+inline Real dot(const Vec6& a, const Vec6& b) { Real s = 0; for (int i = 0; i < 6; ++i) s += a.d[i] * b.d[i]; return s; }
+inline Mat6 outerScaled(const Vec6& a, const Vec6& b, Real s) {   // (a bᵀ)·s
+    Mat6 r; for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) r.m[i][j] = a.d[i] * b.d[j] * s; return r;
 }
 
-// Invert a dense n×n matrix (row-major) via Gauss-Jordan with partial pivoting. Returns false if
-// singular. Used to form H⁻¹ for the generalized-coordinate contact solve (n is small).
+// Invert a dense n×n matrix (row-major) via Gauss-Jordan; false if singular. Small n.
 bool invertDense(const std::vector<Real>& A, int n, std::vector<Real>& inv) {
     std::vector<Real> M(A);
     inv.assign(static_cast<size_t>(n) * n, Real(0));
@@ -138,45 +89,33 @@ bool invertDense(const std::vector<Real>& A, int n, std::vector<Real>& inv) {
         int piv = col;
         for (int r = col + 1; r < n; ++r) if (std::fabs(M[r * n + col]) > std::fabs(M[piv * n + col])) piv = r;
         if (std::fabs(M[piv * n + col]) < Real(1e-12)) return false;
-        if (piv != col)
-            for (int j = 0; j < n; ++j) { std::swap(M[col * n + j], M[piv * n + j]); std::swap(inv[col * n + j], inv[piv * n + j]); }
+        if (piv != col) for (int j = 0; j < n; ++j) { std::swap(M[col * n + j], M[piv * n + j]); std::swap(inv[col * n + j], inv[piv * n + j]); }
         const Real d = M[col * n + col];
         for (int j = 0; j < n; ++j) { M[col * n + j] /= d; inv[col * n + j] /= d; }
-        for (int r = 0; r < n; ++r) {
-            if (r == col) continue;
-            const Real f = M[r * n + col];
-            if (f == 0) continue;
-            for (int j = 0; j < n; ++j) { M[r * n + j] -= f * M[col * n + j]; inv[r * n + j] -= f * inv[col * n + j]; }
-        }
+        for (int r = 0; r < n; ++r) { if (r == col) continue; const Real f = M[r * n + col]; if (f == 0) continue;
+            for (int j = 0; j < n; ++j) { M[r * n + j] -= f * M[col * n + j]; inv[r * n + j] -= f * inv[col * n + j]; } }
     }
     return true;
 }
 
-// Solve A x = b for a 6x6 A (Gaussian elimination, partial pivot). Used for the floating base.
-Vec6 solve6(const Mat6& A, const Vec6& b) {
+Vec6 solve6(const Mat6& A, const Vec6& b) {   // floating-base 6x6 solve
     Real M[6][7];
     for (int i = 0; i < 6; ++i) { for (int j = 0; j < 6; ++j) M[i][j] = A.m[i][j]; M[i][6] = b.d[i]; }
     for (int col = 0; col < 6; ++col) {
         int piv = col;
         for (int r = col + 1; r < 6; ++r) if (std::fabs(M[r][col]) > std::fabs(M[piv][col])) piv = r;
         if (piv != col) for (int j = 0; j < 7; ++j) std::swap(M[col][j], M[piv][j]);
-        const Real d = M[col][col];
-        if (std::fabs(d) < Real(1e-12)) continue;
-        for (int r = 0; r < 6; ++r) {
-            if (r == col) continue;
-            const Real f = M[r][col] / d;
-            for (int j = col; j < 7; ++j) M[r][j] -= f * M[col][j];
-        }
+        const Real d = M[col][col]; if (std::fabs(d) < Real(1e-12)) continue;
+        for (int r = 0; r < 6; ++r) { if (r == col) continue; const Real f = M[r][col] / d; for (int j = col; j < 7; ++j) M[r][j] -= f * M[col][j]; }
     }
-    Vec6 x{};
-    for (int i = 0; i < 6; ++i) x.d[i] = (std::fabs(M[i][i]) > Real(1e-12)) ? M[i][6] / M[i][i] : Real(0);
+    Vec6 x{}; for (int i = 0; i < 6; ++i) x.d[i] = (std::fabs(M[i][i]) > Real(1e-12)) ? M[i][6] / M[i][i] : Real(0);
     return x;
 }
 
-// ------------------------------------------------------------------ forward inertia (COM) ------
+// ------------------------------------------------------------------ small helpers --------------
 Mat3 colliderInertia(const ColliderDesc& c, Real mass) {
     switch (c.type) {
-        case ColliderDesc::Type::Sphere:  return solidSphereInertia(mass, c.sphere.radius);
+        case ColliderDesc::Type::Sphere: return solidSphereInertia(mass, c.sphere.radius);
         case ColliderDesc::Type::Box: {
             const Vec3 h2 = c.box.halfExtents * c.box.halfExtents;
             return Mat3(Real(1) / Real(3) * mass * (h2.y + h2.z), 0, 0,
@@ -192,31 +131,28 @@ Mat3 colliderInertia(const ColliderDesc& c, Real mass) {
         default: { const Real i = Real(0.4) * mass; return Mat3(i, 0, 0, 0, i, 0, 0, 0, i); }
     }
 }
-
 Mat3 frameFromZ(Vec3 z) {
     z = glm::normalize(z);
     const Vec3 t = (std::fabs(z.x) < Real(0.9)) ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
     const Vec3 x = glm::normalize(glm::cross(t, z));
-    const Vec3 y = glm::cross(z, x);
-    return Mat3(x, y, z);
+    return Mat3(x, glm::cross(z, x), z);
 }
-Mat3 rotZ(Real a) {
-    const Real c = std::cos(a), s = std::sin(a);
-    return Mat3(c, s, 0,  -s, c, 0,  0, 0, 1);
-}
+void basisPerp(const Vec3& n, Vec3& t1, Vec3& t2) { const Mat3 F = frameFromZ(n); t1 = Vec3(F[0]); t2 = Vec3(F[1]); }
 
-// Two unit tangents spanning the plane perpendicular to unit `n` (for friction).
-void basisPerp(const Vec3& n, Vec3& t1, Vec3& t2) {
-    const Mat3 F = frameFromZ(n);
-    t1 = Vec3(F[0]); t2 = Vec3(F[1]);
+Quat quatFromRotvec(const Vec3& v) {
+    const Real a = glm::length(v);
+    return (a < Real(1e-9)) ? Quat(1, 0, 0, 0) : glm::angleAxis(a, v / a);
 }
-
+Vec3 quatToRotvec(const Quat& q0) {
+    Quat q = q0; if (q.w < 0) q = Quat(-q.w, -q.x, -q.y, -q.z);   // shortest arc
+    const Vec3 xyz(q.x, q.y, q.z);
+    const Real s = glm::length(xyz);
+    if (s < Real(1e-9)) return Vec3(0);
+    const Real ang = Real(2) * std::atan2(s, q.w);
+    return xyz * (ang / s);
+}
 Quat integrateQuat(const Quat& q, const Vec3& worldAngVel, Real h) {
-    const Vec3 wdt = worldAngVel * h;
-    const Real ang = glm::length(wdt);
-    if (ang < Real(1e-9)) return glm::normalize(q);
-    const Quat dq = glm::angleAxis(ang, wdt / ang);
-    return glm::normalize(dq * q);
+    return glm::normalize(quatFromRotvec(worldAngVel * h) * q);
 }
 
 // ------------------------------------------------------------------ model ----------------------
@@ -225,7 +161,7 @@ struct Link {
     Mat3       Ibody{Real(0)};
     Mat6       I = Mat6::zero();
     BodyType   type = BodyType::Dynamic;
-    ColliderDesc    collider{};       // for E1 contact detection
+    ColliderDesc    collider{};
     PhysicsMaterial material{};
     int        parent = -1;
     int        jointIndex = -1;
@@ -234,18 +170,22 @@ struct Link {
     Vec6       v{};
 };
 
+// Unified rotation joint (Fixed 0-DOF, Revolute 1-DOF, Ball 3-DOF). relRot = restRel · locRot.
 struct Joint {
     JointType type = JointType::Revolute;
     int   parent = -1, child = -1;
     int   dof = 1;
-    Mat3  Rj{Real(1)};
-    Vec3  anchorP{0};
-    Mat3  R_c_in_j{Real(1)};
-    Vec3  r_jc{0};
-    Vec6  S{};
+    Vec3  axis[3]{ Vec3(0, 0, 1), Vec3(0), Vec3(0) };   // child-frame DOF axes
+    Vec6  Scol[3]{};                                     // motion subspace columns (child frame)
+    Vec3  anchorP{0}, anchorC{0};
+    Quat  restRel{1, 0, 0, 0};                           // rest child-in-parent (R_cp0)
+    Quat  locRot{1, 0, 0, 0};                            // joint local rotation (child frame)
+    Real  q[3]{0, 0, 0};                                 // per-DOF coordinate (revolute[0]=angle)
+    Real  qd[3]{0, 0, 0};                                // per-DOF rate (child-frame along axis)
     Actuator actuator{};
-    Real  q = 0, qd = 0;
-    int   qIndex = -1;                // column in the generalized-velocity vector (revolute)
+    int   qIndex = -1;
+
+    Quat relRot() const { return glm::normalize(restRel * locRot); }
 };
 
 // ------------------------------------------------------------------ world ----------------------
@@ -265,14 +205,11 @@ public:
         l.world.position = l.pos0; l.world.rotation = l.quat0;
         const uint32_t idx = static_cast<uint32_t>(links_.size());
         links_.push_back(l);
-        poses_.push_back(l.world);
-        linVel_.push_back(Vec3(0)); angVel_.push_back(Vec3(0));
+        poses_.push_back(l.world); linVel_.push_back(Vec3(0)); angVel_.push_back(Vec3(0));
         inited_ = false;
         return BodyHandle{ idx, 1 };
     }
-
     void destroyBody(BodyHandle) override {}
-
     void setGravity(Vec3 g) override { gravity_ = g; }
 
     JointHandle createJoint(const JointDef& d) override {
@@ -282,21 +219,23 @@ public:
         j.parent = static_cast<int>(d.a.index);
         j.child  = static_cast<int>(d.b.index);
         j.actuator = d.actuator;
-        j.dof = (d.type == JointType::Revolute) ? 1 : 0;   // Ball (3) is E2
+        j.dof = (d.type == JointType::Ball) ? 3 : (d.type == JointType::Revolute ? 1 : 0);
+        j.anchorP = d.localAnchorA; j.anchorC = d.localAnchorB;
 
-        const Link& P = links_[j.parent];
-        const Link& C = links_[j.child];
-        const Mat3 Rwp = glm::mat3_cast(P.quat0);
-        const Mat3 Rwc = glm::mat3_cast(C.quat0);
+        const Mat3 Rwp = glm::mat3_cast(links_[j.parent].quat0);
+        const Mat3 Rwc = glm::mat3_cast(links_[j.child].quat0);
         const Mat3 R_cp0 = glm::transpose(Rwp) * Rwc;
+        j.restRel = glm::normalize(glm::quat_cast(R_cp0));
 
-        j.anchorP = d.localAnchorA;
-        j.Rj = frameFromZ(d.localAxisA);
-        j.R_c_in_j = glm::transpose(j.Rj) * R_cp0;
-        j.r_jc = -(j.R_c_in_j * d.localAnchorB);
-
-        const Mat6 Xcj = plux(glm::transpose(j.R_c_in_j), j.r_jc);
-        j.S = mul(Xcj, v6(Vec3(0, 0, 1), Vec3(0)));
+        if (j.dof == 1) {
+            const Mat3 Rj = frameFromZ(d.localAxisA);
+            const Mat3 R_c_in_j = glm::transpose(Rj) * R_cp0;
+            j.axis[0] = glm::transpose(R_c_in_j) * Vec3(0, 0, 1);       // hinge axis (child frame)
+        } else if (j.dof == 3) {
+            j.axis[0] = Vec3(1, 0, 0); j.axis[1] = Vec3(0, 1, 0); j.axis[2] = Vec3(0, 0, 1);
+        }
+        for (int a = 0; a < j.dof; ++a)                                 // S_a = [axis; −axis×anchorC]
+            j.Scol[a] = v6(j.axis[a], -glm::cross(j.axis[a], j.anchorC));
 
         const uint32_t idx = static_cast<uint32_t>(joints_.size());
         joints_.push_back(j);
@@ -306,47 +245,30 @@ public:
         inited_ = false;
         return JointHandle{ idx, 1 };
     }
-
     void destroyJoint(JointHandle) override {}
 
-    void setJointActuator(JointHandle h, const Actuator& a) override {
-        if (h.index < joints_.size()) joints_[h.index].actuator = a;
-    }
-    void setJointTarget(JointHandle h, Real t) override {
-        if (h.index < joints_.size()) joints_[h.index].actuator.target = t;
-    }
-    void setJointTorque(JointHandle h, Real t) override {
-        if (h.index < joints_.size()) joints_[h.index].actuator.torque = t;
-    }
-    void setJointBallTorque(JointHandle h, Vec3 t) override {
-        if (h.index < joints_.size()) joints_[h.index].actuator.ballTorque = t;   // Ball is E2
-    }
-    void setJointTargets(std::span<const Real> t) override {
-        for (size_t i = 0; i < t.size() && i < joints_.size(); ++i) joints_[i].actuator.target = t[i];
-    }
-    void setJointTorques(std::span<const Real> t) override {
-        for (size_t i = 0; i < t.size() && i < joints_.size(); ++i) joints_[i].actuator.torque = t[i];
-    }
+    void setJointActuator(JointHandle h, const Actuator& a) override { if (h.index < joints_.size()) joints_[h.index].actuator = a; }
+    void setJointTarget(JointHandle h, Real t) override { if (h.index < joints_.size()) joints_[h.index].actuator.target = t; }
+    void setJointTorque(JointHandle h, Real t) override { if (h.index < joints_.size()) joints_[h.index].actuator.torque = t; }
+    void setJointBallTorque(JointHandle h, Vec3 t) override { if (h.index < joints_.size()) joints_[h.index].actuator.ballTorque = t; }
+    void setJointTargets(std::span<const Real> t) override { for (size_t i = 0; i < t.size() && i < joints_.size(); ++i) joints_[i].actuator.target = t[i]; }
+    void setJointTorques(std::span<const Real> t) override { for (size_t i = 0; i < t.size() && i < joints_.size(); ++i) joints_[i].actuator.torque = t[i]; }
 
-    JointState jointState(JointHandle h) const override {
-        return h.index < jointStates_.size() ? jointStates_[h.index] : JointState{};
-    }
+    JointState jointState(JointHandle h) const override { return h.index < jointStates_.size() ? jointStates_[h.index] : JointState{}; }
     std::span<const JointState> jointStates() const override { return jointStates_; }
 
-    void setBodyState(BodyHandle h, const Vec3& p, const Quat& q, const Vec3& lv,
-                      const Vec3& av) override {
+    void setBodyState(BodyHandle h, const Vec3& p, const Quat& q, const Vec3& lv, const Vec3& av) override {
         ensureInit();
         if (h.index >= links_.size()) return;
         if (static_cast<int>(h.index) == rootIndex_) {
             basePos_ = p; baseQuat_ = glm::normalize(q);
             const Mat3 Rt = glm::transpose(glm::mat3_cast(baseQuat_));
-            baseTwist_ = v6(Rt * av, Rt * lv);   // world twist → base frame
+            baseTwist_ = v6(Rt * av, Rt * lv);
         }
-        // Non-root links are defined by their joint q; a general pose-set isn't meaningful here.
     }
     void clearState() override {
         ensureInit();
-        for (Joint& j : joints_) { j.q = 0; j.qd = 0; }
+        for (Joint& j : joints_) { j.locRot = Quat(1, 0, 0, 0); for (int a = 0; a < 3; ++a) j.q[a] = j.qd[a] = 0; }
         baseTwist_ = Vec6{};
         if (rootIndex_ >= 0) { basePos_ = links_[rootIndex_].pos0; baseQuat_ = links_[rootIndex_].quat0; }
         refreshState();
@@ -357,393 +279,264 @@ public:
         ensureInit();
         const Real h = dt / static_cast<Real>(substeps_);
         for (int s = 0; s < substeps_; ++s) {
-            updatePoses();                          // world poses reflect current q/base (contacts)
-            computeAccelerations();                 // fills qddot_ + baseAccel_ (no integration)
-            // integrate velocities (semi-implicit).
-            for (size_t i = 0; i < joints_.size(); ++i) {
-                if (joints_[i].dof != 1) continue;
-                joints_[i].qd += qddot_[i] * h;
-                if (angularDamping_ > 0) joints_[i].qd *= std::max(Real(0), Real(1) - angularDamping_ * h);
+            updatePoses();
+            computeAccelerations();
+            for (Joint& j : joints_) {                          // integrate velocities
+                for (int a = 0; a < j.dof; ++a) {
+                    j.qd[a] += qddot_[j.qIndex + a] * h;
+                    if (angularDamping_ > 0) j.qd[a] *= std::max(Real(0), Real(1) - angularDamping_ * h);
+                }
             }
             if (floating_) baseTwist_ = addV(baseTwist_, scale(baseAccel_, h));
-            solveContacts(h);                        // E1: correct velocities for contacts
-            // integrate positions.
-            for (Joint& j : joints_) if (j.dof == 1) j.q += j.qd * h;
+            solveContacts(h);
+            for (Joint& j : joints_) {                          // integrate positions
+                if (j.dof == 0) continue;
+                Vec3 wc(0);
+                for (int a = 0; a < j.dof; ++a) { wc += j.qd[a] * j.axis[a]; j.q[a] += j.qd[a] * h; }
+                j.locRot = glm::normalize(j.locRot * quatFromRotvec(wc * h));
+            }
             if (floating_) integrateBasePose(h);
         }
-        updatePoses();
-        computeVelocities();
-        writeJointStates();
+        updatePoses(); computeVelocities(); writeJointStates();
     }
 
     std::span<const engine::Transform> poses() const override { return poses_; }
     std::span<const Vec3> linearVelocities() const override { return linVel_; }
     std::span<const Vec3> angularVelocities() const override { return angVel_; }
-    engine::Transform pose(BodyHandle h) const override {
-        return h.index < poses_.size() ? poses_[h.index] : engine::Transform{};
-    }
+    engine::Transform pose(BodyHandle h) const override { return h.index < poses_.size() ? poses_[h.index] : engine::Transform{}; }
     std::span<const ContactEvent> contacts() const override { return contacts_; }
 
 private:
     void ensureInit() {
         if (inited_) return;
-        // A parentless Static link with no children is environment geometry (e.g. the ground),
-        // not the articulation base. The tree root is the parentless link that is Dynamic or has
-        // children.
         std::vector<bool> hasChild(links_.size(), false);
         for (const Joint& j : joints_) if (j.parent >= 0) hasChild[j.parent] = true;
         rootIndex_ = -1;
         for (size_t i = 0; i < links_.size(); ++i)
             if (links_[i].parent < 0 && (links_[i].type == BodyType::Dynamic || hasChild[i])) { rootIndex_ = static_cast<int>(i); break; }
-        if (rootIndex_ >= 0) {
-            floating_ = (links_[rootIndex_].type == BodyType::Dynamic);
-            basePos_  = links_[rootIndex_].pos0;
-            baseQuat_ = links_[rootIndex_].quat0;
-        }
-        // Generalized-coordinate layout: base 6 DOF (if floating) then one column per revolute.
+        if (rootIndex_ >= 0) { floating_ = (links_[rootIndex_].type == BodyType::Dynamic); basePos_ = links_[rootIndex_].pos0; baseQuat_ = links_[rootIndex_].quat0; }
         baseDof_ = floating_ ? 6 : 0;
         int q = baseDof_;
-        for (Joint& j : joints_) if (j.dof == 1) j.qIndex = q++;
+        for (Joint& j : joints_) { j.qIndex = q; q += j.dof; }
         ndof_ = q;
         inited_ = true;
     }
-
     bool isFloatingRoot(size_t i) const { return static_cast<int>(i) == rootIndex_ && floating_; }
 
     void jointRel(const Joint& j, Mat3& R_cp, Vec3& p_cp) const {
-        const Mat3 M = j.Rj * rotZ(j.dof == 1 ? j.q : Real(0));
-        R_cp = M * j.R_c_in_j;
-        p_cp = j.anchorP + M * j.r_jc;
+        R_cp = glm::mat3_cast(j.relRot());
+        p_cp = j.anchorP - R_cp * j.anchorC;
     }
-    Mat6 Xup(const Joint& j) const {
-        Mat3 R_cp; Vec3 p_cp; jointRel(j, R_cp, p_cp);
-        return plux(glm::transpose(R_cp), p_cp);
-    }
+    Mat6 Xup(const Joint& j) const { Mat3 R_cp; Vec3 p_cp; jointRel(j, R_cp, p_cp); return plux(glm::transpose(R_cp), p_cp); }
 
-    // Gravity as an external spatial force in a link's own frame (force at COM, no torque).
-    Vec6 gravityForce(Real mass, const Mat3& Rworld) const {
-        return v6(Vec3(0), glm::transpose(Rworld) * (mass * gravity_));
+    Vec6 gravityForce(Real mass, const Mat3& Rworld) const { return v6(Vec3(0), glm::transpose(Rworld) * (mass * gravity_)); }
+
+    // Generalized actuator forces for a joint's DOFs.
+    void jointTorques(const Joint& j, Real tau[3]) const {
+        for (int a = 0; a < 3; ++a) tau[a] = 0;
+        const Actuator& ac = j.actuator;
+        if (j.dof == 1) {
+            if (ac.mode == ActuatorMode::Torque) tau[0] = ac.torque;
+            else if (ac.mode == ActuatorMode::PDTarget) tau[0] = ac.kp * (ac.target - j.q[0]) + ac.kd * (ac.targetVel - j.qd[0]);
+        } else if (j.dof == 3) {
+            if (ac.mode == ActuatorMode::Torque) { for (int a = 0; a < 3; ++a) tau[a] = ac.ballTorque[a]; }
+            else if (ac.mode == ActuatorMode::PDTarget) {
+                const Vec3 e = quatToRotvec(glm::normalize(ac.ballTarget * glm::conjugate(j.locRot)));  // child-frame error
+                for (int a = 0; a < 3; ++a) tau[a] = ac.kp * e[a] - ac.kd * j.qd[a];
+            }
+        }
+        if (ac.maxTorque > 0) for (int a = 0; a < j.dof; ++a) tau[a] = std::max(-ac.maxTorque, std::min(ac.maxTorque, tau[a]));
     }
 
     void computeAccelerations() {
-        const size_t n = links_.size();
-        qddot_.assign(joints_.size(), Real(0));
+        const size_t n = links_.size(), nj = joints_.size();
+        qddot_.assign(static_cast<size_t>(ndof_), Real(0));
         std::vector<Mat6> Xup_(n), IA(n);
         std::vector<Vec6> v(n), c(n), pA(n), a(n);
         std::vector<Mat3> Rw(n);
-        std::vector<Vec6> U(joints_.size());
-        std::vector<Real> D(joints_.size()), u(joints_.size());
+        std::vector<std::array<Vec6, 3>> Uc(nj);
+        std::vector<std::array<Real, 9>> Dinv(nj);
+        std::vector<std::array<Real, 3>> uv(nj);
 
-        // Pass 1: base → tips (world rotations, velocities, bias forces incl. gravity).
-        for (size_t i = 0; i < n; ++i) {
+        for (size_t i = 0; i < n; ++i) {                         // Pass 1: base → tips
             const Link& L = links_[i];
-            if (L.parent < 0) {
-                Rw[i] = glm::mat3_cast(L.world.rotation);
-                v[i]  = isFloatingRoot(i) ? baseTwist_ : Vec6{};
-                c[i]  = Vec6{};
-            } else {
+            if (L.parent < 0) { Rw[i] = glm::mat3_cast(L.world.rotation); v[i] = isFloatingRoot(i) ? baseTwist_ : Vec6{}; c[i] = Vec6{}; }
+            else {
                 const Joint& j = joints_[L.jointIndex];
                 Mat3 R_cp; Vec3 p_cp; jointRel(j, R_cp, p_cp);
                 Xup_[i] = plux(glm::transpose(R_cp), p_cp);
-                Rw[i]   = Rw[L.parent] * R_cp;
-                const Vec6 vJ = (j.dof == 1) ? scale(j.S, j.qd) : Vec6{};
+                Rw[i] = Rw[L.parent] * R_cp;
+                Vec6 vJ{}; for (int b = 0; b < j.dof; ++b) vJ = addV(vJ, scale(j.Scol[b], j.qd[b]));
                 v[i] = addV(mul(Xup_[i], v[L.parent]), vJ);
-                c[i] = (j.dof == 1) ? mul(crm(v[i]), vJ) : Vec6{};
+                c[i] = (j.dof > 0) ? mul(crm(v[i]), vJ) : Vec6{};
             }
             IA[i] = L.I;
-            // pA = crf(v)·I·v − f_grav ,  crf(v) = −crm(v)ᵀ
-            const Vec6 bias = scale(mul(transpose(crm(v[i])), mul(L.I, v[i])), Real(-1));
-            pA[i] = subV(bias, gravityForce(L.mass, Rw[i]));
+            pA[i] = addV(scale(mul(transpose(crm(v[i])), mul(L.I, v[i])), Real(-1)),
+                         scale(gravityForce(L.mass, Rw[i]), Real(-1)));   // crf(v)Iv − f_grav
         }
 
-        // Pass 2: tips → base (articulated inertia + bias).
-        for (size_t ri = 0; ri < n; ++ri) {
+        for (size_t ri = 0; ri < n; ++ri) {                      // Pass 2: tips → base
             const size_t i = n - 1 - ri;
             const Link& L = links_[i];
             if (L.parent < 0) continue;
             const Joint& j = joints_[L.jointIndex];
-            const int ji = L.jointIndex;
-            Mat6 Ia = IA[i];
-            Vec6 pa = pA[i];
-            if (j.dof == 1) {
-                U[ji] = mul(IA[i], j.S);
-                D[ji] = dot(j.S, U[ji]);
-                u[ji] = jointTorque(j) - dot(j.S, pA[i]);
-                const Real invD = (std::fabs(D[ji]) > kEps) ? Real(1) / D[ji] : Real(0);
-                Ia = subM(IA[i], outerOverD(U[ji], invD));
-                pa = addV(addV(pA[i], mul(Ia, c[i])), scale(U[ji], u[ji] * invD));
+            const int ji = L.jointIndex, dof = j.dof;
+            Mat6 Ia = IA[i]; Vec6 pa = pA[i];
+            if (dof > 0) {
+                Real tau[3]; jointTorques(j, tau);
+                std::vector<Real> D(static_cast<size_t>(dof) * dof, 0);
+                for (int aa = 0; aa < dof; ++aa) { Uc[ji][aa] = mul(IA[i], j.Scol[aa]); uv[ji][aa] = tau[aa] - dot(j.Scol[aa], pA[i]); }
+                for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) D[aa * dof + bb] = dot(j.Scol[aa], Uc[ji][bb]);
+                std::vector<Real> Di; invertDense(D, dof, Di);
+                for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) Dinv[ji][aa * 3 + bb] = Di[aa * dof + bb];
+                for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) Ia = subM(Ia, outerScaled(Uc[ji][aa], Uc[ji][bb], Dinv[ji][aa * 3 + bb]));
+                pa = addV(pA[i], mul(Ia, c[i]));
+                for (int aa = 0; aa < dof; ++aa) { Real du = 0; for (int bb = 0; bb < dof; ++bb) du += Dinv[ji][aa * 3 + bb] * uv[ji][bb]; pa = addV(pa, scale(Uc[ji][aa], du)); }
             }
             const Mat6 XT = transpose(Xup_[i]);
             IA[L.parent] = addM(IA[L.parent], mul(mul(XT, Ia), Xup_[i]));
             pA[L.parent] = addV(pA[L.parent], mul(XT, pa));
         }
 
-        // Pass 3: base → tips (accelerations); integrate rates.
-        for (size_t i = 0; i < n; ++i) {
+        for (size_t i = 0; i < n; ++i) {                         // Pass 3: base → tips
             const Link& L = links_[i];
-            if (L.parent < 0) {
-                if (isFloatingRoot(i)) { a[i] = solve6(IA[i], scale(pA[i], Real(-1))); baseAccel_ = a[i]; }
-                else a[i] = Vec6{};
-                continue;
-            }
+            if (L.parent < 0) { if (isFloatingRoot(i)) { a[i] = solve6(IA[i], scale(pA[i], Real(-1))); baseAccel_ = a[i]; } else a[i] = Vec6{}; continue; }
             const Joint& j = joints_[L.jointIndex];
-            const int ji = L.jointIndex;
-            const Vec6 ap = addV(mul(Xup_[i], a[L.parent]), c[i]);
-            if (j.dof == 1) {
-                const Real invD = (std::fabs(D[ji]) > kEps) ? Real(1) / D[ji] : Real(0);
-                const Real qdd = (u[ji] - dot(U[ji], ap)) * invD;
-                qddot_[ji] = qdd;
-                a[i] = addV(ap, scale(j.S, qdd));
-            } else {
-                a[i] = ap;
+            const int ji = L.jointIndex, dof = j.dof;
+            Vec6 ap = addV(mul(Xup_[i], a[L.parent]), c[i]);
+            a[i] = ap;
+            for (int aa = 0; aa < dof; ++aa) {
+                Real qdd = 0; for (int bb = 0; bb < dof; ++bb) qdd += Dinv[ji][aa * 3 + bb] * (uv[ji][bb] - dot(Uc[ji][bb], ap));
+                qddot_[j.qIndex + aa] = qdd;
+                a[i] = addV(a[i], scale(j.Scol[aa], qdd));
             }
         }
     }
 
-    // Per-link ^linkX_base transforms (base frame → link frame) + Xup array, for Jacobians/CRBA.
-    void forwardTransforms(std::vector<Mat6>& Xup, std::vector<Mat6>& Xbase) const {
-        const size_t n = links_.size();
-        Xup.assign(n, Mat6::zero());
-        Xbase.assign(n, Mat6::zero());
-        for (size_t i = 0; i < n; ++i) {
-            const Link& L = links_[i];
-            if (L.parent < 0) { Xbase[i] = identity6(); }
-            else { Xup[i] = this->Xup(joints_[L.jointIndex]); Xbase[i] = mul(Xup[i], Xbase[L.parent]); }
-        }
-    }
-
-    // Composite-Rigid-Body Algorithm: dense joint-space inertia matrix H (row-major, ndof_×ndof_).
+    // CRBA → dense joint-space inertia H (row-major ndof×ndof).
     std::vector<Real> buildMassMatrix() const {
         const size_t n = links_.size();
-        std::vector<Mat6> Xup(n, Mat6::zero()), Ic(n);
-        for (size_t i = 0; i < n; ++i) {
-            Ic[i] = links_[i].I;
-            if (links_[i].parent >= 0) Xup[i] = this->Xup(joints_[links_[i].jointIndex]);
-        }
-        for (size_t ri = 0; ri < n; ++ri) {              // composite inertia, tips → base
-            const size_t i = n - 1 - ri;
-            if (links_[i].parent >= 0) {
-                const Mat6 XT = transpose(Xup[i]);
-                Ic[links_[i].parent] = addM(Ic[links_[i].parent], mul(mul(XT, Ic[i]), Xup[i]));
-            }
-        }
+        std::vector<Mat6> Xup_(n, Mat6::zero()), Ic(n);
+        for (size_t i = 0; i < n; ++i) { Ic[i] = links_[i].I; if (links_[i].parent >= 0) Xup_[i] = Xup(joints_[links_[i].jointIndex]); }
+        for (size_t ri = 0; ri < n; ++ri) { const size_t i = n - 1 - ri; if (links_[i].parent >= 0) { const Mat6 XT = transpose(Xup_[i]); Ic[links_[i].parent] = addM(Ic[links_[i].parent], mul(mul(XT, Ic[i]), Xup_[i])); } }
         const int nd = ndof_;
         std::vector<Real> H(static_cast<size_t>(nd) * nd, Real(0));
-        if (floating_ && rootIndex_ >= 0)               // base-base block = whole-tree composite
-            for (int a = 0; a < 6; ++a) for (int b = 0; b < 6; ++b) H[a * nd + b] = Ic[rootIndex_].m[a][b];
-
-        for (size_t i = 0; i < n; ++i) {                 // per-joint columns + cross terms up the tree
+        if (floating_ && rootIndex_ >= 0) for (int aa = 0; aa < 6; ++aa) for (int bb = 0; bb < 6; ++bb) H[aa * nd + bb] = Ic[rootIndex_].m[aa][bb];
+        for (size_t i = 0; i < n; ++i) {
             const Link& L = links_[i];
-            if (L.parent < 0 || joints_[L.jointIndex].dof != 1) continue;
-            const int qi = joints_[L.jointIndex].qIndex;
-            const Vec6 S = joints_[L.jointIndex].S;
-            Vec6 F = mul(Ic[i], S);
-            H[qi * nd + qi] = dot(S, F);
-            int k = static_cast<int>(i);
-            while (links_[k].parent >= 0) {
-                F = mul(transpose(Xup[k]), F);           // move F to parent frame
-                const int p = links_[k].parent;
-                if (links_[p].parent < 0) {              // p is the base
-                    if (floating_) for (int c = 0; c < 6; ++c) { H[qi * nd + c] = F.d[c]; H[c * nd + qi] = F.d[c]; }
-                } else {
-                    const Joint& jp = joints_[links_[p].jointIndex];
-                    if (jp.dof == 1) { const Real h = dot(F, jp.S); H[qi * nd + jp.qIndex] = h; H[jp.qIndex * nd + qi] = h; }
+            if (L.parent < 0 || joints_[L.jointIndex].dof == 0) continue;
+            const Joint& j = joints_[L.jointIndex];
+            for (int aa = 0; aa < j.dof; ++aa) {
+                const int qia = j.qIndex + aa;
+                Vec6 F = mul(Ic[i], j.Scol[aa]);
+                for (int bb = 0; bb < j.dof; ++bb) H[qia * nd + (j.qIndex + bb)] = dot(j.Scol[bb], F);
+                int k = static_cast<int>(i);
+                while (links_[k].parent >= 0) {
+                    F = mul(transpose(Xup_[k]), F);
+                    const int p = links_[k].parent;
+                    if (links_[p].parent < 0) { if (floating_) for (int cc = 0; cc < 6; ++cc) { H[qia * nd + cc] = F.d[cc]; H[cc * nd + qia] = F.d[cc]; } }
+                    else { const Joint& jp = joints_[links_[p].jointIndex]; for (int cc = 0; cc < jp.dof; ++cc) { const Real h = dot(F, jp.Scol[cc]); H[qia * nd + (jp.qIndex + cc)] = h; H[(jp.qIndex + cc) * nd + qia] = h; } }
+                    k = p;
                 }
-                k = p;
             }
         }
         return H;
     }
 
-    static Mat6 identity6() { Mat6 I = Mat6::zero(); for (int i = 0; i < 6; ++i) I.m[i][i] = 1; return I; }
-
-    // Kinetic energy from link spatial velocities (½ Σ vᵀ I v) — used to validate H (½ q̇ᵀ H q̇).
-    Real spatialKineticEnergy() {
-        computeVelocities();
-        Real ke = 0;
-        for (const Link& L : links_) ke += Real(0.5) * dot(L.v, mul(L.I, L.v));
-        return ke;
-    }
-    Real generalizedVelocity(int dof) const {
-        if (dof < baseDof_) return baseTwist_.d[dof];
-        for (const Joint& j : joints_) if (j.qIndex == dof) return j.qd;
-        return 0;
-    }
-    // E1: velocity-level contact coupling in generalized coordinates.
+    // ---- contacts (E1) ----
     struct Contact { int link; Vec3 point; Vec3 normal; Real pen; Real friction; };
-
-    // Dynamic-link colliders vs static planes (the ground). Sphere/box/capsule supported.
     std::vector<Contact> detectContacts() const {
         std::vector<Contact> out;
         struct WPlane { Vec3 n; Real off; Real fric; };
         std::vector<WPlane> planes;
-        for (const Link& s : links_) {
+        for (const Link& s : links_)
             if (s.type == BodyType::Static && s.collider.type == ColliderDesc::Type::Plane) {
-                const Mat3 R = glm::mat3_cast(s.world.rotation);
-                const Vec3 n = R * s.collider.plane.normal;
-                planes.push_back({ n, s.collider.plane.offset + glm::dot(n, s.world.position), s.material.friction });
+                const Mat3 R = glm::mat3_cast(s.world.rotation); const Vec3 nn = R * s.collider.plane.normal;
+                planes.push_back({ nn, s.collider.plane.offset + glm::dot(nn, s.world.position), s.material.friction });
             }
-        }
         if (planes.empty()) return out;
-
-        auto sphereVsPlanes = [&](int link, const Vec3& c, Real radius, Real mat) {
-            for (const WPlane& p : planes) {
-                const Real dist = glm::dot(p.n, c) - p.off;
-                if (dist < radius)
-                    out.push_back({ link, c - p.n * dist, p.n, radius - dist,
-                                    std::sqrt(std::max(Real(0), mat * p.fric)) });
-            }
+        auto sphereVs = [&](int link, const Vec3& c, Real radius, Real mat) {
+            for (const WPlane& p : planes) { const Real dist = glm::dot(p.n, c) - p.off; if (dist < radius) out.push_back({ link, c - p.n * dist, p.n, radius - dist, std::sqrt(std::max(Real(0), mat * p.fric)) }); }
         };
         for (size_t i = 0; i < links_.size(); ++i) {
-            const Link& L = links_[i];
-            if (L.type != BodyType::Dynamic) continue;
-            const Vec3 c = L.world.position;
-            const Mat3 R = glm::mat3_cast(L.world.rotation);
-            const int li = static_cast<int>(i);
+            const Link& L = links_[i]; if (L.type != BodyType::Dynamic) continue;
+            const Vec3 c = L.world.position; const Mat3 R = glm::mat3_cast(L.world.rotation); const int li = static_cast<int>(i);
             switch (L.collider.type) {
-                case ColliderDesc::Type::Sphere:
-                    sphereVsPlanes(li, c, L.collider.sphere.radius, L.material.friction); break;
-                case ColliderDesc::Type::Capsule: {
-                    const Real hh = L.collider.capsule.halfHeight, r = L.collider.capsule.radius;
-                    sphereVsPlanes(li, c + R * Vec3(0, hh, 0), r, L.material.friction);
-                    sphereVsPlanes(li, c - R * Vec3(0, hh, 0), r, L.material.friction);
-                    break;
-                }
-                case ColliderDesc::Type::Box: {
-                    const Vec3 hE = L.collider.box.halfExtents;
+                case ColliderDesc::Type::Sphere: sphereVs(li, c, L.collider.sphere.radius, L.material.friction); break;
+                case ColliderDesc::Type::Capsule: { const Real hh = L.collider.capsule.halfHeight, r = L.collider.capsule.radius;
+                    sphereVs(li, c + R * Vec3(0, hh, 0), r, L.material.friction); sphereVs(li, c - R * Vec3(0, hh, 0), r, L.material.friction); break; }
+                case ColliderDesc::Type::Box: { const Vec3 hE = L.collider.box.halfExtents;
                     for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2) {
                         const Vec3 corner = c + R * Vec3(sx * hE.x, sy * hE.y, sz * hE.z);
-                        for (const WPlane& p : planes) {
-                            const Real dist = glm::dot(p.n, corner) - p.off;
-                            if (dist < 0) out.push_back({ li, corner, p.n, -dist,
-                                                          std::sqrt(std::max(Real(0), L.material.friction * p.fric)) });
-                        }
-                    }
-                    break;
-                }
-                default: sphereVsPlanes(li, c, Real(0.1), L.material.friction); break;
+                        for (const WPlane& p : planes) { const Real dist = glm::dot(p.n, corner) - p.off; if (dist < 0) out.push_back({ li, corner, p.n, -dist, std::sqrt(std::max(Real(0), L.material.friction * p.fric)) }); } }
+                    break; }
+                default: sphereVs(li, c, Real(0.1), L.material.friction); break;
             }
         }
         return out;
     }
 
-    // Jacobian row (1×ndof): maps generalized velocity → velocity of world `point` (on `link`)
-    // projected onto `dir`. Ancestor revolute joints + the floating base contribute.
     std::vector<Real> jacRow(int link, const Vec3& point, const Vec3& dir) const {
         std::vector<Real> row(static_cast<size_t>(ndof_), Real(0));
         int k = link;
         while (links_[k].parent >= 0) {
             const Joint& jk = joints_[links_[k].jointIndex];
-            if (jk.dof == 1) {
-                const int p = jk.parent;
-                const Mat3 Rp = glm::mat3_cast(links_[p].world.rotation);
-                const Vec3 axisW = Rp * (jk.Rj * Vec3(0, 0, 1));
-                const Vec3 anchorW = links_[p].world.position + Rp * jk.anchorP;
-                row[jk.qIndex] += glm::dot(dir, glm::cross(axisW, point - anchorW));
-            }
+            const Mat3 Rk = glm::mat3_cast(links_[k].world.rotation);
+            const Vec3 anchorW = links_[k].world.position + Rk * jk.anchorC;
+            for (int a = 0; a < jk.dof; ++a) { const Vec3 axisW = Rk * jk.axis[a]; row[jk.qIndex + a] += glm::dot(dir, glm::cross(axisW, point - anchorW)); }
             k = links_[k].parent;
         }
         if (floating_ && rootIndex_ >= 0) {
-            const Mat3 Rwb = glm::mat3_cast(links_[rootIndex_].world.rotation);
-            const Vec3 comBase = links_[rootIndex_].world.position;
-            for (int a = 0; a < 3; ++a) {
-                const Vec3 na(Rwb[a]);                                        // world axis a
-                row[a]     = glm::dot(dir, glm::cross(na, point - comBase));  // base angular
-                row[3 + a] = glm::dot(dir, na);                              // base linear
-            }
+            const Mat3 Rwb = glm::mat3_cast(links_[rootIndex_].world.rotation); const Vec3 comBase = links_[rootIndex_].world.position;
+            for (int a = 0; a < 3; ++a) { const Vec3 na(Rwb[a]); row[a] = glm::dot(dir, glm::cross(na, point - comBase)); row[3 + a] = glm::dot(dir, na); }
         }
         return row;
     }
-
     static std::vector<Real> matVecDense(const std::vector<Real>& M, int n, const std::vector<Real>& x) {
         std::vector<Real> r(static_cast<size_t>(n), Real(0));
-        for (int i = 0; i < n; ++i) { Real s = 0; for (int j = 0; j < n; ++j) s += M[i * n + j] * x[j]; r[i] = s; }
-        return r;
+        for (int i = 0; i < n; ++i) { Real s = 0; for (int j = 0; j < n; ++j) s += M[i * n + j] * x[j]; r[i] = s; } return r;
     }
-    static Real dotN(const std::vector<Real>& a, const std::vector<Real>& b) {
-        Real s = 0; for (size_t i = 0; i < a.size(); ++i) s += a[i] * b[i]; return s;
-    }
+    static Real dotN(const std::vector<Real>& a, const std::vector<Real>& b) { Real s = 0; for (size_t i = 0; i < a.size(); ++i) s += a[i] * b[i]; return s; }
 
     void solveContacts(Real h) {
         const std::vector<Contact> contacts = detectContacts();
         if (contacts.empty()) return;
         const int nd = ndof_;
-
         std::vector<Real> Hinv;
         if (!invertDense(buildMassMatrix(), nd, Hinv)) return;
 
-        std::vector<Real> qd(static_cast<size_t>(nd), Real(0));          // generalized velocity
+        std::vector<Real> qd(static_cast<size_t>(nd), Real(0));
         for (int d = 0; d < baseDof_; ++d) qd[d] = baseTwist_.d[d];
-        for (const Joint& j : joints_) if (j.dof == 1) qd[j.qIndex] = j.qd;
+        for (const Joint& j : joints_) for (int a = 0; a < j.dof; ++a) qd[j.qIndex + a] = j.qd[a];
 
         struct Row { std::vector<Real> Jn, Jt1, Jt2, JnHi, Jt1Hi, Jt2Hi; Real An, At1, At2, biasN, fric; Real ln = 0, l1 = 0, l2 = 0; };
-        std::vector<Row> rows;
-        rows.reserve(contacts.size());
+        std::vector<Row> rows; rows.reserve(contacts.size());
         constexpr Real kBeta = Real(0.2), kSlop = Real(0.001);
         for (const Contact& c : contacts) {
             Vec3 t1, t2; basisPerp(c.normal, t1, t2);
             Row r;
-            r.Jn = jacRow(c.link, c.point, c.normal);
-            r.Jt1 = jacRow(c.link, c.point, t1);
-            r.Jt2 = jacRow(c.link, c.point, t2);
-            r.JnHi = matVecDense(Hinv, nd, r.Jn);
-            r.Jt1Hi = matVecDense(Hinv, nd, r.Jt1);
-            r.Jt2Hi = matVecDense(Hinv, nd, r.Jt2);
-            r.An = dotN(r.Jn, r.JnHi);
-            r.At1 = dotN(r.Jt1, r.Jt1Hi);
-            r.At2 = dotN(r.Jt2, r.Jt2Hi);
-            r.biasN = -(kBeta / h) * std::max(Real(0), c.pen - kSlop);   // push out penetration
-            r.fric = c.friction;
+            r.Jn = jacRow(c.link, c.point, c.normal); r.Jt1 = jacRow(c.link, c.point, t1); r.Jt2 = jacRow(c.link, c.point, t2);
+            r.JnHi = matVecDense(Hinv, nd, r.Jn); r.Jt1Hi = matVecDense(Hinv, nd, r.Jt1); r.Jt2Hi = matVecDense(Hinv, nd, r.Jt2);
+            r.An = dotN(r.Jn, r.JnHi); r.At1 = dotN(r.Jt1, r.Jt1Hi); r.At2 = dotN(r.Jt2, r.Jt2Hi);
+            r.biasN = -(kBeta / h) * std::max(Real(0), c.pen - kSlop); r.fric = c.friction;
             rows.push_back(std::move(r));
         }
-
-        constexpr int kIters = 20;                                       // sequential-impulse PGS
-        for (int it = 0; it < kIters; ++it) {
+        for (int it = 0; it < 20; ++it) {
             for (Row& r : rows) {
-                if (r.An > kEps) {                                       // normal (λ ≥ 0)
-                    const Real vn = dotN(r.Jn, qd);
-                    Real dLam = -(vn + r.biasN) / r.An;
-                    const Real newLam = std::max(Real(0), r.ln + dLam);
-                    dLam = newLam - r.ln; r.ln = newLam;
-                    for (int i = 0; i < nd; ++i) qd[i] += r.JnHi[i] * dLam;
-                }
-                const Real muN = r.fric * r.ln;                          // Coulomb friction cone
-                if (r.At1 > kEps) {
-                    Real dl = -dotN(r.Jt1, qd) / r.At1;
-                    const Real nl = std::max(-muN, std::min(muN, r.l1 + dl));
-                    dl = nl - r.l1; r.l1 = nl;
-                    for (int i = 0; i < nd; ++i) qd[i] += r.Jt1Hi[i] * dl;
-                }
-                if (r.At2 > kEps) {
-                    Real dl = -dotN(r.Jt2, qd) / r.At2;
-                    const Real nl = std::max(-muN, std::min(muN, r.l2 + dl));
-                    dl = nl - r.l2; r.l2 = nl;
-                    for (int i = 0; i < nd; ++i) qd[i] += r.Jt2Hi[i] * dl;
-                }
+                if (r.An > kEps) { const Real vn = dotN(r.Jn, qd); Real dl = -(vn + r.biasN) / r.An; const Real nl = std::max(Real(0), r.ln + dl); dl = nl - r.ln; r.ln = nl; for (int i = 0; i < nd; ++i) qd[i] += r.JnHi[i] * dl; }
+                const Real muN = r.fric * r.ln;
+                if (r.At1 > kEps) { Real dl = -dotN(r.Jt1, qd) / r.At1; const Real nl = std::max(-muN, std::min(muN, r.l1 + dl)); dl = nl - r.l1; r.l1 = nl; for (int i = 0; i < nd; ++i) qd[i] += r.Jt1Hi[i] * dl; }
+                if (r.At2 > kEps) { Real dl = -dotN(r.Jt2, qd) / r.At2; const Real nl = std::max(-muN, std::min(muN, r.l2 + dl)); dl = nl - r.l2; r.l2 = nl; for (int i = 0; i < nd; ++i) qd[i] += r.Jt2Hi[i] * dl; }
             }
         }
-
-        for (int d = 0; d < baseDof_; ++d) baseTwist_.d[d] = qd[d];      // write corrected velocities
-        for (Joint& j : joints_) if (j.dof == 1) j.qd = qd[j.qIndex];
+        for (int d = 0; d < baseDof_; ++d) baseTwist_.d[d] = qd[d];
+        for (Joint& j : joints_) for (int a = 0; a < j.dof; ++a) j.qd[a] = qd[j.qIndex + a];
     }
 
     void integrateBasePose(Real h) {
         const Mat3 Rw = glm::mat3_cast(baseQuat_);
-        const Vec3 wWorld = Rw * v6ang(baseTwist_);
-        const Vec3 vWorld = Rw * v6lin(baseTwist_);
-        basePos_ += vWorld * h;
-        baseQuat_ = integrateQuat(baseQuat_, wWorld, h);
-    }
-
-    Real jointTorque(const Joint& j) const {
-        Real tau = 0;
-        if (j.actuator.mode == ActuatorMode::Torque) {
-            tau = j.actuator.torque;
-        } else if (j.actuator.mode == ActuatorMode::PDTarget) {
-            tau = j.actuator.kp * (j.actuator.target - j.q) + j.actuator.kd * (j.actuator.targetVel - j.qd);
-        }
-        if (j.actuator.maxTorque > 0) tau = std::max(-j.actuator.maxTorque, std::min(j.actuator.maxTorque, tau));
-        return tau;
+        basePos_ += (Rw * v6lin(baseTwist_)) * h;
+        baseQuat_ = integrateQuat(baseQuat_, Rw * v6ang(baseTwist_), h);
     }
 
     void updatePoses() {
@@ -751,37 +544,22 @@ private:
             Link& L = links_[i];
             if (isFloatingRoot(i)) { L.world.position = basePos_; L.world.rotation = baseQuat_; }
             else if (L.parent < 0) { L.world.position = L.pos0; L.world.rotation = L.quat0; }
-            else {
-                const Joint& j = joints_[L.jointIndex];
-                Mat3 R_cp; Vec3 p_cp; jointRel(j, R_cp, p_cp);
-                const Link& P = links_[L.parent];
-                L.world.rotation = glm::normalize(P.world.rotation * glm::normalize(glm::quat_cast(R_cp)));
-                L.world.position = P.world.position + glm::mat3_cast(P.world.rotation) * p_cp;
-            }
+            else { const Joint& j = joints_[L.jointIndex]; Mat3 R_cp; Vec3 p_cp; jointRel(j, R_cp, p_cp); const Link& P = links_[L.parent];
+                L.world.rotation = glm::normalize(P.world.rotation * j.relRot()); L.world.position = P.world.position + glm::mat3_cast(P.world.rotation) * p_cp; }
             poses_[i] = L.world;
         }
     }
-
     void computeVelocities() {
         for (size_t i = 0; i < links_.size(); ++i) {
             Link& L = links_[i];
-            if (L.parent < 0) { L.v = isFloatingRoot(i) ? baseTwist_ : Vec6{}; }
-            else {
-                const Joint& j = joints_[L.jointIndex];
-                const Vec6 vJ = (j.dof == 1) ? scale(j.S, j.qd) : Vec6{};
-                L.v = addV(mul(Xup(j), links_[L.parent].v), vJ);
-            }
+            if (L.parent < 0) L.v = isFloatingRoot(i) ? baseTwist_ : Vec6{};
+            else { const Joint& j = joints_[L.jointIndex]; Vec6 vJ{}; for (int a = 0; a < j.dof; ++a) vJ = addV(vJ, scale(j.Scol[a], j.qd[a])); L.v = addV(mul(Xup(j), links_[L.parent].v), vJ); }
             const Mat3 Rw = glm::mat3_cast(L.world.rotation);
-            angVel_[i] = Rw * v6ang(L.v);
-            linVel_[i] = Rw * v6lin(L.v);
+            angVel_[i] = Rw * v6ang(L.v); linVel_[i] = Rw * v6lin(L.v);
         }
     }
-
     void writeJointStates() {
-        for (size_t i = 0; i < joints_.size(); ++i) {
-            jointStates_[i].q  = (joints_[i].dof == 1) ? joints_[i].q  : Real(0);
-            jointStates_[i].qd = (joints_[i].dof == 1) ? joints_[i].qd : Real(0);
-        }
+        for (size_t i = 0; i < joints_.size(); ++i) { jointStates_[i].q = (joints_[i].dof == 1) ? joints_[i].q[0] : Real(0); jointStates_[i].qd = (joints_[i].dof == 1) ? joints_[i].qd[0] : Real(0); }
     }
 
     static constexpr Real kEps = Real(1e-12);
@@ -795,11 +573,10 @@ private:
     bool floating_ = false;
     Vec3 basePos_{0};
     Quat baseQuat_{1, 0, 0, 0};
-    Vec6 baseTwist_{};                  // base spatial velocity in the base frame
-    Vec6 baseAccel_{};                  // base spatial acceleration (from computeAccelerations)
-    std::vector<Real> qddot_;           // per-joint acceleration (from computeAccelerations)
-    int  ndof_ = 0;                     // total generalized DOFs (baseDof_ + revolute joints)
-    int  baseDof_ = 0;                  // 6 if floating, else 0
+    Vec6 baseTwist_{};
+    Vec6 baseAccel_{};
+    std::vector<Real> qddot_;
+    int  ndof_ = 0, baseDof_ = 0;
 
     std::vector<Link>  links_;
     std::vector<Joint> joints_;
