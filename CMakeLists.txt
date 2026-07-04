@@ -25,18 +25,21 @@ add_compile_definitions(GLM_FORCE_DEPTH_ZERO_TO_ONE)
 # binding links clean on a headless Linux box with no GPU/display SDK. Full dev build stays the default.
 option(ENGINE_TRAINING_ONLY "Build only the headless training surface (core+physics+physics_env)" OFF)
 
-# external dependencies
+# external dependencies (always needed by core/physics)
 find_package(glm REQUIRED)
 find_package(Threads REQUIRED)
-add_subdirectory(external/tinyobjloader)   # linked by engine::core
 
-add_library(stb INTERFACE)
-add_library(stb::stb ALIAS stb)
-target_include_directories(stb INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/stb
-)
-
+# Graphics-only third-party deps (mesh/image loaders, windowing) — only the graphics module uses
+# these, so a headless training build skips them (and their git submodules need not be initialized).
 if(NOT ENGINE_TRAINING_ONLY)
+    add_subdirectory(external/tinyobjloader)   # .obj mesh loader (graphics only)
+
+    add_library(stb INTERFACE)                 # stb_image (graphics only)
+    add_library(stb::stb ALIAS stb)
+    target_include_directories(stb INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/stb
+    )
+
     add_subdirectory(external/glfw)
     if(APPLE)
         message(STATUS "Apple platform detected. Configuring for Metal Backend.")

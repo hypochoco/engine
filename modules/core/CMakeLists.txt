@@ -29,7 +29,12 @@ target_include_directories(engine_core
 target_link_libraries(engine_core
     PUBLIC
         glm::glm
-        tinyobjloader
-        stb::stb
         Threads::Threads
 )
+
+# tinyobjloader (.obj mesh loader) and stb (image loader) are used only by the graphics module,
+# not by core itself — link them only in a full (non-training) build so the headless training
+# aggregate stays graphics-dependency-free.
+if(NOT ENGINE_TRAINING_ONLY)
+    target_link_libraries(engine_core PUBLIC tinyobjloader stb::stb)
+endif()
