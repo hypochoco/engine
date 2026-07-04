@@ -191,7 +191,10 @@ public:
     virtual std::span<const ContactEvent> contacts() const = 0;
 };
 
-enum class Backend { Realtime /* , Implicit (future) */ };
+enum class Backend {
+    Realtime,   // maximal-coordinate sequential-impulse solver (contacts + joint constraints)
+    Reduced,    // reduced-coordinate Featherstone/ABA articulation (Phase E)
+};
 
 std::unique_ptr<PhysicsWorld> createPhysicsWorld(Backend backend, const WorldDef& def);
 

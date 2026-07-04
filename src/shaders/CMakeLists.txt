@@ -10,7 +10,7 @@ find_program(SLANGC
 )
 if(NOT SLANGC)
     message(FATAL_ERROR
-        "slangc not found. Run scripts/get_slang.sh to download the Slang toolchain into external/slang/.")
+        "slangc not found. Run src/tools/get_slang.sh to download the Slang toolchain into external/slang/.")
 endif()
 
 set(SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")

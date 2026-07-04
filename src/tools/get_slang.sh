@@ -7,7 +7,7 @@
 # vendored under external/ but not committed (external/slang is gitignored). CMake locates
 # external/slang/bin/slangc.
 #
-# Usage: scripts/get_slang.sh [version]
+# Usage: src/tools/get_slang.sh [version]
 set -euo pipefail
 
 VERSION="${1:-2026.12.2}"
@@ -20,7 +20,7 @@ case "$(uname -s)-$(uname -m)" in
     *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DEST="$ROOT/external/slang"
 ARCHIVE="slang-${VERSION}-${PLATFORM}.tar.gz"
 URL="https://github.com/shader-slang/slang/releases/download/v${VERSION}/${ARCHIVE}"

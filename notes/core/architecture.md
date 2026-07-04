@@ -30,8 +30,10 @@ engine/
 │   ├── graphics/CMakeLists.txt     engine_graphics   (STATIC); Metal|Vulkan per platform
 │   ├── scene/CMakeLists.txt        engine_scene      (STATIC); ecs↔render bridge
 │   ├── physics/CMakeLists.txt      engine_physics    (STATIC)
-│   └── physics_ecs/CMakeLists.txt  engine_physics_ecs(STATIC); physics↔ecs bridge
-├── shaders/                    # .slang → .metallib/.spv via slangc
+│   ├── physics_ecs/CMakeLists.txt  engine_physics_ecs(STATIC); physics↔ecs bridge
+│   └── physics_env/CMakeLists.txt  engine_physics_env(STATIC); ECS-free RL env layer
+├── src/shaders/                # .slang → .metallib/.spv via slangc (own CMake target)
+├── src/tools/                  # build/dev tooling scripts (e.g. get_slang.sh)
 ├── tst/                        # tests by <module>/<category>/ → tests | benchmarks | visuals
 └── external/                   # submodules: glfw, glm, stb, tinyobjloader, metal-cpp
 ```
@@ -68,7 +70,7 @@ Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdir
 > target. **Per-instance materials**: each instance carries a `materialIndex` into a materials
 > buffer (`baseColorFactor`), so instanced draws are individually colored (bindless *textures*
 > are the reserved next step: `baseColorTexture` field + `Device::registerBindlessTexture`
-> exist but aren't wired). Shader `shaders/mesh.slang` is instanced (SV_InstanceID → per-
+> exist but aren't wired). Shader `src/shaders/mesh.slang` is instanced (SV_InstanceID → per-
 > instance model + material). Tests:
 > `rhi_smoke`, `triangle_offscreen`, `mesh_offscreen` (headless: 3 instanced spheres, each a
 > different material color, pixel-verified red center), `visual_window` (windowed: NxN
@@ -84,7 +86,7 @@ a working **Metal backend** (`src/graphics/metal/`), plus a **render layer**
 (`include/engine/graphics/render/`) — `GeometryStore` (uploads `core::MeshData`), `RenderView`
 (camera + `RenderItem[]` + per-instance `InstanceData[]` + `MaterialGPU[]`), and `Renderer`
 (instanced `drawIndexed`, per-instance materials, depth, offscreen + windowed present). Slang
-shaders (`shaders/*.slang` → `.metallib`). This is what the tests and the milestone exercise.
+shaders (`src/shaders/*.slang` → `.metallib`). This is what the tests and the milestone exercise.
 
 ### Legacy Vulkan code (parked under `src/graphics/vulkan/`, NOT the current path)
 
@@ -146,6 +148,22 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   **sequential-impulse (PGS)** contact solver (restitution, Coulomb friction, Baumgarte),
   substeps × velocity iterations. Friction at the contact point applies torque ⇒ **true
   rolling**.
+- **Reduced backend** (`backends/reduced`, `Backend::Reduced`, Phase E, 2026-07-04): a second
+  `PhysicsWorld` implementing the *same* interface via the **Articulated-Body Algorithm (ABA)** in
+  **generalized coordinates** (joint q/qd + optional floating 6-DOF base) — O(n) over the limb
+  tree, drift-free joints, minimal non-redundant state (what real humanoid-RL uses). The factory
+  (`createPhysicsWorld`) dispatches on `Backend`; `createFeatherstoneWorld` is declared in the
+  internal `backends/backends_internal.h`. Angular-first 6-vectors, full 6×6 spatial
+  transforms/inertias (link frame at COM), gravity as an explicit per-link force, semi-implicit
+  Euler + quaternion base integration. **Scope E0-E1**: revolute/fixed joints, fixed + floating
+  base, actuators (torque/PD), and **contacts** — CRBA joint-space inertia `H` + generalized
+  contact Jacobians + a sequential-impulse **PGS in generalized coordinates** (normal + Coulomb
+  friction + Baumgarte) against static planes. **Not yet**: Ball 3-DOF joints (E2). Validated
+  (`tst/physics/integration/reduced.cpp`): pendulum period 0.5%, double-pendulum energy 0.54%,
+  floating free-chain momentum 0.1%/0.24%, sphere rests on a plane (no penetration), box
+  holds/slides on a slope by friction. `physics_env` can select it via `EnvConfig.backend` with no
+  env-layer changes. Roadmap:
+  [reduced-coordinate-backend.md](../investigations/2026-07-04-reduced-coordinate-backend.md).
 - **Joints** (Milestone 2, Phase B1, 2026-07-03): maximal-coordinate **bilateral constraints**
   solved in the same velocity loop as contacts, but **persistent** (created once via
   `createJoint(JointDef)`; kept in an index-stable `joints_` store) and **warm-started across

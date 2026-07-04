@@ -146,10 +146,20 @@ batched state + Torque actions, parallel-worlds throughput, determinism) on the 
 Second `PhysicsWorld` (`Backend::Reduced`) behind the same Environment/obs-action API; the largest
 single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decision:
 [articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
-- [ ] **E0** ABA spatial-algebra core (no contacts); validate a free chain/pendulum vs maximal.
-- [ ] **E1** contact coupling (contact-space inertia + LCP/PGS, or soft-constraint); validate resting.
-- [ ] **E2** humanoid + actuators (q/qd *are* the state); ragdoll settles + PD-stand holds.
-- [ ] **E3** behind `VecEnv`; obs/action API unchanged; determinism holds; benchmark vs maximal.
+- [x] **E0** ABA spatial-algebra core (no contacts); validate a free chain/pendulum vs invariants.
+      DONE (2026-07-04): `Backend::Reduced` + `src/physics/backends/reduced/featherstone_world.cpp`
+      (fixed + floating base, revolute/fixed joints, explicit per-link gravity, 6×6 spatial algebra,
+      semi-implicit Euler). Validated in `tst/physics/integration/reduced.cpp`: pendulum period 0.5%,
+      double-pendulum energy drift 0.54%, floating free-chain linear/angular momentum 0.1%/0.24%.
+      Design + results: [reduced-coordinate-backend.md](../investigations/2026-07-04-reduced-coordinate-backend.md).
+- [x] **E1** contact coupling (contact-space inertia + PGS). DONE (2026-07-04): CRBA joint-space
+      inertia `H`, generalized contact Jacobians (ancestor revolute cols + floating-base 6 cols),
+      sequential-impulse **PGS in generalized coords** (Δq̇ = H⁻¹Jᵀλ; normal λ≥0 + Baumgarte +
+      Coulomb friction), dynamic-link colliders (sphere/box/capsule) vs static planes. Validated:
+      sphere settles at its radius (no penetration, v→0), box holds on a 17° slope at μ=1 and slides
+      at μ=0.05 (friction cone genuine). CRBA cross-checked via the KE identity.
+- [ ] **E2** humanoid + actuators: **Ball (3-DOF) joints**; q/qd *are* the state; ragdoll settles + PD-stand holds.
+- [ ] **E3** behind `VecEnv`; obs/action API unchanged; determinism (serial==parallel); benchmark vs maximal.
 - [ ] (later) differentiability / analytic gradients on top of the reduced model.
 
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
@@ -220,10 +230,10 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       `test`→`tst`, `ENGINE_RHI_METAL/VULKAN` defines. Remaining: enable `OBJCXX` when the
       `.mm` window shim lands (headless Metal is pure C++, so not needed yet).
 - [x] **5. Shader toolchain** — DONE (2026-07-03): **Slang** chosen and wired.
-      `scripts/get_slang.sh` fetches `slangc` into gitignored `external/slang/`;
-      `shaders/CMakeLists.txt` compiles `.slang` → `.metallib` (Apple) / `.spv` (else) and
+      `src/tools/get_slang.sh` fetches `slangc` into gitignored `external/slang/`;
+      `src/shaders/CMakeLists.txt` compiles `.slang` → `.metallib` (Apple) / `.spv` (else) and
       exposes `ENGINE_SHADER_DIR`. `rhi::ShaderModule`/`createShader` loads the backend blob.
-      First shader: `shaders/triangle.slang`.
+      First shader: `src/shaders/triangle.slang`.
 - [~] **6. Implement the Metal backend** incrementally — offscreen + **windowed** working
       (2026-07-03): `tst/graphics/integration/mesh.cpp` (headless, pixel-verified) and `tst/graphics/visual/grid.cpp`
       (opens a GLFW window, renders a lit `core` sphere via CAMetalLayer swapchain + present).

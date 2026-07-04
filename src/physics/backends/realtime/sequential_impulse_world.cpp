@@ -32,6 +32,8 @@
 #include "engine/physics/dynamics/integrate.h"
 #include "engine/physics/world.h"
 
+#include "../backends_internal.h"
+
 namespace engine::physics {
 namespace {
 
@@ -996,8 +998,11 @@ public:
 } // namespace
 
 std::unique_ptr<PhysicsWorld> createPhysicsWorld(Backend backend, const WorldDef& def) {
-    (void)backend;   // only Realtime for now
-    return std::make_unique<SequentialImpulseWorld>(def);
+    switch (backend) {
+        case Backend::Reduced:  return createFeatherstoneWorld(def);
+        case Backend::Realtime:
+        default:                return std::make_unique<SequentialImpulseWorld>(def);
+    }
 }
 
 } // namespace engine::physics

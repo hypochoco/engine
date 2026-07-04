@@ -49,7 +49,7 @@ endif()
 add_subdirectory(modules)
 
 # shaders (compiled via slangc)
-add_subdirectory(shaders)
+add_subdirectory(src/shaders)
 
 # tests
 enable_testing()
