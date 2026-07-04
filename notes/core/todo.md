@@ -170,7 +170,40 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       finite random-torque rollout; single-env determinism + VecEnv parallel==serial bit-identical;
       throughput benchmark reduced vs maximal (~2× slower/step — dense H⁻¹ contact solve dominates;
       reduced needs finer substeps under strong torque). **Phase E COMPLETE.**
-- [ ] (later) differentiability / analytic gradients on top of the reduced model.
+- [x] **Phase F — differentiable reduced env (hybrid α-order).** Primary research objective — **engine
+      side COMPLETE** (2026-07-04). Review + A/D/hybrid comparison + plan: [2026-07-04-differentiable-reduced.md](../investigations/2026-07-04-differentiable-reduced.md).
+      Build (A) analytic differentiable step as the core, (D) zeroth-order over the fast VecEnv as the
+      baseline, converge on the α-order hybrid. Forward-mode duals → per-step Jacobian at the env boundary.
+  - [x] **F1** differentiable smooth dynamics (no contact) — **COMPLETE** (2026-07-04): `Dual`
+        forward-mode AD + Scalar-generic linalg + generalized ABA (`include/engine/physics/diff/{dual,
+        linalg,articulated}.h`) for fixed/floating base + revolute/ball/fixed joints, SO(3) exp-map
+        integration, quaternion-free. Validated physically (period, energy, momentum) AND for exact
+        gradients (revolute/ball/floating all match central FD to 8 digits). Next: per-step
+        state/observation Jacobian at the env boundary.
+  - [x] **F2** smoothed/compliant contact — **COMPLETE** (2026-07-04). F2a: compliant normal contact
+        folded into the generic ABA + `softplus`/`sigmoid` on `Dual`. F2b: regularized Coulomb friction
+        (contact-point slip) + radius-lever torque ⇒ sphere rolls without slipping (ω_z=−vx/r); coupled
+        hopper (floating base + revolute leg + foot) gradient == FD to 8 digits; soft-contact bias =
+        `r−mg/k` (tunable). All gradients through contact validated vs finite differences.
+  - [x] **Fd** zeroth-order estimator — **DONE** (2026-07-04): `include/engine/physics/diff/zeroth_order.h`
+        (deterministic antithetic Gaussian-smoothing ES gradient). Unbiased on a quadratic (variance ↓ with N);
+        agrees with the analytic `Dual` gradient to 0.69% on the smooth pendulum. Both hybrid gradient sources
+        now exist. N evals map onto the fast VecEnv downstream.
+  - [~] **F3** α-order hybrid blend + per-step Jacobian/VJP at the env boundary + SHAC smoke test.
+        **F3a DONE** (2026-07-04): `include/engine/physics/diff/hybrid.h` `alphaOrderGradient` (min-variance
+        blend of analytic first-order + zeroth-order). Smooth pendulum ⇒ α=1.0, blend==analytic; stiff
+        near-step (β=200) ⇒ α=0.15 + 4.5× lower across-seed variance than pure first-order (Suh et al.).
+        **F3b next**: per-step state/observation Jacobian (tangent coords) at the env boundary / `DiffEnvironment`.
+  - [x] **F3b Jacobian DONE** (2026-07-04): `include/engine/physics/diff/jacobian.h` `stepJacobian` — per-step
+        tangent Jacobian `∂s_{t+1}/∂(s_t,a_t)` via exact forward-mode `Dual<1>` per column; orientation via
+        exp/`vee`-log. Full 14×15 floating-base+revolute Jacobian == tangent-space FD to 4e-11 (all blocks).
+  - [x] **F3c DONE** (2026-07-04): `from_articulation.h` (`articulationToDiffModel`) + `diff_environment.h`
+        (`DiffEnvironment`: reset/setAction/step, `jacobian()`, `rolloutGradient<NA>()`). Real humanoid
+        converts (14 links/21 DOF/floating, authored poses reproduced), runs finite/bounded, 54×75
+        Jacobian finite, analytic rollout gradient == FD to 1.3e-9. **Phase F engine-side COMPLETE.**
+  - [ ] (downstream) SHAC-style short-horizon analytic-policy-gradient smoke test — lives in the RL repo
+        (reward/policy/optimizer) consuming `DiffEnvironment` + `alphaOrderGradient`.
+  - [ ] **F4** (reserve) IFT/exact contact gradients if the smoothed-contact bias limits results.
 - [x] contact-solve perf: **sparse LDLᵀ factorization of `H`** exploiting the DOF-ancestor tree
       (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
       reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts
