@@ -17,8 +17,11 @@
 //  Gravity is an explicit per-link force (uniform for fixed + floating bases).
 //
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "engine/physics/dynamics/body.h"
@@ -498,7 +501,12 @@ private:
     }
 
     // ---- contacts (E1) ----
-    struct Contact { int link; Vec3 point; Vec3 normal; Real pen; Real friction; };
+    struct Contact { int link; Vec3 point; Vec3 normal; Real pen; Real friction; uint32_t key; };
+
+    // Stable per-contact id (for warm-starting): link | plane | feature.
+    static uint32_t contactKey(int link, int plane, int feature) {
+        return (static_cast<uint32_t>(link) << 16) | (static_cast<uint32_t>(plane) << 6) | static_cast<uint32_t>(feature);
+    }
     std::vector<Contact> detectContacts() const {
         std::vector<Contact> out;
         struct WPlane { Vec3 n; Real off; Real fric; };
@@ -509,23 +517,44 @@ private:
                 planes.push_back({ nn, s.collider.plane.offset + glm::dot(nn, s.world.position), s.material.friction });
             }
         if (planes.empty()) return out;
-        auto sphereVs = [&](int link, const Vec3& c, Real radius, Real mat) {
-            for (const WPlane& p : planes) { const Real dist = glm::dot(p.n, c) - p.off; if (dist < radius) out.push_back({ link, c - p.n * dist, p.n, radius - dist, std::sqrt(std::max(Real(0), mat * p.fric)) }); }
+        auto sphereVs = [&](int link, const Vec3& c, Real radius, Real mat, int feature) {
+            for (size_t pi = 0; pi < planes.size(); ++pi) { const WPlane& p = planes[pi]; const Real dist = glm::dot(p.n, c) - p.off;
+                if (dist < radius) out.push_back({ link, c - p.n * dist, p.n, radius - dist, std::sqrt(std::max(Real(0), mat * p.fric)),
+                                                   contactKey(link, static_cast<int>(pi), feature) }); }
         };
         for (size_t i = 0; i < links_.size(); ++i) {
             const Link& L = links_[i]; if (L.type != BodyType::Dynamic) continue;
             const Vec3 c = L.world.position; const Mat3 R = glm::mat3_cast(L.world.rotation); const int li = static_cast<int>(i);
             switch (L.collider.type) {
-                case ColliderDesc::Type::Sphere: sphereVs(li, c, L.collider.sphere.radius, L.material.friction); break;
+                case ColliderDesc::Type::Sphere: sphereVs(li, c, L.collider.sphere.radius, L.material.friction, 0); break;
                 case ColliderDesc::Type::Capsule: { const Real hh = L.collider.capsule.halfHeight, r = L.collider.capsule.radius;
-                    sphereVs(li, c + R * Vec3(0, hh, 0), r, L.material.friction); sphereVs(li, c - R * Vec3(0, hh, 0), r, L.material.friction); break; }
-                case ColliderDesc::Type::Box: { const Vec3 hE = L.collider.box.halfExtents;
-                    for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2) {
-                        const Vec3 corner = c + R * Vec3(sx * hE.x, sy * hE.y, sz * hE.z);
-                        for (const WPlane& p : planes) { const Real dist = glm::dot(p.n, corner) - p.off; if (dist < 0) out.push_back({ li, corner, p.n, -dist, std::sqrt(std::max(Real(0), L.material.friction * p.fric)) }); } }
+                    sphereVs(li, c + R * Vec3(0, hh, 0), r, L.material.friction, 0); sphereVs(li, c - R * Vec3(0, hh, 0), r, L.material.friction, 1); break; }
+                case ColliderDesc::Type::Box: { const Vec3 hE = L.collider.box.halfExtents; int corner = 0;
+                    for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2, ++corner) {
+                        const Vec3 cp = c + R * Vec3(sx * hE.x, sy * hE.y, sz * hE.z);
+                        for (size_t pi = 0; pi < planes.size(); ++pi) { const WPlane& p = planes[pi]; const Real dist = glm::dot(p.n, cp) - p.off;
+                            if (dist < 0) out.push_back({ li, cp, p.n, -dist, std::sqrt(std::max(Real(0), L.material.friction * p.fric)),
+                                                          contactKey(li, static_cast<int>(pi), corner) }); } }
                     break; }
-                default: sphereVs(li, c, Real(0.1), L.material.friction); break;
+                default: sphereVs(li, c, Real(0.1), L.material.friction, 0); break;
             }
+        }
+        // #3 Contact-manifold reduction: keep at most the K deepest contacts per (link, plane) —
+        // caps pathological counts (deeply-penetrating boxes/convex faces) while preserving support.
+        constexpr int kMaxPerManifold = 4;
+        if (out.size() > static_cast<size_t>(kMaxPerManifold)) {
+            std::stable_sort(out.begin(), out.end(), [](const Contact& a, const Contact& b) {
+                const uint32_t ga = a.key >> 6, gb = b.key >> 6;       // group = link|plane
+                return ga != gb ? ga < gb : a.pen > b.pen;             // within a group, deepest first
+            });
+            std::vector<Contact> reduced; reduced.reserve(out.size());
+            uint32_t group = 0xFFFFFFFFu; int count = 0;
+            for (const Contact& con : out) {
+                const uint32_t g = con.key >> 6;
+                if (g != group) { group = g; count = 0; }
+                if (count++ < kMaxPerManifold) reduced.push_back(con);
+            }
+            out.swap(reduced);
         }
         return out;
     }
@@ -567,7 +596,7 @@ private:
         for (int d = 0; d < baseDof_; ++d) qd[d] = baseTwist_.d[d];
         for (const Joint& j : joints_) for (int a = 0; a < j.dof; ++a) qd[j.qIndex + a] = j.qd[a];
 
-        struct Row { std::vector<Real> Jn, Jt1, Jt2, JnHi, Jt1Hi, Jt2Hi; Real An, At1, At2, biasN, fric; Real ln = 0, l1 = 0, l2 = 0; };
+        struct Row { std::vector<Real> Jn, Jt1, Jt2, JnHi, Jt1Hi, Jt2Hi; Real An, At1, At2, Atc, biasN, fric; uint32_t key; Real ln = 0, l1 = 0, l2 = 0; };
         std::vector<Row> rows; rows.reserve(contacts.size());
         constexpr Real kBeta = Real(0.2), kSlop = Real(0.001);
         for (const Contact& c : contacts) {
@@ -576,17 +605,56 @@ private:
             r.Jn = jacRow(c.link, c.point, c.normal); r.Jt1 = jacRow(c.link, c.point, t1); r.Jt2 = jacRow(c.link, c.point, t2);
             applyHinv(r.Jn, r.JnHi); applyHinv(r.Jt1, r.Jt1Hi); applyHinv(r.Jt2, r.Jt2Hi);
             r.An = dotN(r.Jn, r.JnHi); r.At1 = dotN(r.Jt1, r.Jt1Hi); r.At2 = dotN(r.Jt2, r.Jt2Hi);
-            r.biasN = -(kBeta / h) * std::max(Real(0), c.pen - kSlop); r.fric = c.friction;
+            r.Atc = dotN(r.Jt1, r.Jt2Hi);                              // #4 friction-block coupling
+            r.biasN = -(kBeta / h) * std::max(Real(0), c.pen - kSlop); r.fric = c.friction; r.key = c.key;
             rows.push_back(std::move(r));
         }
-        for (int it = 0; it < 20; ++it) {
+
+        // #2 Warm-start: seed each contact's impulses from the previous substep/step and apply them
+        // up front, so the PGS starts near the solution (resting contacts converge in a few iters).
+        for (Row& r : rows) {
+            const auto it = impulseCache_.find(r.key);
+            if (it == impulseCache_.end()) continue;
+            r.ln = it->second[0]; r.l1 = it->second[1]; r.l2 = it->second[2];
+            for (int i = 0; i < nd; ++i) qd[i] += r.JnHi[i] * r.ln + r.Jt1Hi[i] * r.l1 + r.Jt2Hi[i] * r.l2;
+        }
+
+        constexpr int kIters = 12;                                    // fewer iters: warm-started + block friction
+        for (int it = 0; it < kIters; ++it) {
             for (Row& r : rows) {
-                if (r.An > kEps) { const Real vn = dotN(r.Jn, qd); Real dl = -(vn + r.biasN) / r.An; const Real nl = std::max(Real(0), r.ln + dl); dl = nl - r.ln; r.ln = nl; for (int i = 0; i < nd; ++i) qd[i] += r.JnHi[i] * dl; }
+                if (r.An > kEps) {                                    // normal (λ ≥ 0)
+                    const Real vn = dotN(r.Jn, qd);
+                    Real dl = -(vn + r.biasN) / r.An;
+                    const Real nl = std::max(Real(0), r.ln + dl);
+                    dl = nl - r.ln; r.ln = nl;
+                    for (int i = 0; i < nd; ++i) qd[i] += r.JnHi[i] * dl;
+                }
+                // #4 friction as a coupled 2×2 block with circular cone projection (radius μλn).
                 const Real muN = r.fric * r.ln;
-                if (r.At1 > kEps) { Real dl = -dotN(r.Jt1, qd) / r.At1; const Real nl = std::max(-muN, std::min(muN, r.l1 + dl)); dl = nl - r.l1; r.l1 = nl; for (int i = 0; i < nd; ++i) qd[i] += r.Jt1Hi[i] * dl; }
-                if (r.At2 > kEps) { Real dl = -dotN(r.Jt2, qd) / r.At2; const Real nl = std::max(-muN, std::min(muN, r.l2 + dl)); dl = nl - r.l2; r.l2 = nl; for (int i = 0; i < nd; ++i) qd[i] += r.Jt2Hi[i] * dl; }
+                const Real vt1 = dotN(r.Jt1, qd), vt2 = dotN(r.Jt2, qd);
+                const Real det = r.At1 * r.At2 - r.Atc * r.Atc;
+                Real d1, d2;
+                if (std::fabs(det) > kEps) {
+                    d1 = -(r.At2 * vt1 - r.Atc * vt2) / det;
+                    d2 = -(r.At1 * vt2 - r.Atc * vt1) / det;
+                } else {
+                    d1 = (r.At1 > kEps) ? -vt1 / r.At1 : Real(0);
+                    d2 = (r.At2 > kEps) ? -vt2 / r.At2 : Real(0);
+                }
+                Real n1 = r.l1 + d1, n2 = r.l2 + d2;
+                const Real mag = std::sqrt(n1 * n1 + n2 * n2);
+                if (mag > muN && mag > kEps) { const Real s = muN / mag; n1 *= s; n2 *= s; }
+                const Real ad1 = n1 - r.l1, ad2 = n2 - r.l2; r.l1 = n1; r.l2 = n2;
+                for (int i = 0; i < nd; ++i) qd[i] += r.Jt1Hi[i] * ad1 + r.Jt2Hi[i] * ad2;
             }
         }
+
+        // Persist impulses for next-substep warm-starting (stale keys drop out).
+        std::unordered_map<uint32_t, std::array<Real, 3>> next;
+        next.reserve(rows.size());
+        for (const Row& r : rows) next[r.key] = { r.ln, r.l1, r.l2 };
+        impulseCache_.swap(next);
+
         for (int d = 0; d < baseDof_; ++d) baseTwist_.d[d] = qd[d];
         for (Joint& j : joints_) for (int a = 0; a < j.dof; ++a) j.qd[a] = qd[j.qIndex + a];
     }
@@ -644,6 +712,7 @@ private:
     std::vector<Vec3>  linVel_, angVel_;
     std::vector<JointState> jointStates_;
     std::vector<ContactEvent> contacts_;
+    std::unordered_map<uint32_t, std::array<Real, 3>> impulseCache_;   // warm-start: key → (λn,λt1,λt2)
 };
 
 } // namespace

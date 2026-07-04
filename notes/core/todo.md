@@ -175,8 +175,12 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
       reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts
       are many, the **PGS** dominates instead — future lever: block/Delassus PGS.
+- [x] contact-solve perf II: **warm-started PGS + 2×2 block friction (circular cone) + manifold
+      reduction** (Delassus skipped — wrong tool when contacts > ndof). DONE (2026-07-04): 20→12
+      iters at equal quality; flat-humanoid contact-solve −26% (0.989→0.732 ms), reduced env-steps/s
+      +18–22%. End-to-end vs original dense-inverse ≈ 1.9× (N=1024 16.5k→31.3k). Analysis + results:
+      [2026-07-04-reduced-contact-pgs.md](../investigations/2026-07-04-reduced-contact-pgs.md).
 - [ ] (later) Ball q/qd readout in `JointState` (multi-DOF observation).
-- [ ] (later) contact-solve perf II: block/Delassus PGS (dominant when many contacts).
 
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 
