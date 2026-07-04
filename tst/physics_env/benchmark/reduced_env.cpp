@@ -23,9 +23,9 @@ namespace {
 void run(const char* label, physics::Backend backend, engine::core::ThreadPool& pool) {
     physics_env::EnvConfig cfg;
     cfg.articulation = physics::makeHumanoid();
-    cfg.backend = backend;
-    cfg.substeps = 16;
-    cfg.maxTorque = 40.0f;
+    cfg.sim.backend = backend;
+    cfg.sim.substeps = 16;
+    cfg.sim.maxTorque = 40.0f;
     constexpr int kSteps = 60;
     std::printf("  %-9s:", label);
     for (size_t N : { size_t(1), size_t(64), size_t(1024) }) {
@@ -55,9 +55,9 @@ TST_CASE(physics_env, benchmark, reduced_contact_step_cost) {
     auto measure = [](bool ground) {
         physics_env::EnvConfig cfg;
         cfg.articulation = physics::makeHumanoid();   // pelvis at 0.99 ⇒ feet touch the plane
-        cfg.backend = physics::Backend::Reduced;
-        cfg.substeps = 16;
-        cfg.groundPlane = ground;
+        cfg.sim.backend = physics::Backend::Reduced;
+        cfg.sim.substeps = 16;
+        cfg.sim.groundPlane = ground;
         physics_env::Environment env(cfg);
         env.reset(0);
         for (int i = 0; i < 120; ++i) env.step();      // settle

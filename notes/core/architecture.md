@@ -273,9 +273,46 @@ for training; **no reward/termination/task** (those are downstream — the env e
   (`computeWorldInvInertia`) and read by the contact/joint/actuator/limit solves, instead of
   recomputing `R·I⁻¹·Rᵀ` per body per constraint per iteration — bit-identical (determinism tests
   still 0), win scales with contacts×iterations.
-- Tests: `tst/physics_env/unit/environment.cpp` (dims 21/53, bounded random rollout, deterministic
+- Tests: `tst/physics_env/unit/environment.cpp` (dims 21/69, bounded random rollout, deterministic
   0.0), `tst/physics_env/integration/vec_env.cpp` (parallel==serial, bit-identical), benchmark
   `tst/physics_env/benchmark/vec_env.cpp` (N=1→1024; ~8.7k→68.7k env-steps/s on 13 workers).
+
+### Differentiable engine (`engine::physics::diff`, Phase F, 2026-07-04)
+Header-only, **Scalar-generic** (`double` for sim, `Dual<N>` forward-mode AD for gradients — same
+templates), **quaternion-free** differentiable reduced-coordinate sim, for analytic-gradient RL
+(SHAC / the α-order hybrid). Independent of the production backends; a separate "engine" alongside
+the maximal/reduced `PhysicsWorld`s. Under `include/engine/physics/diff/`:
+- **`dual.h`** forward-mode `Dual<N>`; **`linalg.h`** Scalar-generic V3/M3/V6/M6 spatial algebra +
+  `expSO3`/`logSO3`/`vee`/`rodrigues`; **`articulated.h`** generalized ABA (`DiffModel`/`DiffState`,
+  `diffForwardDynamics`/`diffSubstep`, `linkWorld`) for fixed/floating base + revolute/ball/fixed.
+- **Contact**: smooth compliant ground — `k·softplus_β(pen)/β − c·vₙ·σ(β·pen)` + regularized Coulomb
+  friction at the contact point (differentiable everywhere). **Multi-point** (`ContactSphere` list per
+  link) with a per-collider **shape decomposition** (`DiffContact::{None,Feet,All}`: capsule→2 end-caps,
+  box→8 corners) so shapes rest without clip-through. **`ContactIntegration::{Explicit,SemiImplicit}`**
+  (2-pass predictor→corrector for stiff contact). Defaults `groundK=1e4, C=150, β=120, μ=0.8`.
+- **`zeroth_order.h`** antithetic Gaussian-smoothing ES gradient; **`hybrid.h`** `alphaOrderGradient`
+  (min-variance blend of analytic first-order + zeroth-order — Suh et al.); **`jacobian.h`** per-step
+  tangent Jacobian `∂s_{t+1}/∂(s_t,a_t)` (exact `Dual<1>` per column, SO(3) exp/vee).
+- **`from_articulation.h`** `articulationToDiffModel(ArticulationDef, DiffContact)` — converts the
+  production `makeHumanoid` (or any articulation) to a `DiffModel` (inertia/anchors/axes/restRel/floating
+  root); validated **==** the reduced backend to 9e-8 m. **`diff_environment.h`** `DiffEnvironment`
+  mirrors `physics_env::Environment` (`reset`/`setAction`/`step`) + exposes `jacobian()` and
+  `rolloutGradient<NA>()`. All gradients validated vs finite differences (≤1e-5, mostly 8+ digits).
+  Forward substep ≈0.7× the reduced backend (faster; header-only + inlined). Design + hardening:
+  investigations/2026-07-04-differentiable-reduced.md, -contact-geometry.md.
+
+### Physics configuration (`engine/physics/config.h`, 2026-07-04)
+Centralized, value-type (no global singleton) tuning config. **`SolverConfig`** un-buries the 10
+formerly-hardcoded backend constants (Baumgarte/slop/maxCorrection/aabbMargin/jointBaumgarte;
+reduced PGS iters/manifold cap/…). **`SimConfig`** = the single knob surface for a maximal/reduced RL
+sim (gravity, controlDt, substeps, velocityIterations, damping, backend, ground, actuation
+`maxTorque/actionMode/kp/kd`, `SolverConfig`); `WorldDef` derives via `toWorldDef()`, and
+`EnvConfig = { ArticulationDef articulation; SimConfig sim; }` (one source of truth, no duplication).
+**`SimConfigOverride` + `resolve(base, override)`** = sparse layered overrides; **`configs.h`** named
+presets. **`config_io.h`** = write-only `serialize`/`configHash` (FNV-1a)/`dump` + `configVersion` for
+per-run history (reader deferred until a training launcher). The **differentiable engine keeps its own
+`DiffModel` config** (two-surface split; cross-engine unification deferred). Plan/decisions:
+investigations/2026-07-04-physics-config-system.md.
 
 ### Milestone status — "ball rolling down a plane" ✅ (physics + sim)
 - `tst/physics/integration/milestone.cpp` (headless): sphere on a 30° incline via the ECS bridge

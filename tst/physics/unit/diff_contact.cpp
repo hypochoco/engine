@@ -176,3 +176,133 @@ TST_CASE(physics, unit, diff_contact_hopper_gradient_matches_fd) {
     TST_REQUIRE(std::fabs(dY0) > 1e-3);                     // initial height clearly propagates through contact
 }
 
+
+// ================= Feature 2: multi-point contact (link-local contact spheres) =================
+namespace {
+// Floating body with ONE contact sphere at a horizontal COM offset (exercises the ω×lever /
+// contact-point-velocity path of the generalized contact — spin changes the offset point's normal vel).
+DiffModel offsetContactBody(double m, double r, double ox, double k, double c) {
+    DiffModel md; md.ndofJoints = 0; md.floating = true;
+    md.contactGround = true; md.groundK = k; md.groundC = c; md.groundBeta = 800.0;
+    const double Ic = 0.1 * m;
+    DiffLink b; b.parent = -1; b.mass = m; b.Ic = diagM3(Ic, Ic, Ic); b.restRel = identity3<double>();
+    b.addContactSphere({ ox, 0, 0 }, r);
+    md.links = { b };
+    return md;
+}
+// Floating body with TWO symmetric contact spheres offset ±d in x (a "rod on two feet").
+DiffModel twoContactBody(double m, double r, double d, double k, double c) {
+    DiffModel md; md.ndofJoints = 0; md.floating = true;
+    md.contactGround = true; md.groundK = k; md.groundC = c; md.groundBeta = 800.0;
+    const double Ic = 0.08 * m;
+    DiffLink b; b.parent = -1; b.mass = m; b.Ic = diagM3(Ic, Ic, Ic); b.restRel = identity3<double>();
+    b.addContactSphere({ d, 0, 0 }, r); b.addContactSphere({ -d, 0, 0 }, r);
+    md.links = { b };
+    return md;
+}
+}
+
+// --- (6) offset contact sphere: gradient through the ω×lever path == central FD ----------------
+TST_CASE(physics, unit, diff_contact_offset_sphere_gradient_matches_fd) {
+    const double m = 1.0, r = 0.1, ox = 0.25, k = 3000.0, c = 30.0, g = 9.81, h = 1.0 / 4000.0;
+    const int steps = 200;
+    const DiffModel md = offsetContactBody(m, r, ox, k, c);
+    const V3<double> grav{ 0, -g, 0 };
+    const double y0 = r, wz0 = 1.0;                        // touching, spinning (offset point sweeps)
+
+    DiffState<Dual<2>> st = makeState<Dual<2>>(md);
+    st.basePos = { Dual<2>(0), Dual<2>::seed(y0, 0), Dual<2>(0) };
+    st.baseTwist.d[2] = Dual<2>::seed(wz0, 1);             // ω_z
+    st.baseTwist.d[4] = Dual<2>(-0.3);                     // slight downward vel to engage contact
+    const Dual<2> yEnd = run(md, st, grav, h, steps).basePos.y;
+    const double dY0 = yEnd.d[0], dWz = yEnd.d[1];
+
+    auto finalY = [&](double yInit, double wz) {
+        DiffState<double> s = makeState<double>(md);
+        s.basePos = { 0, yInit, 0 }; s.baseTwist.d[2] = wz; s.baseTwist.d[4] = -0.3;
+        return run(md, s, grav, h, steps).basePos.y;
+    };
+    const double eps = 1e-6;
+    const double fdY0 = (finalY(y0 + eps, wz0) - finalY(y0 - eps, wz0)) / (2 * eps);
+    const double fdWz = (finalY(y0, wz0 + eps) - finalY(y0, wz0 - eps)) / (2 * eps);
+    std::printf("diff_contact_offset_grad: d/dy0 AD=%.8f FD=%.8f | d/dwz AD=%.8f FD=%.8f\n", dY0, fdY0, dWz, fdWz);
+    TST_REQUIRE(std::fabs(dY0 - fdY0) < 1e-5);
+    TST_REQUIRE(std::fabs(dWz - fdWz) < 1e-5);
+    TST_REQUIRE(std::fabs(dWz) > 1e-4);                    // spin genuinely couples into the offset contact
+}
+
+// --- (7) two contact spheres share the load, self-right a tilt, and rest flat -------------------
+TST_CASE(physics, unit, diff_contact_multipoint_rests_flat) {
+    const double m = 1.0, r = 0.1, d = 0.25, k = 3000.0, c = 30.0, g = 9.81, h = 1.0 / 4000.0;
+    const DiffModel md = twoContactBody(m, r, d, k, c);
+    const V3<double> grav{ 0, -g, 0 };
+
+    DiffState<double> st = makeState<double>(md);
+    st.basePos = { 0, 0.4, 0 };
+    st.baseRot = rodrigues<double>(V3<double>{ 0, 0, 1 }, 0.1);   // dropped with a 0.1 rad tilt
+    for (int i = 0; i < 12000; ++i) diffSubstep(md, st, std::vector<double>{}, grav, h);   // 3 s to settle
+
+    const double tilt = std::sqrt(dot(logSO3(st.baseRot), logSO3(st.baseRot)));
+    const double restY = st.basePos.y, expectY = r - m * g / (2 * k);   // two springs share the weight
+    std::printf("diff_multipoint_rest: restY=%.4f (expect r-mg/2k=%.4f) tilt 0.10->%.4f driftX=%.4f\n",
+                restY, expectY, tilt, st.basePos.x);
+    TST_REQUIRE(tilt < 0.03);                              // self-righted from the two-point support
+    TST_REQUIRE(std::fabs(restY - expectY) < 0.01);        // rests at the SHARED-load equilibrium (½ penetration)
+    TST_REQUIRE(std::fabs(st.basePos.x) < 0.02);           // no net horizontal drift (symmetry preserved)
+}
+
+// ================= Feature 3: shape-aware contact (box corners / capsule end-caps) =============
+namespace {
+// Floating box: 8 corner point-contacts (radius 0) at (±ex,±ey,±ez) — like a foot.
+DiffModel boxBody(double m, double ex, double ey, double ez, double k, double c) {
+    DiffModel md; md.ndofJoints = 0; md.floating = true;
+    md.contactGround = true; md.groundK = k; md.groundC = c; md.groundBeta = 800.0;
+    DiffLink b; b.parent = -1; b.mass = m; b.restRel = identity3<double>();
+    b.Ic = diagM3(m / 3 * (ey * ey + ez * ez), m / 3 * (ex * ex + ez * ez), m / 3 * (ex * ex + ey * ey));
+    for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2)
+        b.addContactSphere({ sx * ex, sy * ey, sz * ez }, 0.0);
+    md.links = { b };
+    return md;
+}
+// Floating capsule (long axis local y): 2 end-cap spheres at (0,±hh,0), radius r.
+DiffModel capsuleBody(double m, double r, double hh, double k, double c) {
+    DiffModel md; md.ndofJoints = 0; md.floating = true;
+    md.contactGround = true; md.groundK = k; md.groundC = c; md.groundBeta = 800.0;
+    const double h = 2 * hh; DiffLink b; b.parent = -1; b.mass = m; b.restRel = identity3<double>();
+    b.Ic = diagM3((1.0 / 12) * m * (3 * r * r + h * h), 0.5 * m * r * r, (1.0 / 12) * m * (3 * r * r + h * h));
+    b.addContactSphere({ 0, hh, 0 }, r); b.addContactSphere({ 0, -hh, 0 }, r);
+    md.links = { b };
+    return md;
+}
+}
+
+// --- (8) box rests flat on its 4 bottom corners at the shared-load height, no tipping ----------
+TST_CASE(physics, unit, diff_contact_box_rests_flat) {
+    const double m = 1.0, ex = 0.05, ey = 0.03, ez = 0.12, k = 3000.0, c = 30.0, g = 9.81, h = 1.0 / 4000.0;
+    const DiffModel md = boxBody(m, ex, ey, ez, k, c);
+    const V3<double> grav{ 0, -g, 0 };
+    DiffState<double> st = makeState<double>(md); st.basePos = { 0, 0.30, 0 };
+    for (int i = 0; i < 12000; ++i) diffSubstep(md, st, std::vector<double>{}, grav, h);   // 3 s
+    const double tilt = std::sqrt(dot(logSO3(st.baseRot), logSO3(st.baseRot)));
+    const double expectY = ey - m * g / (4 * k);            // 4 bottom corners share the weight
+    std::printf("diff_box_rest: comY=%.4f (expect ey-mg/4k=%.4f) tilt=%.4f\n", st.basePos.y, expectY, tilt);
+    TST_REQUIRE(std::fabs(st.basePos.y - expectY) < 0.004);
+    TST_REQUIRE(tilt < 0.02);                               // flat foot, no tipping
+}
+
+// --- (9) capsule laid horizontal rests on both end-caps at height ~r, stays horizontal ----------
+TST_CASE(physics, unit, diff_contact_capsule_rests_horizontal) {
+    const double m = 1.0, r = 0.05, hh = 0.12, k = 3000.0, c = 30.0, g = 9.81, h = 1.0 / 4000.0;
+    const DiffModel md = capsuleBody(m, r, hh, k, c);
+    const V3<double> grav{ 0, -g, 0 };
+    DiffState<double> st = makeState<double>(md);
+    st.basePos = { 0, 0.30, 0 };
+    st.baseRot = rodrigues<double>(V3<double>{ 0, 0, 1 }, -M_PI / 2);   // local y → world x (lie flat)
+    for (int i = 0; i < 12000; ++i) diffSubstep(md, st, std::vector<double>{}, grav, h);
+    const double expectY = r - m * g / (2 * k);             // both caps share the weight
+    // the two caps' world y should be equal (axis horizontal): caps at ±hh along local y → world ±x.
+    const auto lw = linkWorld<double>(md, st);
+    std::printf("diff_capsule_rest: comY=%.4f (expect r-mg/2k=%.4f)\n", st.basePos.y, expectY);
+    TST_REQUIRE(std::fabs(st.basePos.y - expectY) < 0.004); // rests at cap radius, not sunk to COM
+    TST_REQUIRE(lw[0].pos.y > 0.0);                          // COM stays above the plane
+}

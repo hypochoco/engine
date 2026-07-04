@@ -12,20 +12,14 @@
 namespace engine::physics_env {
 
 Environment::Environment(EnvConfig config) : config_(std::move(config)) {
-    physics::WorldDef wd;
-    wd.gravity = config_.gravity;
-    wd.velocityIterations = config_.velocityIterations;
-    wd.substeps = config_.substeps;
-    wd.linearDamping = config_.linearDamping;
-    wd.angularDamping = config_.angularDamping;
-    world_ = physics::createPhysicsWorld(config_.backend, wd);
+    world_ = physics::createPhysicsWorld(config_.sim.backend, physics::toWorldDef(config_.sim));
 
-    if (config_.groundPlane) {
+    if (config_.sim.groundPlane) {
         physics::BodyDef g;
         g.type = physics::BodyType::Static;
         g.collider.type = physics::ColliderDesc::Type::Plane;
         g.collider.plane = physics::Plane{ physics::Vec3(0, 1, 0), physics::Real(0) };
-        g.material.friction = config_.groundFriction;
+        g.material.friction = config_.sim.groundFriction;
         world_->createBody(g);
     }
 
@@ -39,14 +33,14 @@ Environment::Environment(EnvConfig config) : config_(std::move(config)) {
         if (type == physics::JointType::Fixed) continue;
         const int dof = (type == physics::JointType::Ball) ? 3 : 1;
         physics::Actuator a;
-        if (config_.actionMode == ActionMode::PDTarget) {
+        if (config_.sim.actionMode == ActionMode::PDTarget) {
             a.mode = physics::ActuatorMode::PDTarget;
-            a.kp = config_.kp; a.kd = config_.kd;
+            a.kp = config_.sim.kp; a.kd = config_.sim.kd;
             a.target = physics::Real(0); a.ballTarget = physics::Quat(1, 0, 0, 0);
         } else {
             a.mode = physics::ActuatorMode::Torque;
         }
-        a.maxTorque = config_.maxTorque;
+        a.maxTorque = config_.sim.maxTorque;
         world_->setJointActuator(articulation_.joints[k], a);
         actuated_.push_back({ articulation_.joints[k], type, dof, offset });
         offset += dof;
@@ -72,7 +66,7 @@ void Environment::reset(uint64_t seed) {
     // Reset pending actuator commands to neutral (torque 0 / target = rest) so a reset episode
     // starts from rest.
     for (const ActuatedJoint& aj : actuated_) {
-        if (config_.actionMode == ActionMode::PDTarget) {
+        if (config_.sim.actionMode == ActionMode::PDTarget) {
             if (aj.type == physics::JointType::Ball) world_->setJointBallTarget(aj.handle, physics::Quat(1, 0, 0, 0));
             else                                     world_->setJointTarget(aj.handle, physics::Real(0));
         } else {
@@ -86,7 +80,7 @@ void Environment::reset(uint64_t seed) {
 }
 
 void Environment::setAction(std::span<const float> action) {
-    if (config_.actionMode == ActionMode::PDTarget) {
+    if (config_.sim.actionMode == ActionMode::PDTarget) {
         for (const ActuatedJoint& aj : actuated_) {
             if (aj.type == physics::JointType::Ball) {
                 // 3 action values = a target orientation expressed as a rotation vector.
@@ -114,7 +108,7 @@ void Environment::setAction(std::span<const float> action) {
 }
 
 void Environment::step() {
-    world_->step(config_.controlDt);
+    world_->step(config_.sim.controlDt);
     updateContactFlags();
 }
 

@@ -211,10 +211,43 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
         forward 0.70× reduced (faster); rolloutGradient ~linear in seeds (NA=21 ≈50× fwd); Jacobian 11 ms.
         Note: [2026-07-04-differentiable-reduced.md](../investigations/2026-07-04-differentiable-reduced.md)
         "Bug-hunting / hardening round".
-  - [ ] **F4 / semi-implicit contact** (deferred; the real fix): explicit soft contact is stability-limited —
-        soft-enough-to-be-stable is too soft to hold the humanoid's weight (feet penetrate ~0.1 m) and
-        aggressive actuation into contact still diverges past ~H=16–32 at the env timestep. A semi-
-        implicit/implicit contact solve decouples stiffness from h; pairs with IFT/exact contact gradients.
+  - [x] **Contact geometry + stability (F2/F3/F4) DONE** (2026-07-04), plan+results:
+        [2026-07-04-differentiable-contact-geometry.md](../investigations/2026-07-04-differentiable-contact-geometry.md).
+        (2) multi-point contact mechanism; (3) shape-aware points (capsule caps / box corners, `DiffContact::{None,Feet,All}`);
+        (4) semi-implicit contact behind `ContactIntegration` switch. Feature 3's multi-point contact conditioned the
+        humanoid so the explicit path is stable to k=8e4 ⇒ restored groundK 2.5e3→1e4 (contact penetration ~0, ragdoll
+        rests cleanly), explicit default, semi-implicit available for harder regimes. Full IMEX (M4) not needed.
+- [x] **Physics config system (P1–P3) DONE** (2026-07-04), plan+results:
+      [2026-07-04-physics-config-system.md](../investigations/2026-07-04-physics-config-system.md).
+      Centralized `SimConfig` (`include/engine/physics/config.h`) — un-buried the 10 solver constants
+      (`SolverConfig`), `WorldDef`/`EnvConfig` derive from it (no duplication); `SimConfigOverride`+
+      `resolve` sparse override layering + `configs.h` named presets; write-only `serialize`/`configHash`/
+      `dump`+`configVersion` (`config_io.h`) for run history. Value-type, no global singleton. Next steps ↓.
+
+### Config + downstream / training bring-up (next)
+- [ ] **Config: wire `dump()` into the training/VecEnv loop** — log each run's resolved config + hash
+      with its results (the actual reproducibility payoff). Gated on the training loop existing.
+- [ ] **Config: cross-engine unification** (deferred; user OK'd the two-surface split 2026-07-04) — fold
+      the diff engine's contact knobs (`DiffModel`: `groundK/C/beta/mu`, `contactIntegration`) into a shared
+      `ContactConfig` in `config.h` so ONE config covers both the RL and differentiable sims. Touches the
+      diff engine + layering; do when a single cross-engine tuning/serialization surface is needed.
+- [ ] **Config: key/value READER** — parse text → `SimConfig` for launch-time overrides / sweeps without
+      recompiling; add when the training launcher consumes config files (the writer already defines the format).
+- [ ] **Python bindings** — expose `Environment`/`VecEnv` (+ later `DiffEnvironment`) + `SimConfig` to
+      Python for the training stack: batched obs/action tensors, `reset`/`step`, config construction/override,
+      and the differentiable surfaces (`rolloutGradient`/per-step Jacobian). Both the PPO (non-diff) and
+      SHAC/hybrid (diff) routes to walking consume this. Decide binding tech (pybind11/nanobind) + build wiring.
+- [ ] **Adopt a richer humanoid model for mocap training** — replace/augment the hand-built
+      `makeHumanoid` preset with a mocap-suitable skeleton (more DOF / realistic proportions / joint limits
+      matching a motion-capture retarget target) so imitation / mocap-tracking rewards work. Keep the
+      `ArticulationDef` + converter (`articulationToDiffModel`) path so it flows to both backends + the diff engine.
+- [ ] **Integrate with the training infrastructure (built elsewhere)** — connect the engine's
+      env/config/gradient surfaces to the external trainer (reward/policy/optimizer, experiment configs,
+      logging). Define the boundary: Python bindings + config `dump()` + obs/action layout + per-step
+      Jacobian/VJP + the α-order hybrid. This is where the SHAC smoke test + PPO path actually run.
+- [ ] **Another round of testing** (post-config, pre-training) — unit/integration/benchmark/visual pass
+      focused on the config system (override/serialize/hash edge cases), the `Environment`/`VecEnv` boundary,
+      and end-to-end batched-rollout determinism/reproducibility before the training stack lands.
 - [x] contact-solve perf: **sparse LDLᵀ factorization of `H`** exploiting the DOF-ancestor tree
       (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
       reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts

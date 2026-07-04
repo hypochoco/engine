@@ -24,7 +24,7 @@ namespace {
 physics_env::EnvConfig humanoidEnv() {
     physics_env::EnvConfig c;
     c.articulation = physics::makeHumanoid();
-    c.maxTorque = 60.0f;
+    c.sim.maxTorque = 60.0f;
     return c;
 }
 

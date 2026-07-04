@@ -80,3 +80,30 @@ TST_CASE(physics, benchmark, diff_jacobian_cost) {
     const StepJacobian J = env.jacobian();
     std::printf("diff per-step Jacobian (%dx%d, %d substeps): %.3f ms/step\n", J.nState, J.nInput, env.substeps(), ms);
 }
+
+// Contact cost vs number of contact points (differentiable engine only — the production backends are
+// unaffected). Gates the contact-geometry work (features 2/3/4): ~per-contact-point cost + contact-on
+// step cost. See notes/investigations/2026-07-04-differentiable-contact-geometry.md.
+TST_CASE(physics, benchmark, diff_contact_cost) {
+    const physics::ArticulationDef def = physics::makeHumanoid();
+    const V3<double> grav{ 0, -9.81, 0 }; const double h = 1.0 / 960.0;
+
+    auto substepMs = [&](DiffModel md, int& points) {
+        points = 0;
+        for (const auto& l : md.links) { if (l.contactRadius > 0.0) ++points; points += static_cast<int>(l.contactPoints.size()); }
+        DiffState<double> st = makeState<double>(md); st.basePos = { 0, 0.99, 0 };
+        const std::vector<double> tau(static_cast<size_t>(md.ndofJoints), 0.0);
+        for (int i = 0; i < 500; ++i) diffSubstep(md, st, tau, grav, h);
+        const int N = 60000; auto t0 = Clock::now();
+        for (int i = 0; i < N; ++i) diffSubstep(md, st, tau, grav, h);
+        return std::chrono::duration<double, std::milli>(Clock::now() - t0).count() / N;
+    };
+
+    DiffModel none = articulationToDiffModel(def);
+    DiffModel feet = articulationToDiffModel(def, DiffContact::Feet);
+    DiffModel all = articulationToDiffModel(def, DiffContact::All);
+    int pn = 0, pf = 0, pa = 0;
+    const double mn = substepMs(none, pn), mf = substepMs(feet, pf), ma = substepMs(all, pa);
+    std::printf("diff contact cost: none=%.5f ms(%dpt)  feet=%.5f ms(%dpt)  all=%.5f ms(%dpt)  ~%.1f ns/point\n",
+                mn, pn, mf, pf, ma, pa, (pa > pf ? (ma - mf) / (pa - pf) * 1e6 : 0.0));
+}

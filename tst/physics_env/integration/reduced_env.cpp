@@ -26,11 +26,11 @@ namespace {
 physics_env::EnvConfig reducedHumanoid() {
     physics_env::EnvConfig c;
     c.articulation = physics::makeHumanoid();
-    c.backend = physics::Backend::Reduced;
-    c.substeps = 48;        // reduced ABA needs a fine step under strong torque; hard joint limits
+    c.sim.backend = physics::Backend::Reduced;
+    c.sim.substeps = 48;        // reduced ABA needs a fine step under strong torque; hard joint limits
                             // add constraint stiffness ⇒ finer than the pre-limit 24 (else a rare
                             // ±15-torque stream can diverge). Deterministic given fixed seeds.
-    c.maxTorque = 40.0f;
+    c.sim.maxTorque = 40.0f;
     return c;
 }
 }
@@ -94,8 +94,8 @@ TST_CASE(physics_env, integration, reduced_env_pd_target_tracks) {
     // #4: PD-target action mode — the action is a desired joint position, tracked by a PD servo.
     // Pin the pelvis and command a knee bend; the knee angle should converge to the target.
     physics_env::EnvConfig cfg = reducedHumanoid();
-    cfg.actionMode = physics_env::ActionMode::PDTarget;
-    cfg.kp = 200.0f; cfg.kd = 20.0f; cfg.maxTorque = 200.0f;
+    cfg.sim.actionMode = physics_env::ActionMode::PDTarget;
+    cfg.sim.kp = 200.0f; cfg.sim.kd = 20.0f; cfg.sim.maxTorque = 200.0f;
     cfg.articulation.bodies[0].type = physics::BodyType::Static;   // pin pelvis for a clean hold
     physics_env::Environment env(cfg);
     env.reset(0);

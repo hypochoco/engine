@@ -17,6 +17,7 @@
 #include "engine/core/memory/handle.h"
 #include "engine/physics/dynamics/body.h"
 #include "engine/physics/shapes/shapes.h"
+#include "engine/physics/config.h"
 #include "engine/physics/types.h"
 
 namespace engine::core { class ThreadPool; }
@@ -73,6 +74,9 @@ struct WorldDef {
     // Continuous collision detection: swept broadphase AABBs + speculative contacts so fast
     // bodies don't tunnel through finite colliders in one step.
     bool               continuousDetection = true;
+
+    // Solver tuning knobs (formerly hardcoded in the backends). See engine/physics/config.h.
+    SolverConfig       solver{};
 };
 
 struct ContactEvent {
@@ -196,10 +200,20 @@ public:
     virtual std::span<const ContactEvent> contacts() const = 0;
 };
 
-enum class Backend {
-    Realtime,   // maximal-coordinate sequential-impulse solver (contacts + joint constraints)
-    Reduced,    // reduced-coordinate Featherstone/ABA articulation (Phase E)
-};
+// `Backend` now lives in engine/physics/config.h (so SimConfig can reference it).
+
+// Derive a backend WorldDef from the centralized SimConfig (P1b — single source of truth for the
+// shared integration/solver knobs; the env-specific fields like actuation live in EnvConfig).
+inline WorldDef toWorldDef(const SimConfig& c) {
+    WorldDef wd;
+    wd.gravity = c.gravity;
+    wd.velocityIterations = c.velocityIterations;
+    wd.substeps = c.substeps;
+    wd.linearDamping = c.linearDamping;
+    wd.angularDamping = c.angularDamping;
+    wd.solver = c.solver;
+    return wd;
+}
 
 std::unique_ptr<PhysicsWorld> createPhysicsWorld(Backend backend, const WorldDef& def);
 

@@ -37,11 +37,7 @@
 namespace engine::physics {
 namespace {
 
-constexpr Real kBaumgarte = Real(0.2);    // position-correction fraction
-constexpr Real kSlop      = Real(0.005);  // allowed penetration before correction
-constexpr Real kMaxCorrection = Real(2);  // cap on Baumgarte correction velocity (m/s)
-constexpr Real kAabbMargin = Real(0.01);  // broadphase AABB fattening
-constexpr Real kJointBaumgarte = Real(0.2);  // joint position-drift correction fraction (no slop)
+// Contact/joint solver tuning now lives in WorldDef::solver (engine/physics/config.h) — read via def_.
 
 struct BodyData {
     Vec3            position{0};
@@ -427,7 +423,7 @@ private:
                 box.min += glm::min(d, Vec3(0));
                 box.max += glm::max(d, Vec3(0));
             }
-            box.expand(kAabbMargin);
+            box.expand(def_.solver.aabbMargin);
             finiteIdx_.push_back(i);
             finiteAabb_.push_back(box);
         }
@@ -692,8 +688,8 @@ private:
             //    gap this substep (prevents tunnelling without floating).
             Real target;
             if (c.penetration >= Real(0)) {
-                const Real baumgarte = std::min((kBaumgarte / kSubDt_) * std::max(c.penetration - kSlop, Real(0)),
-                                                kMaxCorrection);
+                const Real baumgarte = std::min((def_.solver.contactBaumgarte / kSubDt_) * std::max(c.penetration - def_.solver.contactSlop, Real(0)),
+                                                def_.solver.maxCorrection);
                 target = baumgarte + c.restitutionBias;
             } else {
                 const Real speculative = c.penetration / kSubDt_;   // = -gap/h (negative)
@@ -871,7 +867,7 @@ private:
             j.pointK = glm::inverse(K);
             const Vec3 anchorA = A.position + j.rA;
             const Vec3 anchorB = B.position + j.rB;
-            j.pointBias = (kJointBaumgarte * invH) * (anchorB - anchorA);   // drive anchors together
+            j.pointBias = (def_.solver.jointBaumgarte * invH) * (anchorB - anchorA);   // drive anchors together
 
             applyImpulse(A, B, IinvA, IinvB, j.rA, j.rB, j.pointImpulse);   // warm start (point)
 
@@ -883,7 +879,7 @@ private:
                 const Mat3 Isum = IinvA + IinvB;
                 j.kt1 = glm::dot(j.t1, Isum * j.t1);
                 j.kt2 = glm::dot(j.t2, Isum * j.t2);
-                j.angBias = (kJointBaumgarte * invH) * glm::cross(aA, aB);   // axis misalignment
+                j.angBias = (def_.solver.jointBaumgarte * invH) * glm::cross(aA, aB);   // axis misalignment
                 applyAngularImpulse(A, B, IinvA, IinvB, j.angImpulse);       // warm start (angular)
 
                 // hinge limit (B2): one-sided constraint about the axis when past a limit.
@@ -893,10 +889,10 @@ private:
                     const Real q = hingeState(j).q;
                     if (q <= j.lowerLimit) {
                         j.limitState = +1;
-                        j.limitBias = (kJointBaumgarte * invH) * (q - j.lowerLimit);   // < 0 → push up
+                        j.limitBias = (def_.solver.jointBaumgarte * invH) * (q - j.lowerLimit);   // < 0 → push up
                     } else if (q >= j.upperLimit) {
                         j.limitState = -1;
-                        j.limitBias = (kJointBaumgarte * invH) * (q - j.upperLimit);   // > 0 → push down
+                        j.limitBias = (def_.solver.jointBaumgarte * invH) * (q - j.upperLimit);   // > 0 → push down
                     }
                 }
                 if (j.limitState != 0) applyAngularImpulse(A, B, IinvA, IinvB, j.limitImpulse * j.axis);
@@ -905,7 +901,7 @@ private:
                 j.angK = glm::inverse(IinvA + IinvB);
                 const Quat qRel = glm::normalize(glm::conjugate(A.orientation) * B.orientation);
                 const Quat qErr = glm::normalize(qRel * glm::conjugate(j.refRel));  // drift, A-local
-                j.angBias = (kJointBaumgarte * invH) * (RA * so3LogMap(qErr));       // -> world
+                j.angBias = (def_.solver.jointBaumgarte * invH) * (RA * so3LogMap(qErr));       // -> world
                 applyAngularImpulse(A, B, IinvA, IinvB, j.angImpulse);
             } else {
                 j.angImpulse = Vec3(0);

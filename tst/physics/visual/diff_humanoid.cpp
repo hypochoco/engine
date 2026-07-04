@@ -132,20 +132,11 @@ TST_CASE(physics, visual, diff_humanoid) {
         else { bodyMesh[i] = sphereMesh; bodyScale[i] = colliderScale(col); }
     }
 
-    // The differentiable engine IS the simulation. Build the DiffModel and give EVERY body a ground
-    // contact sphere (radius from its collider) — not just the feet — so a collapsing, uncontrolled
-    // ragdoll piles ON the plane instead of phasing through (feet-only contact can't hold a fallen
-    // body up). Softened contact + 64 substeps for stability; passive (no torque) so it just falls
-    // and settles, like the maximal-coordinate ragdoll.
-    diff::DiffModel model = diff::articulationToDiffModel(refDef, 0.03);
-    model.contactGround = true;
-    for (size_t i = 0; i < model.links.size(); ++i) {
-        const phys::ColliderDesc& col = refDef.bodies[i].collider;
-        double r = 0.05;
-        if (col.type == phys::ColliderDesc::Type::Box) r = std::min({ col.box.halfExtents.x, col.box.halfExtents.y, col.box.halfExtents.z });
-        else if (col.type == phys::ColliderDesc::Type::Capsule) r = col.capsule.radius;
-        model.links[i].contactRadius = r;
-    }
+    // The differentiable engine IS the simulation. Contact geometry on EVERY body — shape-aware
+    // (capsule end-caps + box corners, Feature 3) so a collapsing, uncontrolled ragdoll piles ON the
+    // plane and its limbs rest at their true surface instead of clipping through. Softened contact +
+    // 64 substeps for stability; passive (no torque) so it just falls and settles.
+    diff::DiffModel model = diff::articulationToDiffModel(refDef, diff::DiffContact::All);
     diff::DiffState<double> state = diff::makeState<double>(model);
     state.basePos = { 0, 0.99, 0 };
     const diff::V3<double> gravity{ 0, -9.81, 0 };

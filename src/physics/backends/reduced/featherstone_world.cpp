@@ -198,7 +198,7 @@ class FeatherstoneWorld final : public PhysicsWorld {
 public:
     explicit FeatherstoneWorld(const WorldDef& def)
         : gravity_(def.gravity), substeps_(def.substeps > 0 ? def.substeps : 1),
-          linearDamping_(def.linearDamping), angularDamping_(def.angularDamping) {}
+          linearDamping_(def.linearDamping), angularDamping_(def.angularDamping), solver_(def.solver) {}
 
     BodyHandle createBody(const BodyDef& d) override {
         Link l;
@@ -551,7 +551,7 @@ private:
         }
         // #3 Contact-manifold reduction: keep at most the K deepest contacts per (link, plane) —
         // caps pathological counts (deeply-penetrating boxes/convex faces) while preserving support.
-        constexpr int kMaxPerManifold = 4;
+        const int kMaxPerManifold = solver_.maxContactsPerManifold;
         if (out.size() > static_cast<size_t>(kMaxPerManifold)) {
             std::stable_sort(out.begin(), out.end(), [](const Contact& a, const Contact& b) {
                 const uint32_t ga = a.key >> 6, gb = b.key >> 6;       // group = link|plane
@@ -618,7 +618,7 @@ private:
 
         struct Row { std::vector<Real> Jn, Jt1, Jt2, JnHi, Jt1Hi, Jt2Hi; Real An, At1, At2, Atc, biasN, fric; uint32_t key; Real ln = 0, l1 = 0, l2 = 0; };
         std::vector<Row> rows; rows.reserve(contacts.size());
-        constexpr Real kBeta = Real(0.2), kSlop = Real(0.001), kMaxCorr = Real(4);
+        const Real kBeta = solver_.reducedBaumgarte, kSlop = solver_.reducedSlop, kMaxCorr = solver_.reducedMaxCorrection;
         for (const Contact& c : contacts) {
             Vec3 t1, t2; basisPerp(c.normal, t1, t2);
             Row r;
@@ -649,7 +649,7 @@ private:
             lrows.push_back(std::move(lr));
         }
 
-        constexpr int kIters = 12;                                    // fewer iters: warm-started + block friction
+        const int kIters = solver_.pgsIterations;                     // warm-started + block friction
         for (int it = 0; it < kIters; ++it) {
             for (Row& r : rows) {
                 if (r.An > kEps) {                                    // normal (λ ≥ 0)
@@ -741,6 +741,7 @@ private:
     int  substeps_ = 1;
     Real linearDamping_ = 0;
     Real angularDamping_ = 0;
+    SolverConfig solver_{};
 
     bool inited_ = false;
     int  rootIndex_ = -1;

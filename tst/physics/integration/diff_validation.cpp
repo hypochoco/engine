@@ -70,7 +70,7 @@ TST_CASE(physics, integration, diff_matches_reduced_backend) {
 
 // (2) Gradient through CONTACT on the real humanoid == central finite differences.
 TST_CASE(physics, integration, diff_humanoid_contact_gradient_matches_fd) {
-    DiffEnvironment env(physics::makeHumanoid(), /*footContactRadius=*/0.03);   // feet touch the plane at reset
+    DiffEnvironment env(physics::makeHumanoid(), DiffContact::Feet);   // feet touch the plane at reset
     const int nSteps = 4;
     std::vector<double> action(static_cast<size_t>(env.actionDim()), 0.0);
     action[0] = 6.0; action[1] = -4.0; action[7] = 5.0; action[8] = -5.0;   // waist + hips
@@ -102,7 +102,7 @@ TST_CASE(physics, integration, diff_humanoid_contact_rollout_stable) {
     std::printf("diff_contact_rollout (passive drop, 5 s @ 1/60):\n");
     int bestSteps = 0; int finestSurvived = 0;
     for (int substeps : { 16, 32, 64, 128, 256 }) {
-        DiffEnvironment env(physics::makeHumanoid(), 0.03, { 0, -9.81, 0 }, 1.0 / 60.0, substeps);
+        DiffEnvironment env(physics::makeHumanoid(), DiffContact::Feet, { 0, -9.81, 0 }, 1.0 / 60.0, substeps);
         std::vector<double> act(static_cast<size_t>(env.actionDim()), 0.0);
         int survived = 0; double maxAbsY = 0; bool finite = true;
         for (int c = 0; c < 300 && finite; ++c) {
@@ -124,7 +124,7 @@ TST_CASE(physics, integration, diff_humanoid_contact_rollout_stable) {
 // exploding-gradient pathology that motivates the α-order hybrid. Reported, not asserted (beyond
 // finiteness).
 TST_CASE(physics, integration, diff_contact_gradient_vs_horizon) {
-    DiffEnvironment env(physics::makeHumanoid(), 0.03);
+    DiffEnvironment env(physics::makeHumanoid(), DiffContact::Feet);
     std::vector<double> action(static_cast<size_t>(env.actionDim()), 0.0);
     action[7] = 8.0; action[8] = -8.0;   // hips
     auto objective = [](const DiffState<Dual<2>>& st) { return st.basePos.y; };
@@ -145,15 +145,7 @@ TST_CASE(physics, integration, diff_contact_gradient_vs_horizon) {
 // that "finite but fell through the floor" no longer passes as "stable".
 TST_CASE(physics, integration, diff_humanoid_rests_on_ground) {
     const physics::ArticulationDef def = physics::makeHumanoid();
-    DiffModel md = articulationToDiffModel(def, 0.03);
-    md.contactGround = true;
-    for (size_t i = 0; i < md.links.size(); ++i) {
-        const physics::ColliderDesc& col = def.bodies[i].collider;
-        double r = 0.05;
-        if (col.type == physics::ColliderDesc::Type::Box) r = std::min({ col.box.halfExtents.x, col.box.halfExtents.y, col.box.halfExtents.z });
-        else if (col.type == physics::ColliderDesc::Type::Capsule) r = col.capsule.radius;
-        md.links[i].contactRadius = r;
-    }
+    const DiffModel md = articulationToDiffModel(def, DiffContact::All);   // shape-aware contact on every body
     DiffState<double> st = makeState<double>(md); st.basePos = { 0, 0.99, 0 };
     const V3<double> grav{ 0, -9.81, 0 }; const int substeps = 64; const double h = (1.0 / 60.0) / substeps;
     const std::vector<double> tau(static_cast<size_t>(md.ndofJoints), 0.0);
@@ -168,6 +160,29 @@ TST_CASE(physics, integration, diff_humanoid_rests_on_ground) {
     const double pelvisY = linkWorld<double>(md, st)[0].pos.y;
     std::printf("diff_rests_on_ground: finite=%d settled pelvisY=%.4f minBodyY(last 1s)=%.4f\n", finite, pelvisY, minSettledY);
     TST_REQUIRE(finite);
-    TST_REQUIRE(minSettledY > -0.1);     // rests ON the plane — no phase-through
+    TST_REQUIRE(minSettledY > -0.02);    // rests ON the plane — no phase-through (shape-aware contact)
     TST_REQUIRE(pelvisY < 0.6);          // and it did collapse (uncontrolled), not magically stand
+}
+
+// (6) Converter shape decomposition: colliders → the right contact-point sets, and DiffContact
+// modes place them on the right bodies.
+TST_CASE(physics, integration, diff_contact_decomposition) {
+    physics::ColliderDesc box; box.type = physics::ColliderDesc::Type::Box; box.box.halfExtents = { 0.05f, 0.03f, 0.12f };
+    DiffLink lb; addColliderContacts(lb, box);
+    TST_REQUIRE(lb.contactPoints.size() == 8);                         // 8 box corners
+
+    physics::ColliderDesc cap; cap.type = physics::ColliderDesc::Type::Capsule; cap.capsule = { 0.05f, 0.12f };
+    DiffLink lc; addColliderContacts(lc, cap);
+    TST_REQUIRE(lc.contactPoints.size() == 2);                         // 2 end-caps
+    TST_REQUIRE(std::fabs(lc.contactPoints[0].offset.y - 0.12) < 1e-6 && std::fabs(lc.contactPoints[0].radius - 0.05) < 1e-6);
+
+    physics::ColliderDesc sph; sph.type = physics::ColliderDesc::Type::Sphere; sph.sphere = { 0.1f };
+    DiffLink ls; addColliderContacts(ls, sph);
+    TST_REQUIRE(ls.contactPoints.size() == 1);
+
+    auto bodiesWithContact = [](const DiffModel& md) { int n = 0; for (const auto& l : md.links) if (!l.contactPoints.empty()) ++n; return n; };
+    TST_REQUIRE(bodiesWithContact(articulationToDiffModel(physics::makeHumanoid(), DiffContact::None)) == 0);
+    TST_REQUIRE(bodiesWithContact(articulationToDiffModel(physics::makeHumanoid(), DiffContact::Feet)) == 2);   // both feet
+    TST_REQUIRE(bodiesWithContact(articulationToDiffModel(physics::makeHumanoid(), DiffContact::All)) == 14);
+    std::printf("diff_contact_decomposition: box=8 capsule=2 sphere=1; feet=2 bodies, all=14 bodies\n");
 }

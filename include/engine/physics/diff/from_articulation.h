@@ -41,9 +41,38 @@ inline M3<double> colliderInertiaDiff(const physics::ColliderDesc& c, double m) 
     }
 }
 
-// `footContactRadius > 0` gives the last two bodies (feet, by makeHumanoid contract) a ground
-// contact sphere. Returns the DiffModel; the floating root is the parent-less Dynamic body.
-inline DiffModel articulationToDiffModel(const physics::ArticulationDef& def, double footContactRadius = 0.0) {
+// Ground-contact geometry generation (Feature 3): where to place contact spheres.
+//   None — no ground contact. Feet — only the last two bodies (feet, by makeHumanoid contract;
+//   the walking-RL case). All — every body (a falling/uncontrolled ragdoll rests instead of clipping).
+enum class DiffContact { None, Feet, All };
+
+// Decompose a collider into ground contact spheres in the body/COM frame (Feature 3):
+//   Sphere  → one sphere at the COM.
+//   Capsule → the two end-cap centers (long axis = local y), radius = capsule radius. Two end spheres
+//             are the exact capsule-vs-plane contact set (the cylinder rests along the segment).
+//   Box     → the 8 corners as radius-0 point contacts (bottom-face corners bear load ⇒ a flat foot
+//             rests without tipping).
+inline void addColliderContacts(DiffLink& L, const physics::ColliderDesc& c) {
+    using T = physics::ColliderDesc::Type;
+    switch (c.type) {
+        case T::Sphere: L.addContactSphere({ 0, 0, 0 }, c.sphere.radius); break;
+        case T::Capsule:
+            L.addContactSphere({ 0, static_cast<double>(c.capsule.halfHeight), 0 }, c.capsule.radius);
+            L.addContactSphere({ 0, -static_cast<double>(c.capsule.halfHeight), 0 }, c.capsule.radius);
+            break;
+        case T::Box: {
+            const double ex = c.box.halfExtents.x, ey = c.box.halfExtents.y, ez = c.box.halfExtents.z;
+            for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2)
+                L.addContactSphere({ sx * ex, sy * ey, sz * ez }, 0.0);
+            break;
+        }
+        default: L.addContactSphere({ 0, 0, 0 }, 0.05); break;   // ConvexHull etc.: crude COM proxy (TODO AABB)
+    }
+}
+
+// Convert a plain ArticulationDef into a differentiable DiffModel. `contact` selects ground-contact
+// geometry (None/Feet/All). The floating root is the parent-less Dynamic body.
+inline DiffModel articulationToDiffModel(const physics::ArticulationDef& def, DiffContact contact = DiffContact::None) {
     DiffModel md;
     md.links.resize(def.bodies.size());
     for (size_t i = 0; i < def.bodies.size(); ++i) {
@@ -73,10 +102,14 @@ inline DiffModel articulationToDiffModel(const physics::ArticulationDef& def, do
     for (size_t i = 0; i < md.links.size(); ++i) if (md.links[i].parent < 0) { root = static_cast<int>(i); break; }
     md.floating = (root >= 0 && def.bodies[static_cast<size_t>(root)].type == physics::BodyType::Dynamic);
 
-    if (footContactRadius > 0.0 && def.bodies.size() >= 2) {
+    if (contact != DiffContact::None && !def.bodies.empty()) {
         md.contactGround = true;
-        md.links[def.bodies.size() - 1].contactRadius = footContactRadius;
-        md.links[def.bodies.size() - 2].contactRadius = footContactRadius;
+        const size_t n = def.bodies.size();
+        for (size_t i = 0; i < n; ++i) {
+            const bool isFoot = (i >= n - 2);
+            if (contact == DiffContact::All || (contact == DiffContact::Feet && isFoot))
+                addColliderContacts(md.links[i], def.bodies[i].collider);
+        }
     }
     return md;
 }

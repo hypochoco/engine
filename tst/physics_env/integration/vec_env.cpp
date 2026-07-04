@@ -23,7 +23,7 @@ using namespace engine;
 TST_CASE(physics_env, integration, vec_env_parallel_determinism) {
     physics_env::EnvConfig cfg;
     cfg.articulation = physics::makeHumanoid();
-    cfg.maxTorque = 60.0f;
+    cfg.sim.maxTorque = 60.0f;
 
     constexpr size_t N = 24;
     engine::core::ThreadPool pool;

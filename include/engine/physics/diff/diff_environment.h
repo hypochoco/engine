@@ -26,10 +26,10 @@ class DiffEnvironment {
 public:
     // `substeps <= 0` (default) auto-selects: contact-enabled envs get more substeps for explicit-
     // contact stability headroom, free (no-contact) envs stay cheap. Pass an explicit count to override.
-    explicit DiffEnvironment(const physics::ArticulationDef& def, double footContactRadius = 0.0,
+    explicit DiffEnvironment(const physics::ArticulationDef& def, DiffContact contact = DiffContact::None,
                              V3<double> gravity = { 0, -9.81, 0 }, double controlDt = 1.0 / 60.0, int substeps = 0)
-        : model_(articulationToDiffModel(def, footContactRadius)), def_(def), gravity_(gravity),
-          controlDt_(controlDt), substeps_(substeps > 0 ? substeps : (footContactRadius > 0.0 ? 48 : 16)) {
+        : model_(articulationToDiffModel(def, contact)), def_(def), gravity_(gravity),
+          controlDt_(controlDt), substeps_(substeps > 0 ? substeps : (contact != DiffContact::None ? 48 : 16)) {
         root_ = rootBodyIndex(model_);
         reset();
     }
