@@ -233,10 +233,15 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       diff engine + layering; do when a single cross-engine tuning/serialization surface is needed.
 - [ ] **Config: key/value READER** — parse text → `SimConfig` for launch-time overrides / sweeps without
       recompiling; add when the training launcher consumes config files (the writer already defines the format).
-- [ ] **Python bindings** — expose `Environment`/`VecEnv` (+ later `DiffEnvironment`) + `SimConfig` to
-      Python for the training stack: batched obs/action tensors, `reset`/`step`, config construction/override,
-      and the differentiable surfaces (`rolloutGradient`/per-step Jacobian). Both the PPO (non-diff) and
-      SHAC/hybrid (diff) routes to walking consume this. Decide binding tech (pybind11/nanobind) + build wiring.
+- [~] **Python bindings** — P1 binding **drafted in `sim-1/csrc/`** (2026-07-04): nanobind `engine_py`
+      exposing the ECS-free surface — `VecEnv` (zero-copy `actions()`/`observations()` NumPy views),
+      `SimConfig` (+ `dump()`/`config_hash()`), `make_humanoid`/`make_amp_humanoid`, `EnvConfig` — plus a
+      Python adapter (`sim1/envs/engine_vecenv.py`) presenting the `VecEnv` contract (slices the obs layout
+      `pos3|quat4|linvel3|angvel3|q[ndof]|qd[ndof]|contacts[nbody]`) and mapping Python `EnvConfig` →
+      engine `SimConfig`. scikit-build-core + `ENGINE_SOURCE_DIR` escape hatch wired.
+      **BLOCKED on: (1) bumping the sim-1 engine submodule** to a commit with `config.h` + `makeAMPHumanoid`
+      (`caa5256` not yet pushed to origin), **(2) `nanobind`/`scikit-build-core` install + a C++ compile pass.**
+      SHAC/`DiffEnvironment` binding is a later add. Not compiled yet.
 - [~] **Adopt a richer humanoid model for mocap training** — plan:
       [2026-07-04-humanoid-rig-adoption.md](../investigations/2026-07-04-humanoid-rig-adoption.md).
       **Decision:** rig-agnostic engine, support BOTH rigs (existing 21-DOF `makeHumanoid` + AMP 28-DOF
