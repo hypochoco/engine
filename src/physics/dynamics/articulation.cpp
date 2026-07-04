@@ -66,6 +66,19 @@ struct HumanoidBuilder {
         return static_cast<uint32_t>(def.bodies.size() - 1);
     }
 
+    uint32_t addSphere(Vec3 pos, Real radius, Real mass) {
+        BodyDef d;
+        d.type = BodyType::Dynamic;
+        d.position = pos;
+        d.mass = mass;
+        d.collider.type = ColliderDesc::Type::Sphere;
+        d.collider.sphere = Sphere{ radius };
+        d.collisionCategory = category;
+        d.collisionMask = mask;
+        def.bodies.push_back(d);
+        return static_cast<uint32_t>(def.bodies.size() - 1);
+    }
+
     void addJoint(JointType type, uint32_t parent, uint32_t child, Vec3 jointPos,
                   Vec3 axis = Vec3(1, 0, 0), bool limit = false, Real lo = 0, Real hi = 0) {
         JointSpec s;
@@ -130,6 +143,54 @@ ArticulationDef makeHumanoid(Vec3 root, uint32_t limbCategory) {
     hb.addJoint(JointType::Revolute, thighR, shinR, at(-0.09f, 0.50f, 0.0f), Vec3(1,0,0), true, -2.5f, 0.0f); // 10 knee R
     hb.addJoint(JointType::Revolute, shinL, footL, at( 0.09f, 0.06f, 0.0f), Vec3(1,0,0), true, -0.8f, 0.8f);  // 11 ankle L
     hb.addJoint(JointType::Revolute, shinR, footR, at(-0.09f, 0.06f, 0.0f), Vec3(1,0,0), true, -0.8f, 0.8f);  // 12 ankle R
+
+    return hb.def;
+}
+
+ArticulationDef makeAMPHumanoid(Vec3 root, uint32_t limbCategory) {
+    HumanoidBuilder hb;
+    hb.category = limbCategory;
+    hb.mask = ~limbCategory;
+    // DeepMimic/AMP topology (15 bodies, 28 actuated DOF), authored in our Y-up convention from
+    // ase/data/assets/mjcf/amp_humanoid.xml (Z-up→Y-up map: ours = (amp.y, amp.z, amp.x); sole at y≈0).
+    // Masses are approximate (the MJCF is density-based; faithful mass-from-density is deferred — see
+    // notes/investigations/2026-07-04-humanoid-rig-adoption.md). Segments don't overlap; joints sit in
+    // the gaps. FEET ARE THE LAST TWO BODIES by contract. Pelvis COM model-y = 1.022 ⇒ root places it.
+    const Real dy = root.y - Real(1.022);
+    auto at = [&](float x, float y, float z) { return Vec3(root.x + x, y + dy, root.z + z); };
+
+    // --- bodies (spheres for pelvis/torso/head/hands, capsules for limbs, boxes for feet) ---
+    const uint32_t pelvis = hb.addSphere (at(0.0f,     1.022f,  0.0f),           0.12f,             10.0f);
+    const uint32_t torso  = hb.addSphere (at(0.0f,     1.238f,  0.0f),           0.11f,             14.0f);
+    const uint32_t head   = hb.addSphere (at(0.0f,     1.517f,  0.0f),           0.095f,             4.5f);
+    const uint32_t uArmR  = hb.addCapsule(at(-0.183f,  1.222f, -0.024f),  0.045f, 0.090f,            2.0f);
+    const uint32_t lArmR  = hb.addCapsule(at(-0.183f,  0.967f, -0.024f),  0.040f, 0.0675f,           1.4f);
+    const uint32_t handR  = hb.addSphere (at(-0.183f,  0.828f, -0.024f),          0.040f,            0.5f);
+    const uint32_t uArmL  = hb.addCapsule(at( 0.183f,  1.222f, -0.024f),  0.045f, 0.090f,            2.0f);
+    const uint32_t lArmL  = hb.addCapsule(at( 0.183f,  0.967f, -0.024f),  0.040f, 0.0675f,           1.4f);
+    const uint32_t handL  = hb.addSphere (at( 0.183f,  0.828f, -0.024f),          0.040f,            0.5f);
+    const uint32_t thighR = hb.addCapsule(at(-0.085f,  0.672f,  0.0f),    0.055f, 0.150f,            7.0f);
+    const uint32_t shinR  = hb.addCapsule(at(-0.085f,  0.260f,  0.0f),    0.050f, 0.155f,            3.2f);
+    const uint32_t thighL = hb.addCapsule(at( 0.085f,  0.672f,  0.0f),    0.055f, 0.150f,            7.0f);
+    const uint32_t shinL  = hb.addCapsule(at( 0.085f,  0.260f,  0.0f),    0.050f, 0.155f,            3.2f);
+    const uint32_t footR  = hb.addBox    (at(-0.085f,  0.0275f, 0.045f),  Vec3(0.045f, 0.0275f, 0.0885f), 1.0f);
+    const uint32_t footL  = hb.addBox    (at( 0.085f,  0.0275f, 0.045f),  Vec3(0.045f, 0.0275f, 0.0885f), 1.0f);
+
+    // --- joints (28 DOF): ball abdomen/neck/shoulders/hips/ankles, hinge elbows/knees, fixed wrists ---
+    hb.addJoint(JointType::Ball,     pelvis, torso,  at(0.0f,    1.118f,  0.0f));                                    // abdomen (3)
+    hb.addJoint(JointType::Ball,     torso,  head,   at(0.0f,    1.342f,  0.0f));                                    // neck (3)
+    hb.addJoint(JointType::Ball,     torso,  uArmR,  at(-0.183f, 1.362f, -0.024f));                                  // shoulder R (3)
+    hb.addJoint(JointType::Revolute, uArmR,  lArmR,  at(-0.183f, 1.087f, -0.024f), Vec3(1,0,0), true, 0.0f,  2.6f);  // elbow R (1)
+    hb.addJoint(JointType::Fixed,    lArmR,  handR,  at(-0.183f, 0.828f, -0.024f));                                  // wrist R (0)
+    hb.addJoint(JointType::Ball,     torso,  uArmL,  at( 0.183f, 1.362f, -0.024f));                                  // shoulder L (3)
+    hb.addJoint(JointType::Revolute, uArmL,  lArmL,  at( 0.183f, 1.087f, -0.024f), Vec3(1,0,0), true, 0.0f,  2.6f);  // elbow L (1)
+    hb.addJoint(JointType::Fixed,    lArmL,  handL,  at( 0.183f, 0.828f, -0.024f));                                  // wrist L (0)
+    hb.addJoint(JointType::Ball,     pelvis, thighR, at(-0.085f, 0.882f,  0.0f));                                    // hip R (3)
+    hb.addJoint(JointType::Revolute, thighR, shinR,  at(-0.085f, 0.460f,  0.0f),   Vec3(1,0,0), true, -2.6f, 0.0f);  // knee R (1)
+    hb.addJoint(JointType::Ball,     shinR,  footR,  at(-0.085f, 0.050f,  0.0f));                                    // ankle R (3)
+    hb.addJoint(JointType::Ball,     pelvis, thighL, at( 0.085f, 0.882f,  0.0f));                                    // hip L (3)
+    hb.addJoint(JointType::Revolute, thighL, shinL,  at( 0.085f, 0.460f,  0.0f),   Vec3(1,0,0), true, -2.6f, 0.0f);  // knee L (1)
+    hb.addJoint(JointType::Ball,     shinL,  footL,  at( 0.085f, 0.050f,  0.0f));                                    // ankle L (3)
 
     return hb.def;
 }

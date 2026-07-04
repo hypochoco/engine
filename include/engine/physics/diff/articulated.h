@@ -48,6 +48,11 @@ struct DiffLink {
     // back-compat); `contactPoints` adds arbitrary link-local spheres. The effective set is the union.
     double                     contactRadius = 0.0;
     std::vector<ContactSphere> contactPoints;
+    // Per-joint actuation-independent properties (for authoring MJCF/URDF-style rigs). All default to a
+    // no-op so existing models are unchanged; applied to each of the joint's DOFs.
+    double jointDamping   = -1.0;   // viscous τ = −b·q̇; <0 ⇒ inherit DiffModel::jointDamping
+    double jointStiffness = 0.0;    // passive spring τ = −k·q pulling the joint toward its rest pose
+    double armature       = 0.0;    // rotor/reflected inertia added to the joint-space inertia diagonal
     void addContactSphere(V3<double> offset, double radius) { contactPoints.push_back({ offset, radius }); }
 };
 struct DiffModel {
@@ -257,8 +262,17 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
         const int dof = L.dof;
         if (dof > 0) {
             S D[9];
-            for (int aa = 0; aa < dof; ++aa) { U[i][aa] = IA[i] * Scol[i][aa]; uv[i][aa] = tau[static_cast<size_t>(L.qIndex + aa)] - S(md.jointDamping) * st.qd[static_cast<size_t>(L.qIndex + aa)] - dot(Scol[i][aa], pA[i]); }
+            const double bEff = (L.jointDamping >= 0.0) ? L.jointDamping : md.jointDamping;   // per-joint damping or inherited global
+            V3<S> rotvec = zeroV3<S>();
+            if (L.jointStiffness != 0.0) rotvec = vee(st.linkRot[static_cast<size_t>(i)]);   // sinθ·axis: smooth, zero at rest (passive spring)
+            for (int aa = 0; aa < dof; ++aa) {
+                U[i][aa] = IA[i] * Scol[i][aa];
+                S gen = tau[static_cast<size_t>(L.qIndex + aa)] - S(bEff) * st.qd[static_cast<size_t>(L.qIndex + aa)];
+                if (L.jointStiffness != 0.0) gen = gen - S(L.jointStiffness) * dot(rotvec, lift<S>(L.axes[aa]));   // −k·q toward rest
+                uv[i][aa] = gen - dot(Scol[i][aa], pA[i]);
+            }
             for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) D[aa * dof + bb] = dot(Scol[i][aa], U[i][bb]);
+            if (L.armature != 0.0) for (int aa = 0; aa < dof; ++aa) D[aa * dof + aa] = D[aa * dof + aa] + S(L.armature);   // rotor/reflected inertia
             S Di[9]; invertSmall(D, dof, Di);
             for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) Dinv[i][static_cast<size_t>(aa * 3 + bb)] = Di[aa * dof + bb];
             for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) Ia = Ia - outerScaled(U[i][aa], U[i][bb], Di[aa * dof + bb]);

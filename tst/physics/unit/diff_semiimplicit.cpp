@@ -152,3 +152,77 @@ TST_CASE(physics, unit, diff_semiimplicit_deterministic) {
     std::printf("diff_semi_determinism: |dx|=%.2e |dy|=%.2e\n", dx, dy);
     TST_REQUIRE(dx == 0.0 && dy == 0.0);
 }
+
+// ================= Per-joint properties (rig-agnostic; for authoring MJCF/URDF-style rigs) =========
+
+// --- (F) Per-joint damping overrides the model-global jointDamping (<0 ⇒ inherit). ----------------
+TST_CASE(physics, unit, diff_joint_damping_per_link) {
+    auto ratio = [](double linkB, double modelB) {
+        DiffModel md = pendulum(); md.jointDamping = modelB; md.links[1].jointDamping = linkB;
+        DiffState<double> st = makeState<double>(md);
+        st.linkRot[1] = rodrigues<double>(V3<double>{ 0, 0, 1 }, M_PI / 2);   // released horizontal
+        const V3<double> grav{ 0, -9.81, 0 }; const double datum = -0.6;
+        const double E0 = energy(md, st, 9.81, datum);
+        for (int i = 0; i < 2400; ++i) diffSubstep(md, st, std::vector<double>{ 0.0 }, grav, 1.0 / 240.0);
+        return energy(md, st, 9.81, datum) / E0;
+    };
+    const double perLink = ratio(0.5, 0.0);    // link damps, model-global off
+    const double global  = ratio(-1.0, 0.5);   // link inherits (−1), model-global damps
+    const double none    = ratio(-1.0, 0.0);   // link inherits, model-global off
+    std::printf("diff_per_link_damping: perLink(b_link=0.5)=%.4f  global(inherit,b_model=0.5)=%.4f  none=%.4f\n",
+                perLink, global, none);
+    TST_REQUIRE(std::fabs(perLink - global) < 0.02);   // a per-link b matches the same b applied globally
+    TST_REQUIRE(perLink < 0.5 && none > 0.9);          // damping dissipates; inherit-0 ~conserves
+}
+
+// --- (G) Passive joint stiffness pulls the joint back to its rest pose. ---------------------------
+TST_CASE(physics, unit, diff_joint_stiffness_restores_to_rest) {
+    auto finalSin = [](double k, double b) {
+        DiffModel md = pendulum(); md.links[1].jointStiffness = k; md.links[1].jointDamping = b;
+        DiffState<double> st = makeState<double>(md);
+        st.linkRot[1] = rodrigues<double>(V3<double>{ 0, 0, 1 }, 0.6);   // displaced 0.6 rad from rest
+        const V3<double> grav{ 0, 0, 0 };                                // NO gravity: isolate the spring
+        for (int i = 0; i < 2400; ++i) diffSubstep(md, st, std::vector<double>{ 0.0 }, grav, 1.0 / 240.0);
+        return vee(st.linkRot[1]).z;                                     // sinθ (≈ joint angle)
+    };
+    const double withSpring = finalSin(20.0, 1.0);   // stiff + damped → returns to rest
+    const double noSpring   = finalSin(0.0, 1.0);    // no spring → stays displaced (damping can't restore)
+    std::printf("diff_stiffness_restore: sin(theta) final  withSpring=%.4f  noSpring=%.4f (start=%.4f)\n",
+                withSpring, noSpring, std::sin(0.6));
+    TST_REQUIRE(std::fabs(withSpring) < 0.02);                          // spring pulled the joint back to rest
+    TST_REQUIRE(std::fabs(noSpring - std::sin(0.6)) < 0.02);            // without a spring it stays put
+}
+
+// --- (H) Armature adds rotor/reflected inertia: tau/qddot = I_eff + armature (exact). --------------
+TST_CASE(physics, unit, diff_armature_adds_rotor_inertia) {
+    auto qddot = [](double armature) {
+        DiffModel md = pendulum(); md.links[1].armature = armature;
+        DiffState<double> st = makeState<double>(md);                   // at rest
+        const Accel<double> a = diffForwardDynamics(md, st, std::vector<double>{ 3.0 }, V3<double>{ 0, 0, 0 });
+        return a.qddot[0];
+    };
+    const double a0 = qddot(0.0), aA = qddot(0.05);
+    const double Ieff0 = 3.0 / a0, IeffA = 3.0 / aA;
+    std::printf("diff_armature: qddot 0=%.4f 0.05=%.4f  I_eff %.4f->%.4f (delta=%.6f, expect 0.05)\n",
+                a0, aA, Ieff0, IeffA, IeffA - Ieff0);
+    TST_REQUIRE(aA < a0);                                               // armature reduces acceleration
+    TST_REQUIRE(std::fabs((IeffA - Ieff0) - 0.05) < 1e-9);              // exact rotor-inertia add to the joint-space inertia
+}
+
+// --- (I) Passive stiffness stays differentiable (uses vee ⇒ smooth): gradient == FD. --------------
+TST_CASE(physics, unit, diff_joint_stiffness_differentiable) {
+    DiffModel md = pendulum(); md.links[1].jointStiffness = 15.0; md.links[1].jointDamping = 0.2;
+    const V3<double> grav{ 0, -9.81, 0 }; const double h = 1.0 / 1000.0; const int steps = 150;
+    const double qd0 = 0.5;
+    DiffState<Dual<1>> sd = makeState<Dual<1>>(md); sd.qd[0] = Dual<1>::seed(qd0, 0);
+    for (int i = 0; i < steps; ++i) diffSubstep(md, sd, std::vector<Dual<1>>{ Dual<1>(0) }, grav, h);
+    const double ad = vee(sd.linkRot[1]).z.d[0];
+    auto finalSin = [&](double qd) {
+        DiffState<double> st = makeState<double>(md); st.qd[0] = qd;
+        for (int i = 0; i < steps; ++i) diffSubstep(md, st, std::vector<double>{ 0.0 }, grav, h);
+        return vee(st.linkRot[1]).z;
+    };
+    const double eps = 1e-6, fd = (finalSin(qd0 + eps) - finalSin(qd0 - eps)) / (2 * eps);
+    std::printf("diff_stiffness_grad: d(sinθ)/d(qd0) AD=%.8f FD=%.8f\n", ad, fd);
+    TST_REQUIRE(std::fabs(ad - fd) < 1e-6);
+}

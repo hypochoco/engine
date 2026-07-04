@@ -56,4 +56,12 @@ Articulation buildArticulation(PhysicsWorld& world, const ArticulationDef& def);
 // `rootPosition` places the pelvis (model-space pelvis height 0.99 ⇒ root=(0,0.99,0) stands on y=0).
 ArticulationDef makeHumanoid(Vec3 rootPosition = Vec3(0, 0.99f, 0), uint32_t limbCategory = 0x0002);
 
+// DeepMimic/AMP humanoid preset (the physics-RL standard rig): 15 bodies (pelvis, torso, head,
+// L/R upper+lower arm + hand, L/R thigh+shin+foot) + 14 joints / 28 actuated DOF — ball
+// abdomen/neck/shoulders/hips/ankles, hinge elbows/knees, fixed wrists (hands are rigid tips).
+// Authored in our Y-up convention from ase/data/assets/mjcf/amp_humanoid.xml (masses approximate;
+// see notes/investigations/2026-07-04-humanoid-rig-adoption.md). FEET ARE THE LAST TWO BODIES.
+// Coexists with makeHumanoid — the engine is rig-agnostic (rigs are ArticulationDef data).
+ArticulationDef makeAMPHumanoid(Vec3 rootPosition = Vec3(0, 1.022f, 0), uint32_t limbCategory = 0x0002);
+
 } // namespace engine::physics

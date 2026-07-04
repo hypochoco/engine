@@ -237,13 +237,23 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       Python for the training stack: batched obs/action tensors, `reset`/`step`, config construction/override,
       and the differentiable surfaces (`rolloutGradient`/per-step Jacobian). Both the PPO (non-diff) and
       SHAC/hybrid (diff) routes to walking consume this. Decide binding tech (pybind11/nanobind) + build wiring.
-- [ ] **Adopt a richer humanoid model for mocap training** — replace/augment the hand-built
-      `makeHumanoid` preset with a mocap-suitable skeleton (more DOF / realistic proportions / joint limits
-      matching a motion-capture retarget target) so imitation / mocap-tracking rewards work. Keep the
-      `ArticulationDef` + converter (`articulationToDiffModel`) path so it flows to both backends + the diff engine.
-      Also the natural point to add **per-joint / per-contact heterogeneity** — today `DiffModel::jointDamping`
-      and `groundK/C/mu` are global-per-model; a richer model wants per-joint damping (stiff ankle vs loose
-      shoulder) + per-body contact material (grippy feet). Promote those scalars to `DiffLink`/`ContactSphere` then.
+- [~] **Adopt a richer humanoid model for mocap training** — plan:
+      [2026-07-04-humanoid-rig-adoption.md](../investigations/2026-07-04-humanoid-rig-adoption.md).
+      **Decision:** rig-agnostic engine, support BOTH rigs (existing 21-DOF `makeHumanoid` + AMP 28-DOF
+      `makeAMPHumanoid`, SMPL later) — rigs are `ArticulationDef` data, selectable per experiment; only
+      trained weights + retarget config are per-rig.
+      **DONE (2026-07-04): rig-agnostic per-joint physics features** in the diff engine (`DiffLink`):
+      per-joint `jointDamping` (<0 inherits the model global), passive `jointStiffness` (smooth `vee`
+      spring toward rest), and `armature` (rotor inertia on the joint-space diagonal). Tests
+      diff_joint_damping_per_link / _stiffness_restores_to_rest / _armature_adds_rotor_inertia /
+      _stiffness_differentiable (146/0). Defaults are no-ops (existing models unchanged).
+      **DONE (2026-07-04): `makeAMPHumanoid()`** authored (15 bodies / 28 DOF AMP topology, Y-up, feet-last)
+      in `articulation.cpp`; validated headless (`tst/physics/integration/amp_humanoid.cpp`: 15 bodies /
+      28 DOF / floating, converts to DiffModel, passive drop rests on the plane) + windowed visual
+      `tst/physics/visual/amp_humanoid.cpp` (passive ragdoll via the diff engine, per-collider meshes).
+      **TODO (deferred):** faithful mass-from-density + per-joint stiffness/damping/armature from the MJCF;
+      obs/act 21→28 ripple validation for training; offline poselib retargeting → reference clips;
+      reduced-backend parity. Reference assets: `~/Projects/research/humanoid-motion/ASE/ase/`.
 - [ ] **Integrate with the training infrastructure (built elsewhere)** — connect the engine's
       env/config/gradient surfaces to the external trainer (reward/policy/optimizer, experiment configs,
       logging). Define the boundary: Python bindings + config `dump()` + obs/action layout + per-step
