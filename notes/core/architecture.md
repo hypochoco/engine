@@ -10,6 +10,10 @@ Last synced with code: 2026-07-03.
   `cmake -S . -B build` would otherwise be unoptimized (no `-O`/`NDEBUG`), which runs physics
   ~20-50× slower and makes interactive visuals stutter/slow-mo. Override with
   `-DCMAKE_BUILD_TYPE=Debug`. (Multi-config generators pick per-build.)
+- **Headless training build:** `-DENGINE_TRAINING_ONLY=ON` builds only the ECS-free sim surface
+  (`core + physics + physics_env`) and skips the graphics stack (RHI/Metal/Vulkan), GLFW, shaders,
+  and the test/visual runners — so the Python binding (`engine::training` aggregate) links clean on a
+  GPU/display-less Linux box. Default (`OFF`) is the full dev build (`engine::engine`).
 - Split `include/` (public headers) vs `src/` (implementation).
 - Per-module build files live under a single top-level **`modules/`** dir (`modules/<name>/
   CMakeLists.txt`, aggregated by `modules/CMakeLists.txt`), separate from their source under

@@ -5,12 +5,16 @@
 # only the per-module build files.
 
 add_subdirectory(core)
-add_subdirectory(input)
-add_subdirectory(input_glfw)
-add_subdirectory(ecs)
-add_subdirectory(controls)
-add_subdirectory(graphics)
-add_subdirectory(scene)
 add_subdirectory(physics)
-add_subdirectory(physics_ecs)
 add_subdirectory(physics_env)
+
+# Graphics / ECS / input modules — not needed for a headless training build.
+if(NOT ENGINE_TRAINING_ONLY)
+    add_subdirectory(input)
+    add_subdirectory(input_glfw)
+    add_subdirectory(ecs)
+    add_subdirectory(controls)
+    add_subdirectory(graphics)
+    add_subdirectory(scene)
+    add_subdirectory(physics_ecs)
+endif()

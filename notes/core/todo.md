@@ -74,7 +74,7 @@ Qt/other later) and headless/ML use:
   Full reviewed plan (grounded in the solver + checked vs core goals) in the milestone plan
   §"Phase B — APPROVED PLAN". Joints = persistent velocity constraints in the same solver loop
   as contacts, warm-started across steps; **per-world, allocation-free, no statics** (VecEnv-safe).
-- [ ] **B1 Joint constraints core** ← IN PROGRESS: `JointHandle`/`JointType{Ball,Revolute,Fixed}`/
+- [x] **B1 Joint constraints core** ✅ (2026-07-03): `JointHandle`/`JointType{Ball,Revolute,Fixed}`/
       `JointDef` + `createJoint`/`destroyJoint` in `world.h`; persistent `joints_` store +
       serial warm-started solve (ball = point-to-point 3×3 K; hinge = point + 2 angular; fixed =
       point + 3 angular lock) + Baumgarte. Tests: ball anchors coincide, hinge off-axis ≈ 0,
@@ -263,9 +263,27 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       env/config/gradient surfaces to the external trainer (reward/policy/optimizer, experiment configs,
       logging). Define the boundary: Python bindings + config `dump()` + obs/action layout + per-step
       Jacobian/VJP + the α-order hybrid. This is where the SHAC smoke test + PPO path actually run.
-- [ ] **Another round of testing** (post-config, pre-training) — unit/integration/benchmark/visual pass
+- [~] **Another round of testing** (post-config, pre-training) — unit/integration/benchmark/visual pass
       focused on the config system (override/serialize/hash edge cases), the `Environment`/`VecEnv` boundary,
       and end-to-end batched-rollout determinism/reproducibility before the training stack lands.
+      **PARTIAL (2026-07-04):** AMP-rig-through-`physics_env::VecEnv` integration test added
+      (`tst/physics_env/integration/amp_vecenv.cpp` — dims 28/84 on both backends, sound passive + gently-
+      actuated rollout, parallel==serial bit-identical). Remaining: config override/serialize/hash edge cases
+      + wiring `dump()` into a rollout and asserting run-to-run reproducibility.
+- [x] **Graphics-free (headless) training build** — DONE (2026-07-04). `ENGINE_TRAINING_ONLY` CMake option
+      builds ONLY `core + physics + physics_env` (skips graphics/RHI/GLFW/Metal/Vulkan/shaders/tests) + an
+      `engine::training` INTERFACE aggregate for the binding to link. Verified: training-only configure+build
+      on macOS produces just `libengine_{core,physics,physics_env}.a` (+ tinyobj), no graphics/GLFW — so the
+      Python binding links clean on a GPU/display-less Linux box (no `.mm` in the training modules). sim-1
+      `csrc` now links `engine::training` and configures the engine with `ENGINE_TRAINING_ONLY=ON`.
+- [ ] **RSI (reference-state init) via the binding** — expose per-env arbitrary-state reset (not just the
+      authored pose; incl. fallen states) through `Environment::setBodyState` + the reset hook. Not needed
+      for PPO balance/walk (P1–P2); REQUIRED for tracking/imitation (SuperTrack-style, P3–P4).
+- [ ] **Richer observation surface for tracking** — expose per-link root-local positions/velocities +
+      6D rotations (the SuperTrack feature set) beyond the default packer; the engine has the raw data
+      (`links()`/`jointStates()`), the binding just needs to surface it. Add when P3 (tracking) starts.
+- [ ] **`DiffEnvironment` binding for SHAC** — wrap `jacobian()`/`rolloutGradient()` as a torch
+      autograd Function (custom VJP) for the analytic policy gradient. Deliberately after the PPO baseline (P3).
 - [x] **Deep-dive testing: semi-implicit contact + contact force model** (2026-07-04). Report:
       [2026-07-04-diff-semiimplicit-testing.md](../investigations/2026-07-04-diff-semiimplicit-testing.md).
       Added `tst/physics/unit/diff_semiimplicit.cpp` (adhesion probe / smooth-dynamics damping / freefall
@@ -419,12 +437,11 @@ details in the refactor investigation):
 ## Compute / ML
 
 - [ ] **Compute pipeline + compute-queue support.** Needed for ML workloads and some
-      rendering; only graphics pipelines exist today.
-- [ ] **Parallel environment stepping / batching** for training throughput. → concretized by
-      Milestone 2 **Phase D** (`Environment`/`VecEnv` over parallel `PhysicsWorld`s + SoA
-      obs/action tensors). Foundation exists (parallel worlds, 7.7×).
-- [ ] **Determinism review** for reproducible training. → Milestone 2 **Phase D** (end-to-end
-      batched-rollout determinism); intra-world stepping is already bit-identical serial↔parallel.
+      rendering; only graphics pipelines exist today. (Not needed for CPU training — the sim is CPU-bound.)
+- [x] **Parallel environment stepping / batching** for training throughput. DONE via Milestone 2 **Phase D**
+      (`Environment`/`VecEnv` over parallel `PhysicsWorld`s + SoA obs/action tensors; ~8.7k→68.7k env-steps/s).
+- [x] **Determinism review** for reproducible training. DONE via **Phase D** (end-to-end batched-rollout
+      determinism, parallel==serial bit-identical) + the AMP-rig VecEnv determinism test.
 
 ## Physics
 
@@ -432,7 +449,7 @@ Plan (all 8 decisions settled): [2026-07-03-physics-plan.md](../investigations/2
 Multi-backend behind a **runtime-virtual** `PhysicsWorld`; shared collision/broadphase
 substrate; realtime (impulse) + implicit/**differentiable** backends; rotational dynamics.
 
-- [~] **Simulation core.** **Phase 0 + Phase 1 DONE** (2026-07-03): ECS-free `engine::physics`
+- [x] **Simulation core.** **Phase 0 + Phase 1 DONE** (2026-07-03): ECS-free `engine::physics`
       core (shapes, exact contacts, rigid-body state + inertia, pure integration kernels incl.
       SO(3) exp/log) + the runtime-virtual **`PhysicsWorld` interface** + a **realtime
       sequential-impulse backend** (restitution/friction/Baumgarte, substeps, rotation) + the
@@ -453,17 +470,16 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       instead of braking the approach — see
       [2026-07-03-physics-test-findings.md](../investigations/2026-07-03-physics-test-findings.md)).
       Phase 2 + collision polish complete; tests live under `tst/physics/{unit,integration,
-      benchmark,visual}/`. Phase 3 (deferred): implicit/differentiable
-      backend + parallel-world ML harness.
+      benchmark,visual}/`. **Phase 3 DONE** (2026-07-04): reduced-coordinate (Phase E) +
+      differentiable (Phase F) backends + the parallel-world ML harness (Phase D `VecEnv`).
 - [x] **How physics state maps onto ECS components.** DECIDED (2026-07-03): backend owns
       packed state; ECS holds `RigidBody{BodyHandle}` (no pose) + keeps `Transform` separate
       (no replacement/inheritance); a `physics_ecs` bridge syncs world poses → Transform. ML
       path omits Transform entirely. (physics-plan Q2/Q3)
-- [ ] **Articulated bodies / joints + actuators** (Milestone 2, Phase B). Joint constraints
-      (ball/hinge/limits) + PD/torque actuators + articulation builder + humanoid preset. Big
-      open decision: maximal-coord constraints (reuse the impulse solver) vs reduced-coord
-      Featherstone/ABA (RL-grade, differentiable-friendly). Needs a design doc first. See
-      [2026-07-03-humanoid-rl-milestone-plan.md](../investigations/2026-07-03-humanoid-rl-milestone-plan.md).
+- [x] **Articulated bodies / joints + actuators** — DONE (2026-07-04) via Milestone-2 **Phase B**
+      (maximal-coord joints/limits/actuators + humanoid preset), **Phase E** (reduced-coord Featherstone
+      backend), and **Phase F** (differentiable). Both `makeHumanoid` (21 DOF) and `makeAMPHumanoid`
+      (28 DOF) rigs. See the Phase B/E/F entries above.
 - [ ] **Terrain collision** (Milestone 2, Phase C) — ⏸ **DEFERRED** (2026-07-03): flat `Plane`
       suffices for the humanoid for now. Heightfield collider + narrowphase; general concave
       triangle-mesh collider (decomposition or per-triangle+BVH+edge-filtering) is a separate

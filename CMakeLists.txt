@@ -20,11 +20,15 @@ endif()
 # matrices are consistent everywhere they're built (Camera::projectionMatrix, tests, ...).
 add_compile_definitions(GLM_FORCE_DEPTH_ZERO_TO_ONE)
 
+# Headless TRAINING build: only the ECS-free sim surface (core + physics + physics_env). Skips the
+# graphics stack (RHI/Metal/Vulkan), GLFW, shaders, and the test/visual runners — so the Python
+# binding links clean on a headless Linux box with no GPU/display SDK. Full dev build stays the default.
+option(ENGINE_TRAINING_ONLY "Build only the headless training surface (core+physics+physics_env)" OFF)
+
 # external dependencies
 find_package(glm REQUIRED)
 find_package(Threads REQUIRED)
-add_subdirectory(external/glfw)
-add_subdirectory(external/tinyobjloader)
+add_subdirectory(external/tinyobjloader)   # linked by engine::core
 
 add_library(stb INTERFACE)
 add_library(stb::stb ALIAS stb)
@@ -32,42 +36,59 @@ target_include_directories(stb INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/external/stb
 )
 
-if(APPLE)
-    message(STATUS "Apple platform detected. Configuring for Metal Backend.")
-    enable_language(OBJC)     # keep .m (e.g. GLFW's) as Objective-C
-    enable_language(OBJCXX)   # for the .mm CAMetalLayer/window shim
-    find_library(METAL_FRAMEWORK Metal REQUIRED)
-    find_library(QUARTZ_FRAMEWORK QuartzCore REQUIRED)
-    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
-    find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
+if(NOT ENGINE_TRAINING_ONLY)
+    add_subdirectory(external/glfw)
+    if(APPLE)
+        message(STATUS "Apple platform detected. Configuring for Metal Backend.")
+        enable_language(OBJC)     # keep .m (e.g. GLFW's) as Objective-C
+        enable_language(OBJCXX)   # for the .mm CAMetalLayer/window shim
+        find_library(METAL_FRAMEWORK Metal REQUIRED)
+        find_library(QUARTZ_FRAMEWORK QuartzCore REQUIRED)
+        find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+        find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
+    else()
+        message(STATUS "Non-Apple platform detected. Configuring for Vulkan Backend.")
+        find_package(Vulkan REQUIRED)
+    endif()
 else()
-    message(STATUS "Non-Apple platform detected. Configuring for Vulkan Backend.")
-    find_package(Vulkan REQUIRED)
+    message(STATUS "ENGINE_TRAINING_ONLY=ON — headless build (core+physics+physics_env), skipping graphics/GLFW/shaders/tests.")
 endif()
 
 # engine modules
 add_subdirectory(modules)
 
-# shaders (compiled via slangc)
-add_subdirectory(src/shaders)
+if(NOT ENGINE_TRAINING_ONLY)
+    # shaders (compiled via slangc)
+    add_subdirectory(src/shaders)
 
-# tests
-enable_testing()
-add_subdirectory(tst)
+    # tests
+    enable_testing()
+    add_subdirectory(tst)
+endif()
 
-# engine meta target
-add_library(engine INTERFACE)
-add_library(engine::engine ALIAS engine)
-
-target_link_libraries(engine INTERFACE
+# Graphics-free aggregate for headless training / the Python binding — always available.
+add_library(engine_training INTERFACE)
+add_library(engine::training ALIAS engine_training)
+target_link_libraries(engine_training INTERFACE
     engine::core
-    engine::input
-    engine::input_glfw
-    engine::controls
-    engine::ecs
-    engine::graphics
-    engine::scene
     engine::physics
-    engine::physics_ecs
     engine::physics_env
 )
+
+# Full engine meta target (everything, incl. graphics) — only in a full dev build.
+if(NOT ENGINE_TRAINING_ONLY)
+    add_library(engine INTERFACE)
+    add_library(engine::engine ALIAS engine)
+    target_link_libraries(engine INTERFACE
+        engine::core
+        engine::input
+        engine::input_glfw
+        engine::controls
+        engine::ecs
+        engine::graphics
+        engine::scene
+        engine::physics
+        engine::physics_ecs
+        engine::physics_env
+    )
+endif()
