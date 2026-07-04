@@ -171,8 +171,12 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       throughput benchmark reduced vs maximal (~2× slower/step — dense H⁻¹ contact solve dominates;
       reduced needs finer substeps under strong torque). **Phase E COMPLETE.**
 - [ ] (later) differentiability / analytic gradients on top of the reduced model.
-- [ ] (later) contact-solve perf: sparse/factored `H` instead of dense O(ndof³) inverse; Ball q/qd
-      readout in `JointState` (multi-DOF observation).
+- [x] contact-solve perf: **sparse LDLᵀ factorization of `H`** exploiting the DOF-ancestor tree
+      (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
+      reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts
+      are many, the **PGS** dominates instead — future lever: block/Delassus PGS.
+- [ ] (later) Ball q/qd readout in `JointState` (multi-DOF observation).
+- [ ] (later) contact-solve perf II: block/Delassus PGS (dominant when many contacts).
 
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 

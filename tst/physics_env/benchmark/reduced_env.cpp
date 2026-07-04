@@ -48,3 +48,27 @@ TST_CASE(physics_env, benchmark, reduced_vs_maximal_throughput) {
     run("maximal", physics::Backend::Realtime, pool);
     run("reduced", physics::Backend::Reduced, pool);
 }
+
+// Focused: a single reduced humanoid resting on the ground (contacts active) — isolates the
+// contact-solve cost that the sparse-H optimization targets. ms/step, contacts vs no contacts.
+TST_CASE(physics_env, benchmark, reduced_contact_step_cost) {
+    auto measure = [](bool ground) {
+        physics_env::EnvConfig cfg;
+        cfg.articulation = physics::makeHumanoid();   // pelvis at 0.99 ⇒ feet touch the plane
+        cfg.backend = physics::Backend::Reduced;
+        cfg.substeps = 16;
+        cfg.groundPlane = ground;
+        physics_env::Environment env(cfg);
+        env.reset(0);
+        for (int i = 0; i < 120; ++i) env.step();      // settle
+        const int kSteps = 3000;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < kSteps; ++i) env.step();
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / kSteps;
+        return ms;
+    };
+    const double withGround = measure(true);
+    const double noGround   = measure(false);
+    std::printf("reduced humanoid step cost: contacts=%.4f ms  no-contacts=%.4f ms  contact-solve=%.4f ms/step\n",
+                withGround, noGround, withGround - noGround);
+}

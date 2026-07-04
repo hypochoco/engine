@@ -202,3 +202,23 @@ contacts, fixed/floating base, revolute/ball/fixed joints, torque/PD actuation) 
 `PhysicsWorld`/`Environment`/`VecEnv` API, running the humanoid deterministically in parallel batches.
 Remaining future work: contact-solve perf (sparse `H`), Ball q/qd readout in `JointState` (multi-DOF
 observation), and differentiability on the reduced model.
+
+## Sparse-H contact optimization (2026-07-04) — DONE
+
+The contact solve inverted the dense joint-space inertia `H` every substep (O(ndof³) Gauss-Jordan) —
+baseline profiling showed the contact solve was **~0.81 ms of a 0.89 ms step (92%)** for a humanoid
+on the ground. Replaced with a **sparse LDLᵀ factorization** exploiting the DOF-ancestor tree:
+- `dofParent_` (built in `ensureInit`): base DOFs chain `0←…←5`; each joint DOF's parent is the
+  previous DOF in its joint or the nearest ancestor DOF (skipping DOF-less fixed joints).
+- `factorizeSparse` — `H = Mᵀ D M` with `M` unit-lower-triangular whose fill follows the tree; only
+  ancestor entries are touched (~O(ndof·depth²) vs O(ndof³)). Falls back to the dense inverse on a
+  non-positive pivot or if the DOF order isn't a valid elimination order.
+- `solveSparse` — sparse forward/diagonal/backward substitution over ancestor chains for
+  `H⁻¹Jᵀ` per contact direction, replacing the dense `Hinv·Jᵀ` matVec.
+
+Validated bit-for-bit against the dense inverse (max err ≤1.5e-4 at ndof=27) before switching; all
+E1/E2/E3 tests stay green. **Result: ~1.5–1.65× env-steps/s** for the reduced humanoid (N=1:
+2308→3490; N=1024: 16.5k→26.8k). The win is largest when contacts are few-to-moderate (the common
+locomotion case), where the O(ndof³) inverse dominated. In a degenerate all-bodies-flat rest (many
+contacts) the **PGS iteration** dominates instead of `H`, so sparse-H is ~neutral there — the next
+lever for that case is the PGS itself (block/Delassus solve or exploiting Jacobian sparsity).

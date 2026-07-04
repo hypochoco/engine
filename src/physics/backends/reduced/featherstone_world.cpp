@@ -319,6 +319,17 @@ private:
         int q = baseDof_;
         for (Joint& j : joints_) { j.qIndex = q; q += j.dof; }
         ndof_ = q;
+        // DOF-ancestor tree for the sparse-H factorization: base DOFs chain (0←1←…←5); each joint
+        // DOF's parent is the previous DOF in its joint, or the nearest ancestor DOF above it.
+        dofParent_.assign(static_cast<size_t>(ndof_), -1);
+        for (int k = 1; k < baseDof_; ++k) dofParent_[k] = k - 1;
+        for (const Joint& j : joints_) {
+            if (j.dof == 0) continue;
+            dofParent_[j.qIndex] = ancestorDofOfLink(j.parent);
+            for (int a = 1; a < j.dof; ++a) dofParent_[j.qIndex + a] = j.qIndex + a - 1;
+        }
+        sparseOk_ = true;                                // valid iff every ancestor has a lower index
+        for (int i = 0; i < ndof_; ++i) if (dofParent_[i] >= i) { sparseOk_ = false; break; }
         inited_ = true;
     }
     bool isFloatingRoot(size_t i) const { return static_cast<int>(i) == rootIndex_ && floating_; }
@@ -413,6 +424,49 @@ private:
         }
     }
 
+    // Nearest generalized DOF at or above `link` (skipping DOF-less fixed joints); the base's last
+    // DOF (5) if floating, else -1. Used to build the DOF-ancestor tree.
+    int ancestorDofOfLink(int link) const {
+        int k = link;
+        while (k >= 0) {
+            if (links_[k].parent < 0) return (floating_ && k == rootIndex_) ? 5 : -1;
+            const Joint& jk = joints_[links_[k].jointIndex];
+            if (jk.dof > 0) return jk.qIndex + jk.dof - 1;
+            k = links_[k].parent;
+        }
+        return -1;
+    }
+
+    // Sparse LDLᵀ factorization of H (row-major, in place): H = M D Mᵀ with M unit-lower-triangular
+    // whose fill follows the DOF-ancestor tree — only ancestor entries are touched (Featherstone
+    // §6.5), so this is ~O(ndof·depth²) instead of the dense O(ndof³) inverse. Returns false on a
+    // non-positive pivot (⇒ caller falls back to the dense inverse).
+    bool factorizeSparse(std::vector<Real>& H) const {
+        const int n = ndof_;
+        for (int k = n - 1; k >= 0; --k) {
+            if (H[k * n + k] < Real(1e-12)) return false;
+            int i = dofParent_[k];
+            while (i >= 0) {
+                const Real a = H[k * n + i] / H[k * n + k];
+                int j = i;
+                while (j >= 0) { H[i * n + j] -= a * H[k * n + j]; j = dofParent_[j]; }
+                H[k * n + i] = a;
+                i = dofParent_[i];
+            }
+        }
+        return true;
+    }
+    // Solve H x = b in place (b←x) with the sparse factors from factorizeSparse — sparse forward
+    // (M), diagonal (D), and backward (Mᵀ) substitution over ancestor chains only.
+    void solveSparse(const std::vector<Real>& LD, std::vector<Real>& b) const {
+        const int n = ndof_;
+        // Mᵀ q = b : descending, push each finalized b[k] to its ancestors.
+        for (int k = n - 1; k >= 0; --k) { int j = dofParent_[k]; while (j >= 0) { b[j] -= LD[k * n + j] * b[k]; j = dofParent_[j]; } }
+        for (int i = 0; i < n; ++i) b[i] /= LD[i * n + i];                       // D p = q
+        // M x = p : ascending, pull from already-solved ancestors.
+        for (int i = 0; i < n; ++i) { int j = dofParent_[i]; while (j >= 0) { b[i] -= LD[i * n + j] * b[j]; j = dofParent_[j]; } }
+    }
+
     // CRBA → dense joint-space inertia H (row-major ndof×ndof).
     std::vector<Real> buildMassMatrix() const {
         const size_t n = links_.size();
@@ -492,18 +546,22 @@ private:
         }
         return row;
     }
-    static std::vector<Real> matVecDense(const std::vector<Real>& M, int n, const std::vector<Real>& x) {
-        std::vector<Real> r(static_cast<size_t>(n), Real(0));
-        for (int i = 0; i < n; ++i) { Real s = 0; for (int j = 0; j < n; ++j) s += M[i * n + j] * x[j]; r[i] = s; } return r;
-    }
     static Real dotN(const std::vector<Real>& a, const std::vector<Real>& b) { Real s = 0; for (size_t i = 0; i < a.size(); ++i) s += a[i] * b[i]; return s; }
 
     void solveContacts(Real h) {
         const std::vector<Contact> contacts = detectContacts();
         if (contacts.empty()) return;
         const int nd = ndof_;
+        std::vector<Real> H = buildMassMatrix();
+        bool sparse = sparseOk_;
         std::vector<Real> Hinv;
-        if (!invertDense(buildMassMatrix(), nd, Hinv)) return;
+        if (sparse) { if (!factorizeSparse(H)) sparse = false; }   // H ← LDLᵀ factors in place
+        if (!sparse) { std::vector<Real> Hd = buildMassMatrix(); if (!invertDense(Hd, nd, Hinv)) return; }
+        auto applyHinv = [&](const std::vector<Real>& J, std::vector<Real>& out) {
+            if (sparse) { out = J; solveSparse(H, out); }
+            else { out.assign(static_cast<size_t>(nd), Real(0)); for (int i = 0; i < nd; ++i) { Real s = 0; for (int j = 0; j < nd; ++j) s += Hinv[i * nd + j] * J[j]; out[i] = s; } }
+        };
+
 
         std::vector<Real> qd(static_cast<size_t>(nd), Real(0));
         for (int d = 0; d < baseDof_; ++d) qd[d] = baseTwist_.d[d];
@@ -516,7 +574,7 @@ private:
             Vec3 t1, t2; basisPerp(c.normal, t1, t2);
             Row r;
             r.Jn = jacRow(c.link, c.point, c.normal); r.Jt1 = jacRow(c.link, c.point, t1); r.Jt2 = jacRow(c.link, c.point, t2);
-            r.JnHi = matVecDense(Hinv, nd, r.Jn); r.Jt1Hi = matVecDense(Hinv, nd, r.Jt1); r.Jt2Hi = matVecDense(Hinv, nd, r.Jt2);
+            applyHinv(r.Jn, r.JnHi); applyHinv(r.Jt1, r.Jt1Hi); applyHinv(r.Jt2, r.Jt2Hi);
             r.An = dotN(r.Jn, r.JnHi); r.At1 = dotN(r.Jt1, r.Jt1Hi); r.At2 = dotN(r.Jt2, r.Jt2Hi);
             r.biasN = -(kBeta / h) * std::max(Real(0), c.pen - kSlop); r.fric = c.friction;
             rows.push_back(std::move(r));
@@ -577,6 +635,8 @@ private:
     Vec6 baseAccel_{};
     std::vector<Real> qddot_;
     int  ndof_ = 0, baseDof_ = 0;
+    std::vector<int> dofParent_;   // DOF-ancestor tree (Featherstone sparse-H): parent DOF or -1
+    bool sparseOk_ = false;        // dofParent_ is a valid elimination order (dofParent[i] < i)
 
     std::vector<Link>  links_;
     std::vector<Joint> joints_;
