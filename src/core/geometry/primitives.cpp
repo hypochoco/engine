@@ -132,4 +132,52 @@ MeshData makeBox(glm::vec3 h) {
     return m;
 }
 
+MeshData makeCapsule(float radius, float halfHeight, uint32_t rings, uint32_t sectors) {
+    rings   = std::max(rings, 1u);
+    sectors = std::max(sectors, 3u);
+
+    MeshData m;
+    const uint32_t vertsPerRow = sectors + 1;
+    const uint32_t totalRows = 2 * (rings + 1);   // top hemi + bottom hemi (both include equator)
+    m.vertices.reserve(static_cast<size_t>(totalRows) * vertsPerRow);
+
+    // Emit one latitude row of vertices. `phi` is the polar angle (0 = +Y pole, PI = -Y pole) and
+    // `yCenter` is the hemisphere's center (+halfHeight for the top cap, -halfHeight for bottom);
+    // the cylinder falls out of connecting the two equator rows (both at radius, different y).
+    auto addRow = [&](float phi, float yCenter, float v) {
+        const float cosPhi = std::cos(phi), sinPhi = std::sin(phi);
+        for (uint32_t s = 0; s <= sectors; ++s) {
+            const float u     = static_cast<float>(s) / static_cast<float>(sectors);
+            const float theta = u * 2.0f * kPi;
+            const glm::vec3 n = { sinPhi * std::cos(theta), cosPhi, sinPhi * std::sin(theta) };
+            Vertex vert;
+            vert.normal   = n;                                  // radial from the cap center
+            vert.position = { radius * n.x, yCenter + radius * n.y, radius * n.z };
+            vert.uv       = { u, v };
+            vert.color    = { 1.0f, 1.0f, 1.0f };
+            m.vertices.push_back(vert);
+        }
+    };
+    for (uint32_t i = 0; i <= rings; ++i) {   // top hemisphere: phi 0..PI/2, center +halfHeight
+        const float t = static_cast<float>(i) / static_cast<float>(rings);
+        addRow(t * (kPi * 0.5f), halfHeight, t * 0.5f);
+    }
+    for (uint32_t i = 0; i <= rings; ++i) {   // bottom hemisphere: phi PI/2..PI, center -halfHeight
+        const float t = static_cast<float>(i) / static_cast<float>(rings);
+        addRow(kPi * 0.5f + t * (kPi * 0.5f), -halfHeight, 0.5f + t * 0.5f);
+    }
+
+    m.indices.reserve(static_cast<size_t>(totalRows - 1) * sectors * 6);
+    for (uint32_t r = 0; r < totalRows - 1; ++r) {
+        for (uint32_t s = 0; s < sectors; ++s) {
+            const uint32_t i0 = r * vertsPerRow + s;
+            const uint32_t i1 = i0 + 1;
+            const uint32_t i2 = i0 + vertsPerRow;
+            const uint32_t i3 = i2 + 1;
+            m.indices.insert(m.indices.end(), { i0, i2, i1, i1, i2, i3 });
+        }
+    }
+    return m;
+}
+
 } // namespace engine::primitives

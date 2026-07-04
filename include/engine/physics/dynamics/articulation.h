@@ -47,10 +47,13 @@ struct Articulation {
 // Create all bodies then all joints in `world`; joint specs' body indices map to created handles.
 Articulation buildArticulation(PhysicsWorld& world, const ArticulationDef& def);
 
-// ~13-limb humanoid preset (capsule/box limbs; ball waist/hips/shoulders, fixed neck, hinge
-// elbows/knees/ankles with limits). All limbs share `limbCategory` and mask it out, so they do
-// NOT self-collide (they'd fight the joints) but still collide with everything else (the ground).
-// `rootPosition` places the pelvis.
-ArticulationDef makeHumanoid(Vec3 rootPosition = Vec3(0, 1.0f, 0), uint32_t limbCategory = 0x0002);
+// ~1.70 m humanoid preset: 14 bodies (pelvis, torso, shoulders, head, L/R upper+lower arms, L/R
+// thigh+shin, L/R feet) + 13 joints (ball waist/hips/shoulders, fixed chest/neck, hinge
+// elbows/knees/ankles with limits). Segments do NOT overlap — joints sit in the gaps (an
+// "invisible skeleton"). FEET ARE THE LAST TWO BODIES (a render layer can draw them as boxes and
+// the rest as stretched spheres). All limbs share `limbCategory` and mask it out, so they don't
+// self-collide (they'd fight the joints) but still collide with everything else (the ground).
+// `rootPosition` places the pelvis (model-space pelvis height 0.99 ⇒ root=(0,0.99,0) stands on y=0).
+ArticulationDef makeHumanoid(Vec3 rootPosition = Vec3(0, 0.99f, 0), uint32_t limbCategory = 0x0002);
 
 } // namespace engine::physics

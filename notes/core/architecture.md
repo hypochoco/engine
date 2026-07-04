@@ -173,15 +173,21 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   dynamic bodies each substep) so undamped joint DOFs (a ragdoll's free-spinning limb) settle.
 - **Articulation (B4, `dynamics/articulation.h`)**: plain-data `ArticulationDef` (bodies +
   `JointSpec`s referencing bodies by index) → `buildArticulation(world)` → handles;
-  `makeHumanoid()` preset = 13 capsule/box limbs + 12 joints (ball waist/hips/shoulders, fixed
-  neck, hinge elbows/knees/ankles with limits). Headless `tst/physics/integration/ragdoll.cpp`
+  `makeHumanoid()` preset = **~1.70 m** figure, **14 bodies** (pelvis, torso, shoulders, head,
+  L/R upper+lower arms, L/R thigh+shin, L/R feet) + **13 joints** (ball waist/hips/shoulders,
+  fixed chest/neck, hinge elbows/knees/ankles with limits). **Segments do not overlap** — each
+  joint sits in the *gap* between two bodies (connected only by the constraint, an "invisible
+  skeleton"). **Feet are the last two bodies** by contract so a renderer can draw them as boxes
+  and the rest as stretched spheres (ellipsoids). Headless `tst/physics/integration/ragdoll.cpp`
   (passive ragdoll collapses + settles on the plane).
 - **Humanoid behaviours (B5)**: `tst/physics/integration/humanoid_control.cpp` — `pd_stand_holds_pose`
   (pinned pelvis; PD servos drive bent knees against gravity + hold neutral elbows) and
   `articulation_determinism` (serial vs pooled/parallel bit-identical with joints+actuators).
-  Visual: `tst/physics/visual/humanoid.cpp` (PD-held humanoid standing on the plane; limbs drawn
-  as boxes via the new `primitives::makeBox`; fly camera). `makeBox(halfExtents)` added to
-  `core::geometry` (per-face normals) — the box primitive the engine previously lacked.
+  Visual: `tst/physics/visual/humanoid.cpp` — a gallery of three figures (free ragdoll +
+  pelvis-pinned PD neutral hold + PD knee-bend hold; ankle gains scaled down to the light feet so
+  they don't buzz). Limbs render as **capsules** matching their colliders, bulky bodies as
+  stretched spheres, feet as boxes; fly camera. `core::geometry` gained `makeBox(halfExtents)` and
+  `makeCapsule(radius, halfHeight)` (the box + capsule primitives the engine previously lacked).
 - **Broadphase** (Phase 2, `broadphase/`, selectable via `WorldDef::broadphase`):
   - **Sweep-and-prune** (single-axis): great for small/clustered scenes; ~O(n^5/3) for a 3-D
     cube of bodies (active list holds a whole slab).

@@ -54,6 +54,20 @@ TST_CASE(core, unit, geometry) {
         TST_REQUIRE(std::fabs(std::fabs(v.position.z) - 2.0f) < 1e-4f);
     }
 
+    // Capsule aligned +Y: correct row/vertex/index counts, unit normals, bounds within extents.
+    const float capR = 0.1f, capHH = 0.3f;
+    const uint32_t cRings = 8, cSectors = 24;
+    const MeshData cap = primitives::makeCapsule(capR, capHH, cRings, cSectors);
+    const uint32_t rows = 2 * (cRings + 1);
+    TST_REQUIRE(cap.vertices.size() == static_cast<size_t>(rows) * (cSectors + 1));
+    TST_REQUIRE(cap.indices.size() == static_cast<size_t>(rows - 1) * cSectors * 6);
+    for (const auto& v : cap.vertices) {
+        TST_REQUIRE(std::fabs(glm::length(v.normal) - 1.0f) < 1e-4f);
+        TST_REQUIRE(std::fabs(v.position.y) < capHH + capR + 1e-4f);
+        const float rxz = std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z);
+        TST_REQUIRE(rxz < capR + 1e-4f);
+    }
+
     ModelData model;
     model.meshes.push_back(sphere);
     model.materials.push_back(Material{});

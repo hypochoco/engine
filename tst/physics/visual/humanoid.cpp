@@ -105,19 +105,44 @@ TST_CASE(physics, visual, humanoid) {
     PipelineHandle pipe = device.createGraphicsPipeline(pdesc);
 
     render::GeometryStore geometry(device);
-    render::MeshHandle boxMesh   = geometry.upload(primitives::makeBox(glm::vec3(0.5f)));  // unit cube
-    render::MeshHandle planeMesh = geometry.upload(primitives::makePlane(30.0f, 1));
+    render::MeshHandle boxMesh    = geometry.upload(primitives::makeBox(glm::vec3(0.5f)));   // unit cube (feet)
+    render::MeshHandle sphereMesh = geometry.upload(primitives::makeSphere(0.5f, 20, 32));   // unit sphere (limbs → ellipsoids)
+    render::MeshHandle planeMesh  = geometry.upload(primitives::makePlane(30.0f, 1));
     render::Renderer renderer(device, geometry);
 
-    // --- physics: ground + humanoid ---
-    // Two modes via ENGINE_HUMANOID:
-    //   default "ragdoll" — free (unpinned, unactuated), starts just above the floor and falls +
-    //                       settles; the clearest "physics working" demo, no PD/contact fighting.
-    //   "pose"            — pelvis pinned and SUSPENDED clear of the floor, PD servos holding the
-    //                       neutral pose; still + jitter-free (no foot-ground contact vs the PD).
-    const char* modeEnv = std::getenv("ENGINE_HUMANOID");
-    const bool poseMode = modeEnv && std::string(modeEnv) == "pose";
+    // Rotate a +Y capsule mesh so its long axis is +X (for the horizontal shoulders).
+    auto rotateZ90 = [](MeshData mesh) {
+        const glm::mat3 R = glm::mat3(glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 0, 1)));
+        for (Vertex& v : mesh.vertices) { v.position = R * v.position; v.normal = R * v.normal; }
+        return mesh;
+    };
+    // Preset body order: 0 pelvis, 1 torso, 2 shoulders, 3 head, 4-11 limbs, 12-13 feet.
+    // Pelvis/shoulders = horizontal capsules, torso = vertical capsule, limbs = capsules,
+    // head = a perfect sphere, feet = boxes.
+    const phys::ArticulationDef refDef = phys::makeHumanoid();
+    std::vector<render::MeshHandle> bodyMesh(refDef.bodies.size());
+    std::vector<glm::vec3> bodyScale(refDef.bodies.size(), glm::vec3(1.0f));
+    for (size_t i = 0; i < refDef.bodies.size(); ++i) {
+        const phys::ColliderDesc& col = refDef.bodies[i].collider;
+        const bool isFoot = i >= refDef.bodies.size() - 2;
+        if (i == 0) {                 // pelvis → horizontal capsule (hips are wider than tall)
+            bodyMesh[i] = geometry.upload(rotateZ90(primitives::makeCapsule(0.08f, 0.045f)));
+        } else if (i == 1) {          // torso → vertical capsule
+            bodyMesh[i] = geometry.upload(primitives::makeCapsule(0.11f, 0.075f));
+        } else if (i == 2) {          // shoulders → horizontal capsule (long axis X)
+            bodyMesh[i] = geometry.upload(rotateZ90(primitives::makeCapsule(0.06f, 0.12f)));
+        } else if (i == 3) {          // head → perfect sphere (uniform scale)
+            bodyMesh[i] = sphereMesh; bodyScale[i] = glm::vec3(0.18f);
+        } else if (col.type == phys::ColliderDesc::Type::Capsule) {   // arms + legs
+            bodyMesh[i] = geometry.upload(primitives::makeCapsule(col.capsule.radius, col.capsule.halfHeight));
+        } else if (isFoot) {          // feet
+            bodyMesh[i] = boxMesh;    bodyScale[i] = colliderScale(col);
+        } else {                      // fallback
+            bodyMesh[i] = sphereMesh; bodyScale[i] = colliderScale(col);
+        }
+    }
 
+    // --- physics: ground + a gallery of humanoids in different states ---
     phys::WorldDef wd;
     wd.gravity = glm::vec3(0, -9.81f, 0);
     wd.velocityIterations = 24;
@@ -133,40 +158,59 @@ TST_CASE(physics, visual, humanoid) {
         g.material.friction = 0.9f;
         world->createBody(g);
     }
-    phys::ArticulationDef def = phys::makeHumanoid(glm::vec3(0, poseMode ? 1.45f : 1.35f, 0));
-    if (poseMode) def.bodies[0].type = phys::BodyType::Static;   // pin the pelvis (suspended)
-    const phys::Articulation art = phys::buildArticulation(*world, def);
-    if (poseMode) {
-        phys::Actuator a;
-        a.mode = phys::ActuatorMode::PDTarget;
-        a.target = 0.0f; a.ballTarget = glm::quat(1, 0, 0, 0);
-        a.kp = 600.0f; a.kd = 60.0f; a.maxTorque = 400.0f;
-        for (const phys::JointHandle j : art.joints) world->setJointActuator(j, a);
-    }
 
-    // --- ECS scene: one render entity per body (box scaled to the collider) ---
     ecs::World ecsWorld;
     std::vector<render::MaterialGPU> materials;
     materials.push_back({ .baseColorFactor = glm::vec4(0.5f, 0.5f, 0.55f, 1.0f) });   // 0: ground
     ecsWorld.spawn(Transform{}, scene::RenderMesh{ planeMesh }, scene::RenderMaterial{ 0 });
 
-    for (size_t i = 0; i < art.bodies.size(); ++i) {
-        const phys::BodyHandle h = art.bodies[i];
-        const engine::Transform pose = world->pose(h);
-        const auto mat = static_cast<uint32_t>(materials.size());
-        materials.push_back({ .baseColorFactor = glm::vec4(
-            0.4f + 0.5f * float(i) / art.bodies.size(), 0.45f, 0.8f - 0.4f * float(i) / art.bodies.size(), 1.0f) });
-        ecsWorld.spawn(
-            Transform{ .position = pose.position, .rotation = pose.rotation,
-                       .scale = colliderScale(def.bodies[i].collider) },
-            scene::RenderMesh{ boxMesh }, scene::RenderMaterial{ mat },
-            physics_ecs::RigidBody{ h });
-    }
+    // Spawn one humanoid: build it, optionally pin the pelvis + PD-hold a pose, and create a
+    // render entity per body (limbs = stretched spheres, feet = boxes). `kneeBend` bends the knees.
+    auto spawnHumanoid = [&](glm::vec3 rootPos, bool pinned, bool kneeBend, glm::vec4 tint) {
+        phys::ArticulationDef def = phys::makeHumanoid(rootPos);
+        if (pinned) def.bodies[0].type = phys::BodyType::Static;
+        const phys::Articulation art = phys::buildArticulation(*world, def);
+        if (pinned) {
+            phys::Actuator a;
+            a.mode = phys::ActuatorMode::PDTarget;
+            a.target = 0.0f; a.ballTarget = glm::quat(1, 0, 0, 0);
+            a.kp = 600.0f; a.kd = 60.0f; a.maxTorque = 400.0f;
+            for (const phys::JointHandle j : art.joints) world->setJointActuator(j, a);
+            // The feet are ~40x lighter than the hips/knees; uniform high gains make explicit PD
+            // overshoot and buzz. Scale the ankle gains + torque limit down to the foot's inertia.
+            phys::Actuator ankle = a; ankle.kp = 25.0f; ankle.kd = 5.0f; ankle.maxTorque = 6.0f;
+            world->setJointActuator(art.joints[11], ankle);   // ankle L
+            world->setJointActuator(art.joints[12], ankle);   // ankle R
+            if (kneeBend) {
+                phys::Actuator k = a; k.target = -1.2f;         // hinge knees (joints 9,10)
+                world->setJointActuator(art.joints[9], k);
+                world->setJointActuator(art.joints[10], k);
+            }
+        }
+        for (size_t i = 0; i < art.bodies.size(); ++i) {
+            const engine::Transform pose = world->pose(art.bodies[i]);
+            const auto mat = static_cast<uint32_t>(materials.size());
+            glm::vec4 c = tint * (0.72f + 0.4f * float(i) / float(art.bodies.size()));
+            c.a = 1.0f;
+            materials.push_back({ .baseColorFactor = c });
+            ecsWorld.spawn(
+                Transform{ .position = pose.position, .rotation = pose.rotation, .scale = bodyScale[i] },
+                scene::RenderMesh{ bodyMesh[i] }, scene::RenderMaterial{ mat },
+                physics_ecs::RigidBody{ art.bodies[i] });
+        }
+    };
 
-    // Camera entity + environment + input/time resources.
-    ecsWorld.spawn(Transform{ .position = glm::vec3(0.0f, 1.3f, 4.0f) },
+    // Left: free ragdoll (falls + settles). Middle: pinned, PD holding the neutral pose.
+    // Right: pinned, PD holding a deep knee bend. Pinned ones are suspended so the feet clear the
+    // floor (no foot-ground contact fighting the PD → they stand still for inspection).
+    spawnHumanoid(glm::vec3(-2.6f, 1.15f, 0.0f), false, false, glm::vec4(0.85f, 0.42f, 0.38f, 1.0f));
+    spawnHumanoid(glm::vec3( 0.0f, 1.40f, 0.0f), true,  false, glm::vec4(0.42f, 0.55f, 0.85f, 1.0f));
+    spawnHumanoid(glm::vec3( 2.6f, 1.40f, 0.0f), true,  true,  glm::vec4(0.45f, 0.80f, 0.52f, 1.0f));
+
+    // Camera entity, framed to see all three ~1.70 m figures.
+    ecsWorld.spawn(Transform{ .position = glm::vec3(0.0f, 1.4f, 6.0f) },
                    Camera{ .fovY = glm::radians(55.0f), .nearZ = 0.05f, .farZ = 200.0f },
-                   controls::FlyController{ .pitch = -8.0f });
+                   controls::FlyController{ .pitch = -6.0f });
     ecsWorld.setResource(scene::Background{ glm::vec4(0.10f, 0.12f, 0.16f, 1.0f) });
     ecsWorld.setResource(scene::SceneLighting{});
     ecsWorld.setResource(input::InputState{});
@@ -188,8 +232,8 @@ TST_CASE(physics, visual, humanoid) {
     double last = glfwGetTime();
     double accumulator = 0.0;
     const double fixed = 1.0 / 120.0;
-    std::printf("humanoid: mode=%s (set ENGINE_HUMANOID=pose|ragdoll). WASD move, right-drag look, Esc quit.\n",
-                poseMode ? "pose" : "ragdoll");
+    std::printf("humanoid: left=ragdoll (falls), middle=PD neutral hold, right=PD knee-bend hold. "
+                "WASD move, right-drag look, Esc quit.\n");
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

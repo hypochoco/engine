@@ -28,4 +28,10 @@ MeshData makeSphere(float radius = 0.5f, uint32_t rings = 16, uint32_t sectors =
 // Axis-aligned box centered at origin with the given half-extents (per-face flat normals).
 MeshData makeBox(glm::vec3 halfExtents = glm::vec3(0.5f));
 
+// Capsule aligned along local +Y: a cylinder of the given `radius` spanning y ∈ [-halfHeight,
+// +halfHeight], closed by a hemisphere at each end (matches the physics Capsule convention).
+// `rings` = latitude segments per hemisphere, `sectors` = longitude segments.
+MeshData makeCapsule(float radius = 0.5f, float halfHeight = 0.5f,
+                     uint32_t rings = 8, uint32_t sectors = 24);
+
 } // namespace engine::primitives

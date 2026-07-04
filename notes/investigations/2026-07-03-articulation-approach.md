@@ -140,6 +140,13 @@ solver — both matter for B2–B5 and for anyone touching the joint solve later
    moderate gains hold reliably (the PD-stand test commands bent knees against gravity + neutral
    elbows).
 
+4. **PD gains must scale with the joint's *driven inertia* (found in the multi-humanoid visual).**
+   Uniform gains across a chain buzz at the light end: the feet (~0.008 kg·m² about the ankle)
+   jittered violently at the hips'/knees' `kp=600, maxTorque=400` (400 N·m on a 0.008 inertia is a
+   huge per-step angular kick), while the heavy joints were fine. Fix: scale `kp`/`kd`/`maxTorque`
+   down for light distal joints (ankles → `kp≈25, kd≈5, maxTorque≈6`) or normalize gains by
+   inertia. SPD would fix this by construction too.
+
 ## Differentiable physics — how it plays into ML here
 
 (See also the deferred Phase 3 in the physics plan.) Differentiable physics means the simulator

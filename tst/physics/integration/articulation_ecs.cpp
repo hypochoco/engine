@@ -46,8 +46,8 @@ TST_CASE(physics, integration, articulation_ecs) {
     const physics_ecs::ArticulationEntities h =
         physics_ecs::spawnArticulation(world, *pw, physics::makeHumanoid(physics::Vec3(0, 1.05f, 0)));
 
-    TST_REQUIRE(h.bodyEntities.size() == 13);
-    TST_REQUIRE(h.jointEntities.size() == 12);
+    TST_REQUIRE(h.bodyEntities.size() == 14);
+    TST_REQUIRE(h.jointEntities.size() == 13);
     // Body entities carry RigidBody + Transform; joint entities carry Joint + JointCommand.
     TST_REQUIRE(world.get<physics_ecs::RigidBody>(h.bodyEntities[0]) != nullptr);
     TST_REQUIRE(world.get<engine::Transform>(h.bodyEntities[0]) != nullptr);

@@ -69,17 +69,17 @@ TST_CASE(physics, integration, pd_stand_holds_pose) {
         return a;
     };
     for (const JointHandle j : h.joints) w->setJointActuator(j, pd(0.0f));
-    // Command bent knees (j8,j9) — a pose gravity would straighten, so holding it proves the PD
-    // servo works against gravity. Elbows/others stay at neutral (0).
+    // Command bent knees (j9,j10) — a pose gravity would straighten, so holding it proves the PD
+    // servo works against gravity. Elbows (j5,j6) and others stay at neutral (0).
     const float elbowTarget = 0.0f, kneeTarget = -1.0f;
-    w->setJointActuator(h.joints[8], pd(kneeTarget));
     w->setJointActuator(h.joints[9], pd(kneeTarget));
+    w->setJointActuator(h.joints[10], pd(kneeTarget));
 
     for (int i = 0; i < 480; ++i) w->step(1.0f / 120.0f);   // 4 s to reach + hold the pose
 
     const auto states = w->jointStates();
-    const Real elbowL = states[h.joints[4].index].q, kneeL = states[h.joints[8].index].q;
-    const Real elbowR = states[h.joints[5].index].q, kneeR = states[h.joints[9].index].q;
+    const Real elbowL = states[h.joints[5].index].q, kneeL = states[h.joints[9].index].q;
+    const Real elbowR = states[h.joints[6].index].q, kneeR = states[h.joints[10].index].q;
     std::printf("pd_stand: elbow=(%.3f,%.3f)->%.2f  knee=(%.3f,%.3f)->%.2f  torso.y=%.3f\n",
                 elbowL, elbowR, elbowTarget, kneeL, kneeR, kneeTarget, w->pose(h.bodies[1]).position.y);
 

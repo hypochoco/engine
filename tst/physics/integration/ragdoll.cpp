@@ -38,8 +38,8 @@ TST_CASE(physics, integration, ragdoll_settles) {
     }
 
     const Articulation body = buildArticulation(*w, makeHumanoid(Vec3(0, 1.05f, 0)));
-    TST_REQUIRE(body.bodies.size() == 13);
-    TST_REQUIRE(body.joints.size() == 12);
+    TST_REQUIRE(body.bodies.size() == 14);
+    TST_REQUIRE(body.joints.size() == 13);
     for (const JointHandle j : body.joints) TST_REQUIRE(j.valid());
 
     for (int i = 0; i < 1200; ++i) w->step(1.0f / 120.0f);   // 10 s: collapse + settle

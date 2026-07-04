@@ -89,40 +89,47 @@ ArticulationDef makeHumanoid(Vec3 root, uint32_t limbCategory) {
     HumanoidBuilder hb;
     hb.category = limbCategory;
     hb.mask = ~limbCategory;   // collide with everything except other limbs (no self-collision)
-    const Real dy = root.y - 1.0f;   // vertical shift so `root` places the pelvis
-
+    // Anthropometric layout for a 1.70 m figure (foot sole at model-y 0, head top at 1.70).
+    // Segments do NOT overlap — each joint sits in the GAP between two bodies, so the limbs are
+    // connected only by the (invisible) joint constraints. `rootPosition` places the pelvis;
+    // model-space pelvis height is 0.99, so root=(0,0.99,0) stands the figure on y=0.
+    const Real dy = root.y - Real(0.99);
     auto at = [&](float x, float y, float z) { return Vec3(root.x + x, y + dy, root.z + z); };
 
-    // --- bodies (positions for a neutral standing pose) ---
-    const uint32_t pelvis = hb.addBox(at(0.0f, 1.00f, 0.0f), Vec3(0.12f, 0.08f, 0.10f), 8.0f);
-    const uint32_t torso  = hb.addBox(at(0.0f, 1.35f, 0.0f), Vec3(0.14f, 0.18f, 0.10f), 12.0f);
-    const uint32_t head   = hb.addCapsule(at(0.0f, 1.62f, 0.0f), 0.09f, 0.05f, 4.0f);
+    // --- bodies (ellipsoid/capsule limbs; boxes for pelvis/torso/shoulders/head/feet) ---
+    // FEET ARE THE LAST TWO BODIES by contract (the renderer draws the last two as boxes and all
+    // others as stretched spheres).
+    const uint32_t pelvis    = hb.addBox(at(0.0f, 0.99f, 0.0f), Vec3(0.10f, 0.08f, 0.08f), 10.0f);
+    const uint32_t torso     = hb.addBox(at(0.0f, 1.26f, 0.0f), Vec3(0.13f, 0.15f, 0.09f), 14.0f);
+    const uint32_t shoulders = hb.addBox(at(0.0f, 1.47f, 0.0f), Vec3(0.18f, 0.05f, 0.08f), 4.0f);
+    const uint32_t head      = hb.addBox(at(0.0f, 1.615f, 0.0f), Vec3(0.075f, 0.085f, 0.08f), 4.5f);
 
-    const uint32_t uArmL = hb.addCapsule(at( 0.30f, 1.42f, 0.0f), 0.05f, 0.13f, 2.0f);
-    const uint32_t uArmR = hb.addCapsule(at(-0.30f, 1.42f, 0.0f), 0.05f, 0.13f, 2.0f);
-    const uint32_t lArmL = hb.addCapsule(at( 0.30f, 1.13f, 0.0f), 0.045f, 0.12f, 1.5f);
-    const uint32_t lArmR = hb.addCapsule(at(-0.30f, 1.13f, 0.0f), 0.045f, 0.12f, 1.5f);
+    const uint32_t uArmL = hb.addCapsule(at( 0.23f, 1.30f, 0.0f), 0.045f, 0.105f, 2.0f);
+    const uint32_t uArmR = hb.addCapsule(at(-0.23f, 1.30f, 0.0f), 0.045f, 0.105f, 2.0f);
+    const uint32_t lArmL = hb.addCapsule(at( 0.23f, 0.98f, 0.0f), 0.040f, 0.090f, 1.4f);
+    const uint32_t lArmR = hb.addCapsule(at(-0.23f, 0.98f, 0.0f), 0.040f, 0.090f, 1.4f);
 
-    const uint32_t thighL = hb.addCapsule(at( 0.10f, 0.72f, 0.0f), 0.07f, 0.18f, 5.0f);
-    const uint32_t thighR = hb.addCapsule(at(-0.10f, 0.72f, 0.0f), 0.07f, 0.18f, 5.0f);
-    const uint32_t shinL  = hb.addCapsule(at( 0.10f, 0.34f, 0.0f), 0.05f, 0.18f, 3.0f);
-    const uint32_t shinR  = hb.addCapsule(at(-0.10f, 0.34f, 0.0f), 0.05f, 0.18f, 3.0f);
-    const uint32_t footL  = hb.addBox(at( 0.10f, 0.03f, 0.04f), Vec3(0.06f, 0.03f, 0.12f), 1.0f);
-    const uint32_t footR  = hb.addBox(at(-0.10f, 0.03f, 0.04f), Vec3(0.06f, 0.03f, 0.12f), 1.0f);
+    const uint32_t thighL = hb.addCapsule(at( 0.09f, 0.71f, 0.0f), 0.070f, 0.120f, 7.0f);
+    const uint32_t thighR = hb.addCapsule(at(-0.09f, 0.71f, 0.0f), 0.070f, 0.120f, 7.0f);
+    const uint32_t shinL  = hb.addCapsule(at( 0.09f, 0.29f, 0.0f), 0.050f, 0.140f, 3.2f);
+    const uint32_t shinR  = hb.addCapsule(at(-0.09f, 0.29f, 0.0f), 0.050f, 0.140f, 3.2f);
+    const uint32_t footL  = hb.addBox(at( 0.09f, 0.03f, 0.04f), Vec3(0.05f, 0.03f, 0.12f), 1.0f);
+    const uint32_t footR  = hb.addBox(at(-0.09f, 0.03f, 0.04f), Vec3(0.05f, 0.03f, 0.12f), 1.0f);
 
-    // --- joints (hinge axis X = flexion in the sagittal plane) ---
-    hb.addJoint(JointType::Ball,     pelvis, torso, at(0.0f, 1.18f, 0.0f));            // waist
-    hb.addJoint(JointType::Fixed,    torso,  head,  at(0.0f, 1.52f, 0.0f));            // neck
-    hb.addJoint(JointType::Ball,     torso,  uArmL, at( 0.30f, 1.55f, 0.0f));          // shoulder L
-    hb.addJoint(JointType::Ball,     torso,  uArmR, at(-0.30f, 1.55f, 0.0f));          // shoulder R
-    hb.addJoint(JointType::Revolute, uArmL,  lArmL, at( 0.30f, 1.27f, 0.0f), Vec3(1,0,0), true, 0.0f, 2.5f);   // elbow L
-    hb.addJoint(JointType::Revolute, uArmR,  lArmR, at(-0.30f, 1.27f, 0.0f), Vec3(1,0,0), true, 0.0f, 2.5f);   // elbow R
-    hb.addJoint(JointType::Ball,     pelvis, thighL, at( 0.10f, 0.92f, 0.0f));         // hip L
-    hb.addJoint(JointType::Ball,     pelvis, thighR, at(-0.10f, 0.92f, 0.0f));         // hip R
-    hb.addJoint(JointType::Revolute, thighL, shinL, at( 0.10f, 0.54f, 0.0f), Vec3(1,0,0), true, -2.5f, 0.0f);  // knee L
-    hb.addJoint(JointType::Revolute, thighR, shinR, at(-0.10f, 0.54f, 0.0f), Vec3(1,0,0), true, -2.5f, 0.0f);  // knee R
-    hb.addJoint(JointType::Revolute, shinL,  footL, at( 0.10f, 0.10f, 0.0f), Vec3(1,0,0), true, -0.8f, 0.8f);  // ankle L
-    hb.addJoint(JointType::Revolute, shinR,  footR, at(-0.10f, 0.10f, 0.0f), Vec3(1,0,0), true, -0.8f, 0.8f);  // ankle R
+    // --- joints (each anchored in the gap between its two bodies; hinge axis X = sagittal) ---
+    hb.addJoint(JointType::Ball,     pelvis,    torso,     at(0.0f, 1.09f, 0.0f));    // 0 waist
+    hb.addJoint(JointType::Fixed,    torso,     shoulders, at(0.0f, 1.42f, 0.0f));    // 1 chest
+    hb.addJoint(JointType::Fixed,    shoulders, head,      at(0.0f, 1.525f, 0.0f));   // 2 neck
+    hb.addJoint(JointType::Ball,     shoulders, uArmL,     at( 0.20f, 1.45f, 0.0f));  // 3 shoulder L
+    hb.addJoint(JointType::Ball,     shoulders, uArmR,     at(-0.20f, 1.45f, 0.0f));  // 4 shoulder R
+    hb.addJoint(JointType::Revolute, uArmL, lArmL, at( 0.23f, 1.13f, 0.0f), Vec3(1,0,0), true, 0.0f, 2.5f);   // 5 elbow L
+    hb.addJoint(JointType::Revolute, uArmR, lArmR, at(-0.23f, 1.13f, 0.0f), Vec3(1,0,0), true, 0.0f, 2.5f);   // 6 elbow R
+    hb.addJoint(JointType::Ball,     pelvis, thighL, at( 0.09f, 0.91f, 0.0f));        // 7 hip L
+    hb.addJoint(JointType::Ball,     pelvis, thighR, at(-0.09f, 0.91f, 0.0f));        // 8 hip R
+    hb.addJoint(JointType::Revolute, thighL, shinL, at( 0.09f, 0.50f, 0.0f), Vec3(1,0,0), true, -2.5f, 0.0f); // 9 knee L
+    hb.addJoint(JointType::Revolute, thighR, shinR, at(-0.09f, 0.50f, 0.0f), Vec3(1,0,0), true, -2.5f, 0.0f); // 10 knee R
+    hb.addJoint(JointType::Revolute, shinL, footL, at( 0.09f, 0.06f, 0.0f), Vec3(1,0,0), true, -0.8f, 0.8f);  // 11 ankle L
+    hb.addJoint(JointType::Revolute, shinR, footR, at(-0.09f, 0.06f, 0.0f), Vec3(1,0,0), true, -0.8f, 0.8f);  // 12 ankle R
 
     return hb.def;
 }
