@@ -22,6 +22,8 @@ Working notes for the engine project.
   - [`2026-07-03-physics-plan.md`](investigations/2026-07-03-physics-plan.md)
   - [`2026-07-03-physics-baseline.md`](investigations/2026-07-03-physics-baseline.md)
   - `2026-07-04-render-framework-plan.md` — clustered forward+ render graph (framework design)
+  - `2026-07-05-sky-atmosphere.md` — procedural sun-coupled sky pass (RF6 sky) design
+  - `2026-07-05-atmosphere-aerial-perspective.md` — aerial-perspective + height fog (RF6 atmosphere) design
 
 ## Conventions
 

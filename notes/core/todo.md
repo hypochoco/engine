@@ -506,7 +506,51 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       `graphics.hdr_tonemap` (bright ambient: tonemap OFF clips to 255, ON=241 via ACES). Wired into
       the `clustered_lights` visual. App builds the mesh pipeline as RGBA16Float + a tonemap pipeline
       (cull None, no depth) matching the final target when tonemapping.
-- [ ] **RF6+.** Additive graph nodes: **shadows** (CSM), **sky/atmosphere**, **AA** (MSAA or post).
+- [~] **RF6. Shadows / sky / AA** (additive graph nodes). **Shadows DONE (2026-07-04)**:
+      directional sun shadow map — a depth-only shadow pass (`shadow.slang`, needs the new
+      null-fragment/depth-only pipeline + a sampleable depth texture + a color-less graph pass)
+      renders the scene from the sun's ortho view into a 2048² depth map; the forward shader
+      PCF-samples it (3×3) to shadow the directional term. `Renderer::setShadows(pipeline, sampler,
+      extent, dist)` opt-in; the graph barriers the map RenderTarget→ShaderRead. Test
+      `graphics.shadow_map` (caster over ground → localized shadow patch: 1020 px darken, ground
+      outside stays lit); visual `tst/graphics/visual/shadow_scene.cpp` (cubes + rotating sun + HDR).
+      **Known artifact — peter-panning** (verified `graphics.shadow_bias`, 2026-07-05): a constant
+      depth bias detaches the shadow slightly from a caster's base. **Fixed with slope-scaled bias**
+      (2026-07-05): the shader scales bias by the surface's angle to the sun — near the floor for
+      surfaces facing the light (reconnects contact shadows) rising to the max at grazing (prevents
+      acne); exposed via `setShadows(..., bias)` where the value is the max (negative = legacy
+      constant, for A/B tests), passed through `lightDir.w`. Test `graphics.shadow_bias` confirms the
+      adaptive behavior at the clean end: on a grazing ground a low constant bias self-shadows
+      (5599 acne px) while slope-scaled → 0. **Honest caveat**: in *steep-sun* configs the shadow
+      boundary is a depth cliff largely insensitive to bias in the usable range, so slope-scaling's
+      reduction of the base gap there is modest; for a hard contact fix on solid geometry, **front-
+      face culling in the shadow pass** is stronger (blocked on a separate finding: `RasterState.cull`
+      is currently not applied in the Metal backend — culling defaults to none).
+      **Next**: AA (MSAA or post). Later: cascaded shadow maps (CSM) for large outdoor range,
+      PCF→PCSS soft edges.
+      **Sky/atmosphere DONE (2026-07-05)**: procedural sun-coupled sky (`sky.slang`) — cheap
+      analytic horizon→zenith gradient warmed toward the sun + HDR sun disc + forward-scatter glow
+      (~20 ALU/pixel, no LUTs; design note `investigations/2026-07-05-sky-atmosphere.md`). Drawn as
+      a far-plane fullscreen triangle at the END of the forward pass (same render pass ⇒ on-tile on
+      Apple, no HDR store/load; the depth buffer is transient/memoryless so a separate pass couldn't
+      read it anyway), depth-tested LessEqual + no depth write ⇒ fills only background pixels.
+      `Renderer::setSky(pipeline)` + `setSkyColors(...)` opt-in, coupled to the view sun. Test
+      `graphics.sky` (opaque untouched by the sky = depth test; zenith blue-bias 56 vs horizon 15;
+      sun-front bg max 590 vs sun-behind 283). Wired into the `shadow_scene` visual. **Benchmark
+      before/after** (`render_graph`, 512², Apple): sky overhead **~0.011–0.012 ms/frame** (fullscreen
+      background fill — negligible), matching the perf-lean design. Deferred: Hillaire multi-scatter
+      LUT sky upgrade, sky-as-IBL for ambient.
+      **Atmosphere (aerial perspective + height fog) DONE (2026-07-05)**: distant/low opaque
+      fragments blend toward a sky-consistent fog color + Mie-like sun in-scatter, applied as the
+      last step of `mesh.slang` (fog on geometry needs per-fragment world pos + lit color; depth is
+      memoryless so no separate pass). Exponential distance × height falloff.
+      `Renderer::setFog(density, heightFalloff, baseHeight, color, inscatterColor, inscatterExp)`
+      opt-in, **off by default** (parity anchors intact). Design note
+      `investigations/2026-07-05-atmosphere-aerial-perspective.md`. Test `graphics.fog` (far object
+      washes toward fog color + monotonic with distance; sun-ahead in-scatter 765 vs 486 behind;
+      height fog base foggier than top). Wired into `shadow_scene`. **Benchmark ~0.005 ms** (few
+      fragment ALU, within noise). Deferred: Hillaire aerial-perspective 3D LUT, volumetric fog /
+      light shafts, fog influencing the sky pass.
 - [x] **Benchmark** — DONE (2026-07-04), `tst/graphics/benchmark/render_graph.cpp` (in the
       `benchmarks` runner; graphics bench now globbed + `engine::graphics` linked). Numbers (Apple,
       RelWithDebInfo, 512×512, headless — relative baseline for THIS machine):

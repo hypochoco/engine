@@ -134,16 +134,43 @@ culling in v1). Implemented so far:
   target, then a fullscreen ACES tonemap pass (`tonemap.slang`) resolves to the view target — which
   exercises the graph's HDR RenderTarget→ShaderRead barrier for real. Verified by
   `graphics.hdr_tonemap` (bright input clips to 255 without, ACES→241 with).
+- **Directional shadows** (RF6): a depth-only **shadow pass** (`shadow.slang`) renders the scene
+  from the sun's orthographic view into a 2048² depth map; the forward shader PCF-samples it (3×3)
+  to shadow the directional term. `Renderer::setShadows(pipeline, sampler, extent, dist)` opt-in;
+  needed a null-fragment/depth-only pipeline, a sampleable depth texture, and a color-less graph
+  pass (the graph barriers the map RenderTarget→ShaderRead). Verified by `graphics.shadow_map`
+  (localized shadow patch under a caster). Shadow bias is **slope-scaled** (angle-adaptive:
+  low on face-on surfaces to avoid peter-panning, high at grazing to avoid acne;
+  `graphics.shadow_bias`).
+- **Procedural sky** (RF6 sky): a cheap, sun-coupled analytic sky (`sky.slang`) — a
+  horizon→zenith gradient warmed toward the sun plus an HDR sun disc + forward-scatter glow, ~20
+  ALU/pixel, no LUTs. Drawn as a far-plane fullscreen triangle at the **end of the forward pass**
+  (same render pass ⇒ on-tile on Apple, no HDR store/load), depth-tested LessEqual with no depth
+  write so it fills **only background** pixels. `Renderer::setSky(pipeline)` opt-in +
+  `setSkyColors(...)` palette/sun knobs; coupled to the view's sun (`light.direction`). Verified by
+  `graphics.sky` (opaque geometry untouched, zenith bluer than horizon, sun-side brighter);
+  benchmark cost **~0.01 ms/frame** at 512² (background fill, negligible).
+- **Aerial perspective + height fog** (RF6 atmosphere): distant/low opaque fragments blend toward
+  a sky-consistent fog color plus a Mie-like sun in-scatter glow, applied as the last step of the
+  forward fragment shader (`mesh.slang`; fog on geometry needs per-fragment world pos + lit color,
+  and the depth buffer is memoryless so a separate pass can't read it). Exponential distance × a
+  height falloff (dense low, thins with altitude). `Renderer::setFog(density, heightFalloff,
+  baseHeight, color, inscatterColor, inscatterExp)` opt-in, **off by default** (parity anchors
+  intact). Verified by `graphics.fog` (far object washes toward fog color, monotonic with distance;
+  sun-ahead in-scatter 765 vs 486 behind; height fog base foggier than top); benchmark **~0.005 ms**
+  (a few fragment ALU, within noise).
 - **Tests**: `graphics.{barrier_transient, multiview_ring, multi_light, compute_smoke,
-  cluster_binning, clustered_forward, hdr_tonemap}`; parity anchors (`154 31 32 255`, `131 66 58`)
-  intact. **Visual**: `tst/graphics/visual/clustered_lights.cpp` (windowed field of spheres under
-  many moving colored point lights, clustered forward+ + HDR/ACES; run `visuals clustered_lights`).
-  **Benchmark** `tst/graphics/benchmark/render_graph.cpp`: CPU record time flat (~0.02 ms) to 65k
-  instances; instance-count + light-count sweeps; clustered-vs-loop-all on a wide local-light field
-  (the 2.3×/5.3×/17.9× numbers above).
+  cluster_binning, clustered_forward, hdr_tonemap, shadow_map, shadow_bias, sky, fog}`; parity
+  anchors intact.
+  **Visuals**: `clustered_lights` (moving colored point lights, clustered + HDR), `shadow_scene`
+  (cubes + rotating sun casting shadows + sky + aerial-perspective fog + HDR), and
+  `atmosphere_scene` (an avenue of pillars receding to the horizon under a low sun — a fog/aerial-
+  perspective showcase; press F to toggle fog). **Benchmark**:
+  `render_graph` (instance/light sweeps + clustered speedups + sky + fog overhead).
 
-**Pending (todo.md "Render framework")**: faster light binning (RF4b-opt); then shadows/sky/AA as
-additive graph nodes; and (later, non-Apple) the Vulkan backend behind the same RHI.
+**Pending (todo.md "Render framework")**: AA (MSAA or post); later CSM/soft shadows, Hillaire
+LUT sky/aerial-perspective upgrade, volumetric light shafts; and (non-Apple) the Vulkan backend
+behind the same RHI.
 
 ### Legacy Vulkan code (parked under `src/graphics/vulkan/`, NOT the current path)
 

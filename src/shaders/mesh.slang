@@ -11,10 +11,15 @@
 
 struct Globals {
     float4x4 viewProj;
-    float4   lightDir;     // xyz = normalized direction TO the light (world space)
+    float4x4 lightViewProj; // world -> light clip (directional shadow map)
+    float4   lightDir;     // xyz = normalized direction TO the light (world space); w = shadow bias
     float4   lightColor;   // rgb = light color * intensity
     float4   ambient;      // rgb = flat ambient term
-    float4   params;       // x = point light count; y = clustered? (>0.5); zw reserved
+    float4   params;       // x = point light count; y = clustered?; z = shadows?; w = shadowMapSize
+    float4   camPos;       // xyz = camera world position; w = fog enabled? (>0.5)
+    float4   fogColor;     // rgb = base extinction tint (scene-referred / HDR)
+    float4   fogInscatter; // rgb = sun in-scatter color (scene-referred)
+    float4   fogParams;    // x = density; y = heightFalloff; z = baseY; w = inscatter exponent
 };
 ConstantBuffer<Globals> globals;
 
@@ -53,6 +58,35 @@ struct ClusterParams {
 ConstantBuffer<ClusterParams> cparams;       // buffer 4
 StructuredBuffer<uint>        lightGrid;       // buffer 5 : per-cluster count
 StructuredBuffer<uint>        lightIndices;    // buffer 6 : per-cluster light index list
+
+// Directional shadow map (texture 0 / sampler 0). Sampled with manual PCF (depth formats are not
+// filterable, so the sampler is Nearest and we average taps ourselves).
+Texture2D    shadowMap;
+SamplerState shadowSamp;
+
+// Fraction of the sun reaching `P` (1 = fully lit, 0 = fully shadowed), 3x3 PCF. `ndl` = N·L,
+// used for SLOPE-SCALED bias: near 0 bias for surfaces facing the light (kills peter-panning at the
+// contact) rising to the max at grazing angles (still prevents self-shadow acne). If the passed
+// bias (globals.lightDir.w) is negative, it's treated as a plain CONSTANT bias (for A/B testing).
+float sunShadow(float3 P, float ndl) {
+    float4 lc = mul(globals.lightViewProj, float4(P, 1.0));
+    float3 ndc = lc.xyz / lc.w;
+    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);   // clip -> UV (top-left origin)
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) return 1.0;
+    float curDepth = ndc.z;
+    float maxB = abs(globals.lightDir.w);
+    float slope = sqrt(max(1.0 - ndl * ndl, 0.0)) / max(ndl, 0.05);   // tan(acos(ndl))
+    float bias = (globals.lightDir.w < 0.0) ? maxB
+                                            : clamp(maxB * slope, maxB * 0.08, maxB);
+    float texel = 1.0 / max(globals.params.w, 1.0);
+    float sum = 0.0;
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x) {
+            float d = shadowMap.Sample(shadowSamp, uv + float2(x, y) * texel).r;
+            sum += (curDepth - bias > d) ? 0.0 : 1.0;
+        }
+    return sum / 9.0;
+}
 
 struct VSInput {
     float3 position;   // attribute 0
@@ -99,10 +133,12 @@ float3 shadePoint(PointLight pl, float3 N, float3 P) {
 float4 fragmentMain(VSOutput input) : SV_Target {
     float3 N       = normalize(input.normal);
 
-    // Ambient + directional sun (Lambert).
+    // Ambient + directional sun (Lambert), shadowed by the sun shadow map when enabled.
     float3 L       = normalize(globals.lightDir.xyz);
     float  ndotl   = max(dot(N, L), 0.0);
-    float3 lighting = globals.ambient.rgb + globals.lightColor.rgb * ndotl;
+    float  sun     = ndotl;
+    if (globals.params.z > 0.5) sun *= sunShadow(input.worldPos, ndotl);
+    float3 lighting = globals.ambient.rgb + globals.lightColor.rgb * sun;
 
     if (globals.params.y > 0.5) {
         // Clustered: find this fragment's froxel and loop only its lights.
@@ -132,5 +168,22 @@ float4 fragmentMain(VSOutput input) : SV_Target {
         }
     }
 
-    return float4(input.color * lighting, 1.0);
+    float3 litColor = input.color * lighting;
+
+    // Aerial perspective + height fog (optional; camPos.w > 0.5). Blend the lit color toward a
+    // sky-consistent fog color that brightens/warms toward the sun (Mie-like in-scatter). Fog is
+    // dense low and thins with altitude. Cheap: one length + two exps + a pow.
+    if (globals.camPos.w > 0.5) {
+        float3 toCam   = input.worldPos - globals.camPos.xyz;
+        float  dist    = length(toCam);
+        float3 viewDir = toCam / max(dist, 1e-4);
+        float  heightK = exp(-max(input.worldPos.y - globals.fogParams.z, 0.0) * globals.fogParams.y);
+        float  fogAmt  = saturate(1.0 - exp(-dist * globals.fogParams.x * heightK));
+        float  mu      = dot(viewDir, normalize(globals.lightDir.xyz));   // view·sun
+        float3 inscat  = pow(saturate(mu), globals.fogParams.w) * globals.fogInscatter.rgb;
+        float3 fogCol  = globals.fogColor.rgb + inscat;
+        litColor = lerp(litColor, fogCol, fogAmt);
+    }
+
+    return float4(litColor, 1.0);
 }
