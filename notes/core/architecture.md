@@ -170,9 +170,22 @@ culling in v1). Implemented so far:
   partial-coverage edge px → 540 with 4× MSAA, 628 with FXAA; interior/bg untouched). Benchmark:
   MSAA 4× **+0.29/+1.2 ms** at 4k/16k instances (4× coverage raster, on-tile resolve); FXAA
   **~0.01 ms** (one fullscreen pass).
+- **Graphics config system** (`engine/graphics/render/graphics_config.h`): the renderer's scattered
+  per-feature toggles + tuning knobs are centralized into one value-type **`GraphicsConfig`** (nested
+  `ShadowConfig/SkyConfig/FogConfig/AAConfig/ClusterConfig` + `hdr`; plain data, no singleton) split
+  from a **`RenderResources`** handle bundle (pipelines/samplers the app supplies — the engine builds
+  no shaders). A feature is active when `config.<f>.enabled && its resource is valid`, so "configured
+  but off" is a real state. `Renderer::setConfig()` / `setResources()`; the seven `setX()` setters are
+  now thin wrappers over them. Un-buries the former `shadow::MAP_SIZE` (→ tunable `shadow.mapSize`) and
+  the froxel grid (→ `ClusterConfig`, compile-time-effective for now). Mirrors the physics config: a
+  sparse **`GraphicsConfigOverride` + `resolve(base, override)`**, named **`presets::`**
+  (baseline/performance/cinematic), and **write-only serialization** (`graphics_config_io.h`:
+  `serialize`/`configHash`/`dump`, reader deferred). Tested by `graphics.config_*` (defaults ==
+  former values, resolve, presets, hash). `atmosphere_scene` drives all its toggles through one
+  `GraphicsConfig`. Design note `2026-07-05-graphics-config-system.md`.
 - **Tests**: `graphics.{barrier_transient, multiview_ring, multi_light, compute_smoke,
-  cluster_binning, clustered_forward, hdr_tonemap, shadow_map, shadow_bias, sky, fog, aa}`; parity
-  anchors intact.
+  cluster_binning, clustered_forward, hdr_tonemap, shadow_map, shadow_bias, sky, fog, aa, config_*}`;
+  parity anchors intact.
   **Visuals**: `clustered_lights` (clustered + HDR), `shadow_scene` (cubes + rotating sun +
   shadows + sky + fog + HDR), and `atmosphere_scene` (pillars receding to the horizon — fog/aerial-
   perspective + AA showcase). Each graphics demo exposes its features as **key A/B toggles** (a

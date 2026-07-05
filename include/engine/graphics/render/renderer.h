@@ -12,6 +12,7 @@
 #include <memory>
 #include <span>
 
+#include "engine/graphics/render/graphics_config.h"
 #include "engine/graphics/render/render_view.h"
 
 namespace engine::rhi { class Device; class FrameContext; }
@@ -35,6 +36,16 @@ public:
     // owns pipelinesʼ per-frame buffers + the depth target. Manages no scene data.
     void render(rhi::FrameContext& frame, std::span<const RenderView> views);
 
+    // --- Centralized config (preferred) -------------------------------------------------------
+    // The renderer holds one GraphicsConfig (tunable params + per-feature enable flags) and one
+    // RenderResources bundle (the app-supplied pipeline/sampler handles). A feature runs when its
+    // config flag is on AND its resource is valid. Set the resources once (or on pipeline rebuild)
+    // and drive everything else by mutating the config — see engine/graphics/render/graphics_config.h.
+    void setConfig(const GraphicsConfig& config);
+    const GraphicsConfig& config() const;
+    void setResources(const RenderResources& resources);
+
+    // --- Feature setters (thin wrappers over the config/resources above; kept for convenience) --
     // Enable clustered forward+ lighting. Pass a compute pipeline built from cluster.metallib
     // (the engine loads no shaders itself). When enabled, each view with point lights runs a
     // froxel light-binning compute pass before its forward pass, and the forward shader loops

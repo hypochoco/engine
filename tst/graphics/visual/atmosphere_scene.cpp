@@ -124,26 +124,35 @@ TST_CASE(graphics, visual, atmosphere_scene) {
     render::GeometryStore geometry(device);
     render::MeshHandle box = geometry.upload(primitives::makeBox(glm::vec3(0.5f)));
     render::Renderer renderer(device, geometry);
-    renderer.setSky(pipeSky1);
 
-    // Fog config (sky-consistent pale base + warm sun in-scatter). Toggled by F.
-    auto enableFog = [&]() {
-        renderer.setFog(/*density*/ 0.012f, /*heightFalloff*/ 0.02f, /*baseHeight*/ 0.0f,
-                        /*color*/ glm::vec3(0.55f, 0.63f, 0.80f), /*inscatter*/ glm::vec3(2.4f, 1.6f, 0.8f),
-                        /*inscatterExp*/ 6.0f);
-    };
-    enableFog();   // fog starts on; F toggles it via the KeyToggle below
+    // One GraphicsConfig drives every feature toggle + tuning knob (see graphics_config.h): HDR with
+    // sky + a sky-consistent fog on to start; F/K/M/X flip the flags below. Resources (pipelines/
+    // samplers) are wired separately — MSAA needs sample-count-matched mesh+sky pipelines (a GPU
+    // reality the config can't abstract away), so applyAA() also selects the matching pipeline set.
+    render::GraphicsConfig cfg;
+    cfg.hdr             = true;
+    cfg.sky.enabled     = true;
+    cfg.fog.enabled     = true;
+    cfg.fog.density     = 0.012f;
+    cfg.fog.heightFalloff = 0.02f;
+    cfg.fog.color       = glm::vec3(0.55f, 0.63f, 0.80f);
+    cfg.fog.inscatterColor = glm::vec3(2.4f, 1.6f, 0.8f);
+    cfg.fog.inscatterExponent = 6.0f;
 
-    // AA state: reconfigures pipelines + renderer whenever MSAA (M) or FXAA (X) toggles.
-    bool msaaOn = true, fxaaOn = false, skyOn = true;
-    render::MeshHandle boxMesh = box;
-    render::RenderItem item{ boxMesh, pipeMesh1, 0, 0 };   // instanceCount filled after building instances
+    bool msaaOn = true, fxaaOn = false;
+    render::RenderItem item{ box, pipeMesh1, 0, 0 };   // instanceCount + pipeline set in applyAA
     auto applyAA = [&]() {
-        renderer.setMSAA(msaaOn ? 4 : 1);
-        item.pipeline = msaaOn ? pipeMesh4 : pipeMesh1;
-        renderer.setSky(skyOn ? (msaaOn ? pipeSky4 : pipeSky1) : PipelineHandle{});
-        renderer.setTonemap(fxaaOn ? tmLDR : tmSwap, linSamp);
-        renderer.setFXAA(fxaaOn ? fxPipe : PipelineHandle{}, fxaaOn ? linSamp : SamplerHandle{});
+        cfg.aa.msaaSamples = msaaOn ? 4 : 1;
+        cfg.aa.fxaa        = fxaaOn;
+        renderer.setConfig(cfg);
+        render::RenderResources res;
+        res.sky            = cfg.sky.enabled ? (msaaOn ? pipeSky4 : pipeSky1) : PipelineHandle{};
+        res.tonemap        = fxaaOn ? tmLDR : tmSwap;   // FXAA on ⇒ tonemap writes the LDR intermediate
+        res.tonemapSampler = linSamp;
+        res.fxaa           = fxaaOn ? fxPipe : PipelineHandle{};
+        res.fxaaSampler    = linSamp;
+        renderer.setResources(res);
+        item.pipeline      = msaaOn ? pipeMesh4 : pipeMesh1;
     };
 
     // Ground + a long avenue of pillars receding in -Z, heights varying, both sides of the path.
@@ -182,10 +191,10 @@ TST_CASE(graphics, visual, atmosphere_scene) {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
-        if (fogT.poll(window))  { if (fogT.on) enableFog(); else renderer.setFog(0.0f); }
-        if (skyT.poll(window))  { skyOn  = skyT.on;  applyAA(); }
-        if (msaaT.poll(window)) { msaaOn = msaaT.on; applyAA(); }
-        if (fxaaT.poll(window)) { fxaaOn = fxaaT.on; applyAA(); }
+        if (fogT.poll(window))  { cfg.fog.enabled = fogT.on; applyAA(); }
+        if (skyT.poll(window))  { cfg.sky.enabled = skyT.on; applyAA(); }
+        if (msaaT.poll(window)) { msaaOn = msaaT.on;         applyAA(); }
+        if (fxaaT.poll(window)) { fxaaOn = fxaaT.on;         applyAA(); }
 
         const float t = static_cast<float>(glfwGetTime());
 

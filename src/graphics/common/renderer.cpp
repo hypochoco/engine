@@ -79,8 +79,6 @@ namespace cluster {
     constexpr uint32_t COUNT = CX * CY * CZ;
 }
 
-namespace shadow { constexpr uint32_t MAP_SIZE = 2048; }
-
 struct Renderer::Impl {
     rhi::Device*   device   = nullptr;
     GeometryStore* geometry = nullptr;
@@ -92,19 +90,20 @@ struct Renderer::Impl {
     rhi::TextureHandle      depthTex;
     rhi::RenderTargetHandle depthRT;
     uint32_t                depthW = 0, depthH = 0;
-    rhi::PipelineHandle     clusterPipeline;   // compute; clustered lighting active when valid
 
-    // HDR + tone mapping (opt-in via setTonemap). Forward renders into hdrTex (RGBA16F), then a
-    // fullscreen tonemap pass resolves to the view target.
-    rhi::PipelineHandle     tonemapPipeline;
-    rhi::SamplerHandle      tonemapSampler;
+    // Centralized config: tunable params + per-feature enable flags, and the app-supplied GPU
+    // handles. A feature runs when its config flag is on AND its resource is valid.
+    GraphicsConfig  config_{};
+    RenderResources resources_{};
+
+    // HDR + tone mapping (config_.hdr + resources_.tonemap). Forward renders into hdrTex (RGBA16F),
+    // then a fullscreen tonemap pass resolves it.
     rhi::TextureHandle      hdrTex;
     rhi::RenderTargetHandle hdrRT;
     uint32_t                hdrW = 0, hdrH = 0;
 
-    // MSAA (opt-in via setMSAA): the forward pass renders into these multisampled targets and
+    // MSAA (config_.aa.msaaSamples): the forward pass renders into these multisampled targets and
     // resolves into the single-sample HDR/view target. Memoryless (on-tile) — never read back.
-    uint32_t                msaaSamples = 1;   // 1 = off
     rhi::TextureHandle      msaaColorTex;
     rhi::RenderTargetHandle msaaColorRT;
     rhi::TextureHandle      msaaDepthTex;
@@ -130,11 +129,9 @@ struct Renderer::Impl {
         msaaW = w; msaaH = h; msaaN = samples; msaaFmt = colorFmt;
     }
 
-    // FXAA (opt-in via setFXAA). The pre-FXAA stage writes this intermediate LDR texture; the FXAA
-    // pass samples it and writes the view target. Fixed RGBA8Unorm (the app builds its tonemap
-    // pipeline to output RGBA8Unorm when FXAA is on).
-    rhi::PipelineHandle     fxaaPipeline;
-    rhi::SamplerHandle      fxaaSampler;
+    // FXAA (config_.aa.fxaa + resources_.fxaa). The pre-FXAA stage writes this intermediate LDR
+    // texture; the FXAA pass samples it and writes the view target. Fixed RGBA8Unorm (the app builds
+    // its tonemap pipeline to output RGBA8Unorm when FXAA is on).
     rhi::TextureHandle      ldrTex;
     rhi::RenderTargetHandle ldrRT;
     uint32_t                ldrW = 0, ldrH = 0;
@@ -150,42 +147,21 @@ struct Renderer::Impl {
         ldrW = w; ldrH = h;
     }
 
-    // Directional sun shadow map (opt-in via setShadows).
-    rhi::PipelineHandle     shadowPipeline;
-    rhi::SamplerHandle      shadowSampler;
-    float                   shadowExtent = 25.0f;   // ortho half-extent (world units)
-    float                   shadowDist   = 100.0f;  // ortho depth range along the light
-    float                   shadowBias   = 0.0018f; // depth-compare bias (peter-panning knob)
+    // Directional sun shadow map (config_.shadow + resources_.shadow).
     rhi::TextureHandle      shadowTex;
     rhi::RenderTargetHandle shadowRT;
-
-    // Procedural sky (opt-in via setSky), drawn at the end of the forward pass. Palette defaults
-    // (scene-referred / HDR); overridable via setSkyColors.
-    rhi::PipelineHandle skyPipeline;
-    glm::vec3 skyZenith   {0.10f, 0.24f, 0.55f};
-    glm::vec3 skyHorizon  {0.62f, 0.72f, 0.86f};
-    glm::vec3 skyGround   {0.28f, 0.26f, 0.24f};
-    glm::vec3 skySunColor {12.0f, 10.5f, 8.0f};
-    float     skySunCosSize   = 0.99985f;   // cos(~1.0°) sun angular radius
-    float     skyGlowExponent = 250.0f;
-    float     skyGlowStrength = 0.5f;
-    float     skyBrightness   = 1.0f;
-
-    // Aerial-perspective + height fog (opt-in via setFog; applied in the forward shader).
-    bool      fogEnabled     = false;
-    float     fogDensity     = 0.0f;
-    float     fogHeightFalloff = 0.0f;
-    float     fogBaseHeight  = 0.0f;
-    float     fogInscatterExp = 8.0f;
-    glm::vec3 fogColor        {0.7f, 0.8f, 0.9f};
-    glm::vec3 fogInscatter    {0.0f};
+    uint32_t                shadowMapW = 0;   // tracks the created map size for lazy re-alloc
 
     void ensureShadowMap() {
-        if (shadowTex.valid()) return;
+        const uint32_t sz = config_.shadow.mapSize;
+        if (shadowTex.valid() && shadowMapW == sz) return;
+        if (shadowTex.valid()) device->destroy(shadowTex);
+        if (shadowRT.valid())  device->destroy(shadowRT);
         shadowTex = device->createTexture(
-            { .width = shadow::MAP_SIZE, .height = shadow::MAP_SIZE, .format = rhi::Format::Depth32Float,
+            { .width = sz, .height = sz, .format = rhi::Format::Depth32Float,
               .usage = rhi::TextureUsage::DepthTarget | rhi::TextureUsage::Sampled });
         shadowRT = device->createRenderTarget(shadowTex);
+        shadowMapW = sz;
     }
 
     void ensureDepth(uint32_t w, uint32_t h) {
@@ -236,61 +212,72 @@ Renderer::~Renderer() {
     }
 }
 
+void Renderer::setConfig(const GraphicsConfig& config) { impl_->config_ = config; }
+const GraphicsConfig& Renderer::config() const { return impl_->config_; }
+void Renderer::setResources(const RenderResources& resources) { impl_->resources_ = resources; }
+
 void Renderer::setClusterBinning(rhi::PipelineHandle binningPipeline) {
-    impl_->clusterPipeline = binningPipeline;
+    impl_->resources_.clusterBinning = binningPipeline;
+    impl_->config_.cluster.enabled   = binningPipeline.valid();
 }
 
 void Renderer::setShadows(rhi::PipelineHandle shadowPipeline, rhi::SamplerHandle sampler,
                           float orthoHalfExtent, float depthRange, float bias) {
-    impl_->shadowPipeline = shadowPipeline;
-    impl_->shadowSampler  = sampler;
-    impl_->shadowExtent   = orthoHalfExtent;
-    impl_->shadowDist     = depthRange;
-    impl_->shadowBias     = bias;
+    impl_->resources_.shadow        = shadowPipeline;
+    impl_->resources_.shadowSampler = sampler;
+    impl_->config_.shadow.enabled         = shadowPipeline.valid();
+    impl_->config_.shadow.orthoHalfExtent = orthoHalfExtent;
+    impl_->config_.shadow.depthRange      = depthRange;
+    impl_->config_.shadow.bias            = bias;
 }
 
 void Renderer::setTonemap(rhi::PipelineHandle tonemapPipeline, rhi::SamplerHandle sampler) {
-    impl_->tonemapPipeline = tonemapPipeline;
-    impl_->tonemapSampler  = sampler;
+    impl_->resources_.tonemap        = tonemapPipeline;
+    impl_->resources_.tonemapSampler = sampler;
+    impl_->config_.hdr               = tonemapPipeline.valid();
 }
 
 void Renderer::setSky(rhi::PipelineHandle skyPipeline) {
-    impl_->skyPipeline = skyPipeline;
+    impl_->resources_.sky    = skyPipeline;
+    impl_->config_.sky.enabled = skyPipeline.valid();
 }
 
 void Renderer::setSkyColors(const glm::vec3& zenith, const glm::vec3& horizon,
                             const glm::vec3& ground, const glm::vec3& sunColor,
                             float sunAngularRadiusDeg, float glowExponent,
                             float glowStrength, float brightness) {
-    impl_->skyZenith       = zenith;
-    impl_->skyHorizon      = horizon;
-    impl_->skyGround       = ground;
-    impl_->skySunColor     = sunColor;
-    impl_->skySunCosSize   = std::cos(glm::radians(sunAngularRadiusDeg));
-    impl_->skyGlowExponent = glowExponent;
-    impl_->skyGlowStrength = glowStrength;
-    impl_->skyBrightness   = brightness;
+    SkyConfig& s = impl_->config_.sky;
+    s.zenith    = zenith;
+    s.horizon   = horizon;
+    s.ground    = ground;
+    s.sunColor  = sunColor;
+    s.sunAngularRadiusDeg = sunAngularRadiusDeg;
+    s.glowExponent = glowExponent;
+    s.glowStrength = glowStrength;
+    s.brightness   = brightness;
 }
 
 void Renderer::setFog(float density, float heightFalloff, float baseHeight,
                       const glm::vec3& color, const glm::vec3& inscatterColor,
                       float inscatterExponent) {
-    impl_->fogEnabled      = density > 0.0f;
-    impl_->fogDensity      = density;
-    impl_->fogHeightFalloff = heightFalloff;
-    impl_->fogBaseHeight   = baseHeight;
-    impl_->fogColor        = color;
-    impl_->fogInscatter    = inscatterColor;
-    impl_->fogInscatterExp = inscatterExponent;
+    FogConfig& f = impl_->config_.fog;
+    f.enabled           = density > 0.0f;
+    f.density           = density;
+    f.heightFalloff     = heightFalloff;
+    f.baseHeight        = baseHeight;
+    f.color             = color;
+    f.inscatterColor    = inscatterColor;
+    f.inscatterExponent = inscatterExponent;
 }
 
 void Renderer::setMSAA(uint32_t sampleCount) {
-    impl_->msaaSamples = sampleCount < 1 ? 1 : sampleCount;
+    impl_->config_.aa.msaaSamples = sampleCount < 1 ? 1 : sampleCount;
 }
 
 void Renderer::setFXAA(rhi::PipelineHandle fxaaPipeline, rhi::SamplerHandle sampler) {
-    impl_->fxaaPipeline = fxaaPipeline;
-    impl_->fxaaSampler  = sampler;
+    impl_->resources_.fxaa        = fxaaPipeline;
+    impl_->resources_.fxaaSampler = sampler;
+    impl_->config_.aa.fxaa        = fxaaPipeline.valid();
 }
 
 void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> views) {
@@ -308,40 +295,42 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
 
         // Clustered forward+ active for this view? (Must be known BEFORE uploading the camera
         // uniform, since it sets params.y which the forward shader reads.)
-        const bool clustered = I.clusterPipeline.valid() && !view.pointLights.empty();
+        const bool clustered = I.config_.cluster.enabled && I.resources_.clusterBinning.valid()
+                               && !view.pointLights.empty();
 
         // Directional sun shadow map active? Compute the light's orthographic view-proj (centered
         // at the origin, looking along the sun direction).
-        const bool shadows = I.shadowPipeline.valid();
+        const bool shadows = I.config_.shadow.enabled && I.resources_.shadow.valid();
         glm::mat4 lightVP(1.0f);
         if (shadows) {
             I.ensureShadowMap();
             const glm::vec3 dir = glm::normalize(view.light.direction);   // direction light travels
             const glm::vec3 center(0.0f);
-            const glm::vec3 lightPos = center - dir * (I.shadowDist * 0.5f);
+            const glm::vec3 lightPos = center - dir * (I.config_.shadow.depthRange * 0.5f);
             const glm::vec3 up = (std::abs(dir.y) > 0.99f) ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
             const glm::mat4 lv = glm::lookAt(lightPos, center, up);
-            const glm::mat4 lp = glm::ortho(-I.shadowExtent, I.shadowExtent,
-                                            -I.shadowExtent, I.shadowExtent, 0.0f, I.shadowDist);
+            const float ext = I.config_.shadow.orthoHalfExtent;
+            const glm::mat4 lp = glm::ortho(-ext, ext, -ext, ext, 0.0f, I.config_.shadow.depthRange);
             lightVP = lp * lv;
         }
 
         GlobalUniforms g;
         g.viewProj      = view.proj * view.view;
         g.lightViewProj = lightVP;
-        g.lightDir   = glm::vec4(glm::normalize(-view.light.direction), I.shadowBias);  // xyz→light, w=bias
+        g.lightDir   = glm::vec4(glm::normalize(-view.light.direction), I.config_.shadow.bias);  // xyz→light, w=bias
         g.lightColor = glm::vec4(view.light.color * view.light.intensity, 0.0f);
         g.ambient    = glm::vec4(view.light.ambient, 0.0f);
         g.params     = glm::vec4(static_cast<float>(view.pointLights.size()),
                                  clustered ? 1.0f : 0.0f,
                                  shadows ? 1.0f : 0.0f,
-                                 static_cast<float>(shadow::MAP_SIZE));
+                                 static_cast<float>(I.config_.shadow.mapSize));
         // Camera world position + aerial-perspective fog (applied in the forward shader).
         const glm::vec3 camPos = glm::vec3(glm::inverse(view.view)[3]);
-        g.camPos       = glm::vec4(camPos, I.fogEnabled ? 1.0f : 0.0f);
-        g.fogColor     = glm::vec4(I.fogColor, 0.0f);
-        g.fogInscatter = glm::vec4(I.fogInscatter, 0.0f);
-        g.fogParams    = glm::vec4(I.fogDensity, I.fogHeightFalloff, I.fogBaseHeight, I.fogInscatterExp);
+        const FogConfig& fog = I.config_.fog;
+        g.camPos       = glm::vec4(camPos, fog.enabled ? 1.0f : 0.0f);
+        g.fogColor     = glm::vec4(fog.color, 0.0f);
+        g.fogInscatter = glm::vec4(fog.inscatterColor, 0.0f);
+        g.fogParams    = glm::vec4(fog.density, fog.heightFalloff, fog.baseHeight, fog.inscatterExponent);
 
         // Sub-allocate this view's upload data from the frame ring (distinct regions per view).
         const FrameRingAllocator::Alloc cam = I.ring.upload(&g, 1);
@@ -364,14 +353,15 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         if (shadows) {
             ShadowGlobalsGPU sg; sg.lightViewProj = lightVP;
             const FrameRingAllocator::Alloc sgA = I.ring.upload(&sg, 1);
-            rhi::PipelineHandle shPipe = I.shadowPipeline;
+            rhi::PipelineHandle shPipe = I.resources_.shadow;
             FrameRingAllocator::Alloc instS = inst;
             RenderGraph::ColorTarget noColor;   // invalid rt ⇒ depth-only
             RenderGraph::DepthTarget shDepth;
             shDepth.rt = I.shadowRT; shDepth.tex = I.shadowTex; shDepth.used = true;
             shDepth.load = rhi::LoadOp::Clear; shDepth.store = rhi::StoreOp::Store;
+            const uint32_t shMap = I.config_.shadow.mapSize;
             graph.addRasterPass(
-                "shadow", noColor, shDepth, shadow::MAP_SIZE, shadow::MAP_SIZE, /*reads=*/{},
+                "shadow", noColor, shDepth, shMap, shMap, /*reads=*/{},
                 [geom, vtx, idx, items, sgA, instS, shPipe](rhi::CommandList& cl) {
                     cl.bindPipeline(shPipe);
                     std::array<rhi::BufferBinding, 2> b{};
@@ -413,7 +403,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
             // GPU use (frames-in-flight throttle), so a host memset here is safe + cheap.
             if (gridA.ptr) std::memset(gridA.ptr, 0, cluster::COUNT * sizeof(uint32_t));
 
-            rhi::PipelineHandle binPipe = I.clusterPipeline;
+            rhi::PipelineHandle binPipe = I.resources_.clusterBinning;
             FrameRingAllocator::Alloc lightsA = lights;
             const uint32_t nLights = static_cast<uint32_t>(view.pointLights.size());
             graph.addComputePass(
@@ -431,8 +421,8 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                 });
         }
 
-        const bool hdr = I.tonemapPipeline.valid();
-        const bool fxaaOn = I.fxaaPipeline.valid();
+        const bool hdr = I.config_.hdr && I.resources_.tonemap.valid();
+        const bool fxaaOn = I.config_.aa.fxaa && I.resources_.fxaa.valid();
         if (hdr) I.ensureHDR(view.width, view.height);
         if (fxaaOn) I.ensureLDR(view.width, view.height);
 
@@ -442,7 +432,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         const rhi::RenderTargetHandle preRT  = fxaaOn ? I.ldrRT  : finalRT;
         const rhi::TextureHandle      preTex = fxaaOn ? I.ldrTex : rhi::TextureHandle{};
 
-        const uint32_t samples = I.msaaSamples;
+        const uint32_t samples = I.config_.aa.msaaSamples;
         const bool msaa = samples > 1;
         // The single-sample destination the forward pass writes (HDR buffer when tonemapping, else
         // the pre-FXAA target). With MSAA this becomes the resolve destination.
@@ -467,27 +457,29 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         depth.load = rhi::LoadOp::Clear; depth.store = rhi::StoreOp::DontCare;
 
         rhi::TextureHandle shadowTex = I.shadowTex;
-        rhi::SamplerHandle shadowSamp = I.shadowSampler;
+        rhi::SamplerHandle shadowSamp = I.resources_.shadowSampler;
         std::vector<rhi::TextureHandle> forwardReads;
         if (shadows) forwardReads.push_back(shadowTex);
 
         // Procedural sky: drawn at the END of the forward pass (same render pass ⇒ on-tile on
         // Apple, depth-tested against opaque so it only fills background). Uploaded per view.
-        const bool skyOn = I.skyPipeline.valid();
+        const bool skyOn = I.config_.sky.enabled && I.resources_.sky.valid();
         FrameRingAllocator::Alloc skyA{};
         if (skyOn) {
+            const SkyConfig& sky = I.config_.sky;
             SkyGlobalsGPU sk;
             sk.invViewProj = glm::inverse(g.viewProj);
             sk.camPos   = glm::vec4(glm::vec3(glm::inverse(view.view)[3]), 0.0f);
             sk.sunDir   = glm::vec4(glm::normalize(-view.light.direction), 0.0f);
-            sk.zenith   = glm::vec4(I.skyZenith, 0.0f);
-            sk.horizon  = glm::vec4(I.skyHorizon, 0.0f);
-            sk.ground   = glm::vec4(I.skyGround, 0.0f);
-            sk.sunColor = glm::vec4(I.skySunColor, 0.0f);
-            sk.params   = glm::vec4(I.skySunCosSize, I.skyGlowExponent, I.skyGlowStrength, I.skyBrightness);
+            sk.zenith   = glm::vec4(sky.zenith, 0.0f);
+            sk.horizon  = glm::vec4(sky.horizon, 0.0f);
+            sk.ground   = glm::vec4(sky.ground, 0.0f);
+            sk.sunColor = glm::vec4(sky.sunColor, 0.0f);
+            const float sunCos = std::cos(glm::radians(sky.sunAngularRadiusDeg));
+            sk.params   = glm::vec4(sunCos, sky.glowExponent, sky.glowStrength, sky.brightness);
             skyA = I.ring.upload(&sk, 1);
         }
-        rhi::PipelineHandle skyPipe = I.skyPipeline;
+        rhi::PipelineHandle skyPipe = I.resources_.sky;
 
         graph.addRasterPass(
             "forward", color, depth, view.width, view.height, forwardReads,
@@ -538,8 +530,8 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         // HDR resolve: a fullscreen pass samples the HDR target and tone-maps it to the pre-FXAA
         // target (the view target, or the LDR intermediate when FXAA is on).
         if (hdr) {
-            rhi::PipelineHandle tmPipe = I.tonemapPipeline;
-            rhi::SamplerHandle  tmSamp = I.tonemapSampler;
+            rhi::PipelineHandle tmPipe = I.resources_.tonemap;
+            rhi::SamplerHandle  tmSamp = I.resources_.tonemapSampler;
             rhi::TextureHandle  hdrTex = I.hdrTex;
             RenderGraph::ColorTarget tmColor;
             tmColor.rt = preRT; tmColor.tex = preTex;
@@ -562,8 +554,8 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         // FXAA: a fullscreen pass samples the pre-FXAA LDR intermediate and anti-aliases it to the
         // final view target. The graph transitions preTex RenderTarget -> ShaderRead.
         if (fxaaOn) {
-            rhi::PipelineHandle fxPipe = I.fxaaPipeline;
-            rhi::SamplerHandle  fxSamp = I.fxaaSampler;
+            rhi::PipelineHandle fxPipe = I.resources_.fxaa;
+            rhi::SamplerHandle  fxSamp = I.resources_.fxaaSampler;
             rhi::TextureHandle  srcTex = preTex;
             RenderGraph::ColorTarget fxColor;
             fxColor.rt = finalRT;

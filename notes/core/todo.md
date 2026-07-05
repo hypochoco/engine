@@ -571,6 +571,17 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       **+0.29/+1.2 ms** @4k/16k instances (4× coverage raster, on-tile resolve); FXAA **~0.01 ms**.
       Wired into `atmosphere_scene` (M/X toggles). Deferred: TAA/MetalFX temporal, SMAA, custom
       tonemap-weighted HDR MSAA resolve, alpha-to-coverage.
+      **Graphics config system DONE (2026-07-05)** — the scattered `Renderer::setX()` toggles +
+      tuning knobs are centralized into a value-type `GraphicsConfig` (nested Shadow/Sky/Fog/AA/
+      Cluster + hdr) split from a `RenderResources` handle bundle (feature active = config.enabled &&
+      resource valid). `Renderer::setConfig`/`setResources`; the 7 setters are thin wrappers.
+      Un-buried `shadow::MAP_SIZE`→`shadow.mapSize` (now tunable) + the froxel grid→`ClusterConfig`
+      (compile-time-effective, decision 5). G2: `GraphicsConfigOverride` + `resolve(base, override)`
+      + `presets::{baseline,performance,cinematic}`. G3: write-only `serialize`/`configHash`/`dump`
+      (`graphics_config_io.h`; reader deferred). Tests `graphics.config_*` (4 cases); `atmosphere_scene`
+      migrated to drive its toggles from one config. Suite 167/0 (was 163 + 4 config). Design note
+      `investigations/2026-07-05-graphics-config-system.md`. Deferred: kv READER (needs a tools/CLI),
+      runtime froxel-grid resize, a pipeline-variant helper to remove the app's MSAA sample-count juggling.
 - [x] **Benchmark** — DONE (2026-07-04), `tst/graphics/benchmark/render_graph.cpp` (in the
       `benchmarks` runner; graphics bench now globbed + `engine::graphics` linked). Numbers (Apple,
       RelWithDebInfo, 512×512, headless — relative baseline for THIS machine):
