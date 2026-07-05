@@ -48,7 +48,7 @@ target_link_libraries(benchmarks PRIVATE engine::physics_ecs engine::physics_env
 if(APPLE)
     add_executable(visuals ${HARNESS} ${VISUAL_SRC})
     target_include_directories(visuals PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(visuals PRIVATE engine::scene engine::physics_ecs engine::input engine::input_glfw engine::controls)
+    target_link_libraries(visuals PRIVATE engine::scene engine::physics_ecs engine::physics_env engine::input engine::input_glfw engine::controls)
     add_dependencies(visuals shaders)
     target_compile_definitions(visuals PRIVATE ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
 endif()
