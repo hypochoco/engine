@@ -125,8 +125,9 @@ culling in v1). Implemented so far:
   compute pass** (`cluster.slang`, 12×12×24 grid, view-space AABB + sphere test) bins lights into
   per-cluster lists, and `Renderer::setClusterBinning(pipeline)` enables it (a binning pass per view
   before the forward pass; the forward shader loops only its froxel's lights). Clustered output is
-  **pixel-identical** to loop-all (verified). *Perf note*: the current binning is O(clusters×lights),
-  so it doesn't yet beat loop-all at high light counts — binning efficiency is the next optimization.
+  **pixel-identical** to loop-all (verified). Binning is a **thread-per-light scatter** (RF4b-opt,
+  O(lights × local-froxels)); on a wide field of localized lights clustered beats loop-all by
+  **2.3× / 5.3× / 17.9×** at 256 / 1024 / 4096 lights (stays ~1 ms as lights scale).
 - **HDR + tone mapping** (RF5): added **explicit texture+sampler binding** to the RHI
   (`TextureBinding`/`SamplerBinding`; Metal `createSampler` — the first shader texture sampling).
   `Renderer::setTonemap(pipeline, sampler)` is opt-in: the forward pass renders into an RGBA16F HDR
@@ -138,7 +139,8 @@ culling in v1). Implemented so far:
   intact. **Visual**: `tst/graphics/visual/clustered_lights.cpp` (windowed field of spheres under
   many moving colored point lights, clustered forward+ + HDR/ACES; run `visuals clustered_lights`).
   **Benchmark** `tst/graphics/benchmark/render_graph.cpp`: CPU record time flat (~0.02 ms) to 65k
-  instances / 1024 lights; the naive O(clusters×lights) binning finding above.
+  instances; instance-count + light-count sweeps; clustered-vs-loop-all on a wide local-light field
+  (the 2.3×/5.3×/17.9× numbers above).
 
 **Pending (todo.md "Render framework")**: faster light binning (RF4b-opt); then shadows/sky/AA as
 additive graph nodes; and (later, non-Apple) the Vulkan backend behind the same RHI.

@@ -477,15 +477,26 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       flag; `Renderer::setClusterBinning(pipeline)` adds a per-view binning compute pass before the
       forward pass. `graphics.clustered_forward` proves clustered output is **pixel-identical** to
       loop-all (MAD=0.0, maxDiff=0 over 22.8k lit px). Grid 12×12×24, maxLights/cluster 64.
-      **Perf finding (honest)**: the current binning is **O(clusters×lights)** (per-cluster loop over
-      all lights), so at 1024 lights its cost offsets the per-fragment shading savings — clustered ≈
-      loop-all in the bench (26.1 vs 26.7 ms). Correctness is done; **binning efficiency is the next
-      optimization** (one-thread-per-light scatter, or a 2-level/tiled reduction, or fewer/adaptive
-      clusters). Deferred (still): full LightList (spot lights), Z-slice exponential distribution.
-- [ ] **RF4b-opt. Faster light binning** — the O(clusters×lights) kernel is the bottleneck at high
-      light counts (see RF4b bench). Options: thread-per-light writing into overlapped froxels
-      (atomics), or a compute reduction, or exponential Z slices + fewer clusters. Measure vs the
-      loop-all baseline; target a real crossover win at 256–1024 localized lights.
+      **Note**: an early benchmark showed clustered ≈ loop-all; that was NOT a binning-cost issue
+      but two bugs (uncapped forward loop + the `params.y` "use clusters" flag set AFTER the camera
+      upload, so the clustered branch never ran — the equivalence test couldn't catch it as both
+      paths were loop-all). Both fixed in RF4b-opt, which then measured up to **17.9×**.
+      Deferred (still): full LightList (spot lights), Z-slice exponential distribution.
+- [x] **RF4b-opt. Faster light binning** — DONE (2026-07-04). Rewrote `cluster.slang` as a
+      **thread-per-light scatter**: each light computes the small froxel range it covers (tile
+      range + depth-slice range, +1 conservative margin) and appends itself into overlapping
+      clusters via `InterlockedAdd` on the per-cluster count (host zero-clears the count buffer
+      each frame; dispatch is now per-light). O(lights × local-froxels) vs the old
+      O(clusters × lights). **Two bugs found + fixed while benchmarking** (this is why the earlier
+      "naive binning offsets the win" note was wrong — clustering wasn't actually running):
+      (1) the forward shader looped the **uncapped** atomic count and read past the 64-entry list
+      into garbage — now `min(count, maxPer)`; (2) the renderer set `params.y` (the "use clusters"
+      flag) **after** uploading the camera uniform, so the shader always took the loop-all branch —
+      the `clustered_forward` equivalence test couldn't catch it (both paths were loop-all). Fixed
+      the ordering; clustering now genuinely runs. **Result** (wide field of 4096 spheres, local
+      lights, 512×512): clustered vs loop-all **256 lights 2.3×** (1.83→0.81 ms), **1024 5.3×**
+      (4.90→0.93 ms), **4096 17.9×** (17.7→0.99 ms) — clustered stays ~1 ms as lights scale.
+      Correctness held throughout (`clustered_forward` MAD=0, `cluster_binning` 0 mismatches).
 - [x] **RF5. HDR + tonemap** — DONE (2026-07-04). Added **texture+sampler binding** to the RHI
       (`TextureBinding`/`SamplerBinding` in `ResourceBindings`; Metal `createSampler` + fragment
       texture/sampler binds — the first shader texture sampling). `tonemap.slang` = fullscreen

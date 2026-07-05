@@ -90,6 +90,10 @@ TST_CASE(graphics, integration, cluster_binning) {
     BufferHandle idxBuf = device.createBuffer(
         { .size = numClusters * MAXP * sizeof(uint32_t), .usage = BufferUsage::Storage, .memory = MemoryMode::CpuToGpu });
 
+    // Thread-per-light scatter accumulates counts atomically ⇒ zero the count buffer first.
+    if (uint32_t* gp = static_cast<uint32_t*>(device.map(gridBuf)))
+        for (uint32_t i = 0; i < numClusters; ++i) gp[i] = 0;
+
     FrameContext frame = device.beginFrame();
     CommandList cl = device.commandList(frame);
     cl.beginCompute();
@@ -100,7 +104,7 @@ TST_CASE(graphics, integration, cluster_binning) {
     };
     ResourceBindings rb; rb.buffers = std::span<const BufferBinding>(bb, 4);
     cl.bindResources(rb);
-    cl.dispatch((numClusters + 63) / 64, 1, 1);
+    cl.dispatch((static_cast<uint32_t>(lights.size()) + 63) / 64, 1, 1);   // one thread per light
     cl.endCompute();
     device.submit(frame, cl);
     device.endFrame(std::move(frame));

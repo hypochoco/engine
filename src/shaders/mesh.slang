@@ -117,7 +117,9 @@ float4 fragmentMain(VSOutput input) : SV_Target {
         // Framebuffer pixel origin is top-left, but froxel Y follows view-space +Y (up), so flip.
         int iy = clamp((int)floor((1.0 - input.position.y / cparams.screen.y) * (float)CY), 0, (int)CY - 1);
         uint cluster = (uint)ix + (uint)iy * CX + (uint)kz * CX * CY;
-        uint count = lightGrid[cluster];
+        // lightGrid holds the TRUE overlap count (atomic), which can exceed the per-cluster
+        // capacity; only the first maxPer indices are stored, so clamp the loop.
+        uint count = min(lightGrid[cluster], maxPer);
         for (uint s = 0; s < count; ++s) {
             uint li = lightIndices[cluster * maxPer + s];
             lighting += shadePoint(pointLights[li], N, input.worldPos);

@@ -141,34 +141,55 @@ TST_CASE(graphics, benchmark, render_graph) {
         std::printf("%10u %12.3f %12.3f %16.1f\n", n, rec, frame, minstps);
     }
 
-    std::printf("\n--- point-light sweep (4096 instances): loop-all vs clustered forward+ ---\n");
-    std::printf("(lights are LOCAL: small radius, spread across the scene — clustering's use case)\n");
-    std::printf("%12s %16s %16s\n", "lights", "loop-all ms", "clustered ms");
-    auto instances = buildInstances(4096);
-    render::RenderItem item{ sphere, pipe, 0, 4096 };
-    std::vector<render::PointLight> lights;
-    for (uint32_t nl : {0u, 16u, 64u, 256u, 1024u}) {
-        lights.clear();
-        // Scatter small-radius lights across the instance cube's extent so each touches only a few
-        // froxels (the locality clustering exploits). ~19-unit cube (buildInstances spacing 1.2).
-        for (uint32_t i = 0; i < nl; ++i) {
-            float a = float(i) * 2.3999632f;   // golden-angle scatter
-            float r = 9.0f * std::sqrt(float(i + 1) / float(nl + 1));
-            lights.push_back({ {std::cos(a) * r, std::sin(a) * r, std::sin(a * 0.7f) * 9.0f}, 2.5f,
-                               {1.0f, 1.0f, 1.0f}, 1.0f });
+    std::printf("\n--- point-light sweep: loop-all vs clustered forward+ ---\n");
+    std::printf("(WIDE field of 4096 spheres, lights LOCAL across it — clustering's use case)\n");
+    std::printf("%12s %16s %16s %10s\n", "lights", "loop-all ms", "clustered ms", "speedup");
+    // A wide flat field on the XZ plane so screen froxels map to different world regions (each
+    // froxel sees only nearby lights). Camera looks across it at a grazing angle for depth spread.
+    const int fN = 64;                       // 64x64 = 4096
+    const float fsp = 2.0f, fext = (fN - 1) * fsp * 0.5f;
+    std::vector<render::InstanceData> field(static_cast<size_t>(fN) * fN);
+    for (int iz = 0; iz < fN; ++iz)
+        for (int ix = 0; ix < fN; ++ix) {
+            auto& in = field[static_cast<size_t>(iz) * fN + ix];
+            in.model = glm::translate(glm::mat4(1.0f), glm::vec3(ix * fsp - fext, 0.0f, iz * fsp - fext));
+            in.normalModel = in.model; in.materialIndex = 0;
         }
-        auto view = makeView(instances, item, std::span<const render::PointLight>(lights));
+    render::RenderItem fieldItem{ sphere, pipe, 0, static_cast<uint32_t>(field.size()) };
 
-        renderer.setClusterBinning({});                 // loop-all
+    auto makeFieldView = [&](std::span<const render::PointLight> lights) {
+        render::RenderView v;
+        v.view = glm::lookAt(glm::vec3(0, 30, fext * 1.3f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+        v.proj = glm::perspective(glm::radians(60.0f), float(W) / float(H), 0.5f, 400.0f);
+        v.target = colorRT; v.width = W; v.height = H;
+        v.items = std::span<const render::RenderItem>(&fieldItem, 1);
+        v.instances = std::span<const render::InstanceData>(field);
+        v.materials = std::span<const render::MaterialGPU>(&mat, 1);
+        v.pointLights = lights;
+        return v;
+    };
+
+    std::vector<render::PointLight> lights;
+    for (uint32_t nl : {0u, 64u, 256u, 1024u, 4096u}) {
+        lights.clear();
+        for (uint32_t i = 0; i < nl; ++i) {
+            float a = float(i) * 2.3999632f;                 // golden-angle scatter over the field
+            float rr = fext * std::sqrt(float(i + 1) / float(nl + 1));
+            lights.push_back({ {std::cos(a) * rr, 1.5f, std::sin(a) * rr}, 3.0f, {1, 1, 1}, 1.0f });
+        }
+        auto view = makeFieldView(std::span<const render::PointLight>(lights));
+
+        renderer.setClusterBinning({});                  // loop-all
         runFrames(view, 3);
-        auto [rec0, frameLoop] = runFrames(view, 20);
+        auto [r0, frameLoop] = runFrames(view, 20);
 
-        renderer.setClusterBinning(clusterPipe);         // clustered forward+
+        renderer.setClusterBinning(clusterPipe);          // clustered forward+
         runFrames(view, 3);
-        auto [rec1, frameClus] = runFrames(view, 20);
-        (void)rec0; (void)rec1;
+        auto [r1, frameClus] = runFrames(view, 20);
+        (void)r0; (void)r1;
 
-        std::printf("%12u %16.3f %16.3f\n", nl, frameLoop, frameClus);
+        std::printf("%12u %16.3f %16.3f %9.2fx\n", nl, frameLoop, frameClus,
+                    frameClus > 0 ? frameLoop / frameClus : 0.0);
     }
     renderer.setClusterBinning({});
     std::printf("\nrender_graph benchmark done\n");

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <span>
 
 #include <glm/glm.hpp>
@@ -136,12 +137,17 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
     for (const auto& view : views) {
         I.ensureDepth(view.width, view.height);
 
+        // Clustered forward+ active for this view? (Must be known BEFORE uploading the camera
+        // uniform, since it sets params.y which the forward shader reads.)
+        const bool clustered = I.clusterPipeline.valid() && !view.pointLights.empty();
+
         GlobalUniforms g;
         g.viewProj   = view.proj * view.view;
         g.lightDir   = glm::vec4(glm::normalize(-view.light.direction), 0.0f);  // surface→light
         g.lightColor = glm::vec4(view.light.color * view.light.intensity, 0.0f);
         g.ambient    = glm::vec4(view.light.ambient, 0.0f);
-        g.params     = glm::vec4(static_cast<float>(view.pointLights.size()), 0.0f, 0.0f, 0.0f);
+        g.params     = glm::vec4(static_cast<float>(view.pointLights.size()),
+                                 clustered ? 1.0f : 0.0f, 0.0f, 0.0f);
 
         // Sub-allocate this view's upload data from the frame ring (distinct regions per view).
         const FrameRingAllocator::Alloc cam = I.ring.upload(&g, 1);
@@ -155,7 +161,6 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
 
         // Clustered forward+: if enabled and this view has point lights, add a froxel light-binning
         // compute pass before the forward pass, and bind the cluster buffers to shading.
-        const bool clustered = I.clusterPipeline.valid() && !view.pointLights.empty();
         FrameRingAllocator::Alloc cparamsA{}, gridA{}, idxA{};
         if (clustered) {
             const glm::mat4& P = view.proj;
@@ -172,13 +177,17 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
             cparamsA = I.ring.upload(&cpp, 1);
             gridA = I.ring.alloc(cluster::COUNT * sizeof(uint32_t));
             idxA  = I.ring.alloc(static_cast<uint64_t>(cluster::COUNT) * cluster::MAX_PER * sizeof(uint32_t));
-            g.params.y = 1.0f;   // tell the forward shader to use clusters
+            // Thread-per-light scatter accumulates counts atomically, so the count buffer must
+            // start zeroed. Ring memory is CPU-visible (Shared) and this frame's arena is not in
+            // GPU use (frames-in-flight throttle), so a host memset here is safe + cheap.
+            if (gridA.ptr) std::memset(gridA.ptr, 0, cluster::COUNT * sizeof(uint32_t));
 
             rhi::PipelineHandle binPipe = I.clusterPipeline;
             FrameRingAllocator::Alloc lightsA = lights;
+            const uint32_t nLights = static_cast<uint32_t>(view.pointLights.size());
             graph.addComputePass(
                 "cluster-binning", /*reads=*/{}, /*writes=*/{},
-                [binPipe, cparamsA, lightsA, gridA, idxA](rhi::CommandList& cl) {
+                [binPipe, cparamsA, lightsA, gridA, idxA, nLights](rhi::CommandList& cl) {
                     cl.bindPipeline(binPipe);
                     std::array<rhi::BufferBinding, 4> b{};
                     b[0] = { .binding = 0, .buffer = cparamsA.buffer, .offset = cparamsA.offset };
@@ -187,7 +196,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                     b[3] = { .binding = 3, .buffer = idxA.buffer,     .offset = idxA.offset };
                     rhi::ResourceBindings rb; rb.buffers = std::span<const rhi::BufferBinding>(b.data(), 4);
                     cl.bindResources(rb);
-                    cl.dispatch((cluster::COUNT + 63) / 64, 1, 1);
+                    cl.dispatch((nLights + 63) / 64, 1, 1);   // one thread per light
                 });
         }
 
