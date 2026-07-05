@@ -74,6 +74,9 @@ TST_CASE(graphics, benchmark, render_graph) {
     pdesc.depth = { .test = true, .write = true, .op = CompareOp::Less };
     PipelineHandle pipe = device.createGraphicsPipeline(pdesc);
     TST_REQUIRE_MSG(pipe.valid(), "pipeline creation failed");
+    pdesc.sampleCount = 4;                                   // 4× MSAA variant for the AA section
+    PipelineHandle pipe4 = device.createGraphicsPipeline(pdesc);
+    TST_REQUIRE_MSG(pipe4.valid(), "MSAA pipeline creation failed");
 
     const auto clusBlob = readFileBin(std::string(ENGINE_SHADER_DIR) + "/cluster.metallib");
     ShaderHandle cs = device.createShader(clusBlob, ShaderStage::Compute);
@@ -92,6 +95,21 @@ TST_CASE(graphics, benchmark, render_graph) {
     skd.raster.cull = CullMode::None;
     PipelineHandle skyPipe = device.createGraphicsPipeline(skd);
     TST_REQUIRE_MSG(skyPipe.valid(), "sky pipeline creation failed");
+
+    // FXAA post pipeline for the AA section.
+    const auto fxaaBlob = readFileBin(std::string(ENGINE_SHADER_DIR) + "/fxaa.metallib");
+    ShaderHandle fxvs = device.createShader(fxaaBlob, ShaderStage::Vertex);
+    ShaderHandle fxfs = device.createShader(fxaaBlob, ShaderStage::Fragment);
+    GraphicsPipelineDesc fxd;
+    fxd.vertex = fxvs; fxd.fragment = fxfs;
+    fxd.colorFormats = std::span<const Format>(&colorFormat, 1);
+    fxd.depthFormat = Format::Undefined;
+    fxd.depth = { .test = false, .write = false, .op = CompareOp::Always };
+    fxd.raster.cull = CullMode::None;
+    PipelineHandle fxaaPipe = device.createGraphicsPipeline(fxd);
+    SamplerHandle fxaaSamp = device.createSampler({ .addressU = AddressMode::ClampToEdge,
+                                                    .addressV = AddressMode::ClampToEdge });
+    TST_REQUIRE_MSG(fxaaPipe.valid() && fxaaSamp.valid(), "FXAA pipeline/sampler creation failed");
 
     TextureHandle color = device.createTexture(
         { .width = W, .height = H, .format = colorFormat, .usage = TextureUsage::ColorTarget | TextureUsage::Sampled });
@@ -241,6 +259,42 @@ TST_CASE(graphics, benchmark, render_graph) {
         std::printf("%10u %14.3f %14.3f %12.3f\n", n, fOff, fOn, fOn - fOff);
     }
     renderer.setFog(0.0f);
+
+    std::printf("\n--- MSAA overhead (forward pass, on-tile resolve) ---\n");
+    std::printf("%10s %14s %14s %12s\n", "instances", "no-MSAA ms", "4x MSAA ms", "delta ms");
+    for (uint32_t n : {4096u, 16384u}) {
+        auto instances = buildInstances(n);
+        render::RenderItem item1{ sphere, pipe, 0, n };
+        auto view = makeView(instances, item1, {});
+        renderer.setMSAA(1);
+        runFrames(view, 3);
+        auto [r0, fOff] = runFrames(view, 30);
+        render::RenderItem item4{ sphere, pipe4, 0, n };
+        auto view4 = makeView(instances, item4, {});
+        renderer.setMSAA(4);
+        runFrames(view4, 3);
+        auto [r1, fOn] = runFrames(view4, 30);
+        (void)r0; (void)r1;
+        std::printf("%10u %14.3f %14.3f %12.3f\n", n, fOff, fOn, fOn - fOff);
+    }
+    renderer.setMSAA(1);
+
+    std::printf("\n--- FXAA overhead (fullscreen post pass) ---\n");
+    std::printf("%10s %14s %14s %12s\n", "instances", "no-FXAA ms", "FXAA ms", "delta ms");
+    for (uint32_t n : {4096u, 16384u}) {
+        auto instances = buildInstances(n);
+        render::RenderItem item{ sphere, pipe, 0, n };
+        auto view = makeView(instances, item, {});
+        renderer.setFXAA({}, {});
+        runFrames(view, 3);
+        auto [r0, fOff] = runFrames(view, 30);
+        renderer.setFXAA(fxaaPipe, fxaaSamp);
+        runFrames(view, 3);
+        auto [r1, fOn] = runFrames(view, 30);
+        (void)r0; (void)r1;
+        std::printf("%10u %14.3f %14.3f %12.3f\n", n, fOff, fOn, fOn - fOff);
+    }
+    renderer.setFXAA({}, {});
 
     std::printf("\nrender_graph benchmark done\n");
 }

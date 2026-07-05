@@ -38,6 +38,8 @@ public:
     struct ColorTarget {
         rhi::RenderTargetHandle rt;
         rhi::TextureHandle      tex;          // backing texture (for barrier state tracking)
+        rhi::RenderTargetHandle resolveRT;    // MSAA resolve destination (invalid = no resolve)
+        rhi::TextureHandle      resolveTex;   // resolve dest texture (barrier tracking)
         float                   clear[4] = {0, 0, 0, 1};
         rhi::LoadOp             load  = rhi::LoadOp::Clear;
         rhi::StoreOp            store = rhi::StoreOp::Store;
@@ -93,6 +95,7 @@ public:
             // writes → target state
             if (p.kind == Kind::Raster) {
                 transitionTo(transitions, p.color.tex, rhi::ResourceState::RenderTarget);
+                transitionTo(transitions, p.color.resolveTex, rhi::ResourceState::RenderTarget);
                 if (p.depth.used) transitionTo(transitions, p.depth.tex, rhi::ResourceState::RenderTarget);
             } else {
                 for (auto t : p.writes) transitionTo(transitions, t, rhi::ResourceState::StorageRW);
@@ -102,6 +105,7 @@ public:
             if (p.kind == Kind::Raster) {
                 rhi::ColorAttachment ca;
                 ca.target = p.color.rt;
+                ca.resolveTarget = p.color.resolveRT;
                 ca.load = p.color.load; ca.store = p.color.store;
                 for (int i = 0; i < 4; ++i) ca.clearColor[i] = p.color.clear[i];
 

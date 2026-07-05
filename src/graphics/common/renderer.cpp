@@ -102,6 +102,54 @@ struct Renderer::Impl {
     rhi::RenderTargetHandle hdrRT;
     uint32_t                hdrW = 0, hdrH = 0;
 
+    // MSAA (opt-in via setMSAA): the forward pass renders into these multisampled targets and
+    // resolves into the single-sample HDR/view target. Memoryless (on-tile) — never read back.
+    uint32_t                msaaSamples = 1;   // 1 = off
+    rhi::TextureHandle      msaaColorTex;
+    rhi::RenderTargetHandle msaaColorRT;
+    rhi::TextureHandle      msaaDepthTex;
+    rhi::RenderTargetHandle msaaDepthRT;
+    uint32_t                msaaW = 0, msaaH = 0, msaaN = 0;
+    rhi::Format             msaaFmt = rhi::Format::Undefined;
+
+    void ensureMSAA(uint32_t w, uint32_t h, uint32_t samples, rhi::Format colorFmt) {
+        if (msaaColorTex.valid() && w == msaaW && h == msaaH && samples == msaaN && colorFmt == msaaFmt)
+            return;
+        if (msaaColorTex.valid()) device->destroy(msaaColorTex);
+        if (msaaColorRT.valid())  device->destroy(msaaColorRT);
+        if (msaaDepthTex.valid()) device->destroy(msaaDepthTex);
+        if (msaaDepthRT.valid())  device->destroy(msaaDepthRT);
+        msaaColorTex = device->createTexture(
+            { .width = w, .height = h, .sampleCount = samples, .format = colorFmt,
+              .usage = rhi::TextureUsage::ColorTarget, .transient = true });
+        msaaColorRT = device->createRenderTarget(msaaColorTex);
+        msaaDepthTex = device->createTexture(
+            { .width = w, .height = h, .sampleCount = samples, .format = rhi::Format::Depth32Float,
+              .usage = rhi::TextureUsage::DepthTarget, .transient = true });
+        msaaDepthRT = device->createRenderTarget(msaaDepthTex);
+        msaaW = w; msaaH = h; msaaN = samples; msaaFmt = colorFmt;
+    }
+
+    // FXAA (opt-in via setFXAA). The pre-FXAA stage writes this intermediate LDR texture; the FXAA
+    // pass samples it and writes the view target. Fixed RGBA8Unorm (the app builds its tonemap
+    // pipeline to output RGBA8Unorm when FXAA is on).
+    rhi::PipelineHandle     fxaaPipeline;
+    rhi::SamplerHandle      fxaaSampler;
+    rhi::TextureHandle      ldrTex;
+    rhi::RenderTargetHandle ldrRT;
+    uint32_t                ldrW = 0, ldrH = 0;
+
+    void ensureLDR(uint32_t w, uint32_t h) {
+        if (ldrTex.valid() && w == ldrW && h == ldrH) return;
+        if (ldrTex.valid()) device->destroy(ldrTex);
+        if (ldrRT.valid())  device->destroy(ldrRT);
+        ldrTex = device->createTexture(
+            { .width = w, .height = h, .format = rhi::Format::RGBA8Unorm,
+              .usage = rhi::TextureUsage::ColorTarget | rhi::TextureUsage::Sampled });
+        ldrRT = device->createRenderTarget(ldrTex);
+        ldrW = w; ldrH = h;
+    }
+
     // Directional sun shadow map (opt-in via setShadows).
     rhi::PipelineHandle     shadowPipeline;
     rhi::SamplerHandle      shadowSampler;
@@ -179,6 +227,12 @@ Renderer::~Renderer() {
         if (impl_->hdrRT.valid())    impl_->device->destroy(impl_->hdrRT);
         if (impl_->shadowTex.valid()) impl_->device->destroy(impl_->shadowTex);
         if (impl_->shadowRT.valid())  impl_->device->destroy(impl_->shadowRT);
+        if (impl_->msaaColorTex.valid()) impl_->device->destroy(impl_->msaaColorTex);
+        if (impl_->msaaColorRT.valid())  impl_->device->destroy(impl_->msaaColorRT);
+        if (impl_->msaaDepthTex.valid()) impl_->device->destroy(impl_->msaaDepthTex);
+        if (impl_->msaaDepthRT.valid())  impl_->device->destroy(impl_->msaaDepthRT);
+        if (impl_->ldrTex.valid()) impl_->device->destroy(impl_->ldrTex);
+        if (impl_->ldrRT.valid())  impl_->device->destroy(impl_->ldrRT);
     }
 }
 
@@ -228,6 +282,15 @@ void Renderer::setFog(float density, float heightFalloff, float baseHeight,
     impl_->fogColor        = color;
     impl_->fogInscatter    = inscatterColor;
     impl_->fogInscatterExp = inscatterExponent;
+}
+
+void Renderer::setMSAA(uint32_t sampleCount) {
+    impl_->msaaSamples = sampleCount < 1 ? 1 : sampleCount;
+}
+
+void Renderer::setFXAA(rhi::PipelineHandle fxaaPipeline, rhi::SamplerHandle sampler) {
+    impl_->fxaaPipeline = fxaaPipeline;
+    impl_->fxaaSampler  = sampler;
 }
 
 void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> views) {
@@ -369,15 +432,38 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         }
 
         const bool hdr = I.tonemapPipeline.valid();
+        const bool fxaaOn = I.fxaaPipeline.valid();
         if (hdr) I.ensureHDR(view.width, view.height);
+        if (fxaaOn) I.ensureLDR(view.width, view.height);
+
+        // Output chain: forward[+MSAA resolve] -> [tonemap] -> [FXAA] -> view.target.
+        // The stage before FXAA writes `preRT` (an intermediate LDR texture when FXAA is on).
+        const rhi::RenderTargetHandle finalRT = view.target;
+        const rhi::RenderTargetHandle preRT  = fxaaOn ? I.ldrRT  : finalRT;
+        const rhi::TextureHandle      preTex = fxaaOn ? I.ldrTex : rhi::TextureHandle{};
+
+        const uint32_t samples = I.msaaSamples;
+        const bool msaa = samples > 1;
+        // The single-sample destination the forward pass writes (HDR buffer when tonemapping, else
+        // the pre-FXAA target). With MSAA this becomes the resolve destination.
+        const rhi::RenderTargetHandle singleRT  = hdr ? I.hdrRT  : preRT;
+        const rhi::TextureHandle      singleTex = hdr ? I.hdrTex : preTex;
+        if (msaa) I.ensureMSAA(view.width, view.height, samples,
+                               hdr ? rhi::Format::RGBA16Float : rhi::Format::RGBA8Unorm);
 
         RenderGraph::ColorTarget color;
-        color.rt  = hdr ? I.hdrRT  : view.target;
-        color.tex = hdr ? I.hdrTex : rhi::TextureHandle{};
+        if (msaa) {
+            color.rt = I.msaaColorRT; color.tex = I.msaaColorTex;   // render into MSAA...
+            color.resolveRT = singleRT; color.resolveTex = singleTex;   // ...resolve into single-sample
+        } else {
+            color.rt = singleRT; color.tex = singleTex;
+        }
         for (int i = 0; i < 4; ++i) color.clear[i] = view.clearColor[i];
 
         RenderGraph::DepthTarget depth;
-        depth.rt = I.depthRT; depth.tex = I.depthTex; depth.used = true;
+        depth.rt = msaa ? I.msaaDepthRT : I.depthRT;
+        depth.tex = msaa ? I.msaaDepthTex : I.depthTex;
+        depth.used = true;
         depth.load = rhi::LoadOp::Clear; depth.store = rhi::StoreOp::DontCare;
 
         rhi::TextureHandle shadowTex = I.shadowTex;
@@ -449,14 +535,14 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                 }
             });
 
-        // HDR resolve: a fullscreen pass samples the HDR target and tone-maps it to view.target.
-        // The graph transitions hdrTex RenderTarget -> ShaderRead between the two passes.
+        // HDR resolve: a fullscreen pass samples the HDR target and tone-maps it to the pre-FXAA
+        // target (the view target, or the LDR intermediate when FXAA is on).
         if (hdr) {
             rhi::PipelineHandle tmPipe = I.tonemapPipeline;
             rhi::SamplerHandle  tmSamp = I.tonemapSampler;
             rhi::TextureHandle  hdrTex = I.hdrTex;
             RenderGraph::ColorTarget tmColor;
-            tmColor.rt = view.target;
+            tmColor.rt = preRT; tmColor.tex = preTex;
             tmColor.load = rhi::LoadOp::DontCare;   // fullscreen triangle writes every pixel
             RenderGraph::DepthTarget noDepth;       // used = false
             graph.addRasterPass(
@@ -470,6 +556,30 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                     rb.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
                     cl.bindResources(rb);
                     cl.draw(3, 1, 0, 0);   // fullscreen triangle from SV_VertexID
+                });
+        }
+
+        // FXAA: a fullscreen pass samples the pre-FXAA LDR intermediate and anti-aliases it to the
+        // final view target. The graph transitions preTex RenderTarget -> ShaderRead.
+        if (fxaaOn) {
+            rhi::PipelineHandle fxPipe = I.fxaaPipeline;
+            rhi::SamplerHandle  fxSamp = I.fxaaSampler;
+            rhi::TextureHandle  srcTex = preTex;
+            RenderGraph::ColorTarget fxColor;
+            fxColor.rt = finalRT;
+            fxColor.load = rhi::LoadOp::DontCare;
+            RenderGraph::DepthTarget noDepth;
+            graph.addRasterPass(
+                "fxaa", fxColor, noDepth, view.width, view.height, /*reads=*/{ srcTex },
+                [fxPipe, fxSamp, srcTex](rhi::CommandList& cl) {
+                    cl.bindPipeline(fxPipe);
+                    rhi::TextureBinding tb{ .binding = 0, .texture = srcTex };
+                    rhi::SamplerBinding sb{ .binding = 0, .sampler = fxSamp };
+                    rhi::ResourceBindings rb;
+                    rb.textures = std::span<const rhi::TextureBinding>(&tb, 1);
+                    rb.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
+                    cl.bindResources(rb);
+                    cl.draw(3, 1, 0, 0);
                 });
         }
     }

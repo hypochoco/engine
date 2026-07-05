@@ -32,6 +32,7 @@
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
+#include "graphics/visual/demo_toggles.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -63,45 +64,67 @@ TST_CASE(graphics, visual, atmosphere_scene) {
     const auto meshBlob = readFile(std::string(ENGINE_SHADER_DIR) + "/mesh.metallib");
     const auto tmBlob   = readFile(std::string(ENGINE_SHADER_DIR) + "/tonemap.metallib");
     const auto skyBlob  = readFile(std::string(ENGINE_SHADER_DIR) + "/sky.metallib");
-    if (meshBlob.empty() || tmBlob.empty() || skyBlob.empty()) { std::printf("FAIL: read shaders\n"); return; }
+    const auto fxaaBlob = readFile(std::string(ENGINE_SHADER_DIR) + "/fxaa.metallib");
+    if (meshBlob.empty() || tmBlob.empty() || skyBlob.empty() || fxaaBlob.empty()) { std::printf("FAIL: read shaders\n"); return; }
     ShaderHandle vs = device.createShader(meshBlob, ShaderStage::Vertex);
     ShaderHandle fs = device.createShader(meshBlob, ShaderStage::Fragment);
     ShaderHandle tmvs = device.createShader(tmBlob, ShaderStage::Vertex);
     ShaderHandle tmfs = device.createShader(tmBlob, ShaderStage::Fragment);
     ShaderHandle skvs = device.createShader(skyBlob, ShaderStage::Vertex);
     ShaderHandle skfs = device.createShader(skyBlob, ShaderStage::Fragment);
+    ShaderHandle fxvs = device.createShader(fxaaBlob, ShaderStage::Vertex);
+    ShaderHandle fxfs = device.createShader(fxaaBlob, ShaderStage::Fragment);
 
-    const Format swap = Format::BGRA8Unorm, hdr = Format::RGBA16Float;
-    GraphicsPipelineDesc pd;
-    pd.vertex = vs; pd.fragment = fs; pd.vertexLayout = render::coreVertexLayout();
-    pd.colorFormats = std::span<const Format>(&hdr, 1);
-    pd.depthFormat = Format::Depth32Float;
-    pd.depth = { .test = true, .write = true, .op = CompareOp::Less };
-    PipelineHandle pipe = device.createGraphicsPipeline(pd);
+    const Format swap = Format::BGRA8Unorm, hdr = Format::RGBA16Float, ldr = Format::RGBA8Unorm;
+    // Mesh + sky pipelines in 1× and 4× sample-count variants (MSAA needs matching sampleCount).
+    auto meshPipe = [&](uint32_t s) {
+        GraphicsPipelineDesc pd;
+        pd.vertex = vs; pd.fragment = fs; pd.vertexLayout = render::coreVertexLayout();
+        pd.colorFormats = std::span<const Format>(&hdr, 1);
+        pd.depthFormat = Format::Depth32Float;
+        pd.depth = { .test = true, .write = true, .op = CompareOp::Less };
+        pd.sampleCount = s;
+        return device.createGraphicsPipeline(pd);
+    };
+    auto skyPipeN = [&](uint32_t s) {
+        GraphicsPipelineDesc skd;
+        skd.vertex = skvs; skd.fragment = skfs;
+        skd.colorFormats = std::span<const Format>(&hdr, 1);
+        skd.depthFormat = Format::Depth32Float;
+        skd.depth = { .test = true, .write = false, .op = CompareOp::LessEqual };
+        skd.raster.cull = CullMode::None;
+        skd.sampleCount = s;
+        return device.createGraphicsPipeline(skd);
+    };
+    PipelineHandle pipeMesh1 = meshPipe(1), pipeMesh4 = meshPipe(4);
+    PipelineHandle pipeSky1  = skyPipeN(1), pipeSky4  = skyPipeN(4);
 
-    GraphicsPipelineDesc tp;
-    tp.vertex = tmvs; tp.fragment = tmfs;
-    tp.colorFormats = std::span<const Format>(&swap, 1);
-    tp.depthFormat = Format::Undefined;
-    tp.depth = { .test = false, .write = false, .op = CompareOp::Always };
-    tp.raster.cull = CullMode::None;
-    PipelineHandle tonemapPipe = device.createGraphicsPipeline(tp);
+    // Tonemap: outputs the swapchain when FXAA is off, or the RGBA8 intermediate when FXAA is on.
+    auto tmPipe = [&](Format out) {
+        GraphicsPipelineDesc tp;
+        tp.vertex = tmvs; tp.fragment = tmfs;
+        tp.colorFormats = std::span<const Format>(&out, 1);
+        tp.depthFormat = Format::Undefined;
+        tp.depth = { .test = false, .write = false, .op = CompareOp::Always };
+        tp.raster.cull = CullMode::None;
+        return device.createGraphicsPipeline(tp);
+    };
+    PipelineHandle tmSwap = tmPipe(swap), tmLDR = tmPipe(ldr);
 
-    GraphicsPipelineDesc skd;
-    skd.vertex = skvs; skd.fragment = skfs;
-    skd.colorFormats = std::span<const Format>(&hdr, 1);
-    skd.depthFormat = Format::Depth32Float;
-    skd.depth = { .test = true, .write = false, .op = CompareOp::LessEqual };
-    skd.raster.cull = CullMode::None;
-    PipelineHandle skyPipe = device.createGraphicsPipeline(skd);
+    GraphicsPipelineDesc fxd;   // FXAA outputs the swapchain
+    fxd.vertex = fxvs; fxd.fragment = fxfs;
+    fxd.colorFormats = std::span<const Format>(&swap, 1);
+    fxd.depthFormat = Format::Undefined;
+    fxd.depth = { .test = false, .write = false, .op = CompareOp::Always };
+    fxd.raster.cull = CullMode::None;
+    PipelineHandle fxPipe = device.createGraphicsPipeline(fxd);
 
     SamplerHandle linSamp = device.createSampler({ .addressU = AddressMode::ClampToEdge, .addressV = AddressMode::ClampToEdge });
 
     render::GeometryStore geometry(device);
     render::MeshHandle box = geometry.upload(primitives::makeBox(glm::vec3(0.5f)));
     render::Renderer renderer(device, geometry);
-    renderer.setTonemap(tonemapPipe, linSamp);
-    renderer.setSky(skyPipe);
+    renderer.setSky(pipeSky1);
 
     // Fog config (sky-consistent pale base + warm sun in-scatter). Toggled by F.
     auto enableFog = [&]() {
@@ -109,7 +132,19 @@ TST_CASE(graphics, visual, atmosphere_scene) {
                         /*color*/ glm::vec3(0.55f, 0.63f, 0.80f), /*inscatter*/ glm::vec3(2.4f, 1.6f, 0.8f),
                         /*inscatterExp*/ 6.0f);
     };
-    bool fogOn = true; enableFog();
+    enableFog();   // fog starts on; F toggles it via the KeyToggle below
+
+    // AA state: reconfigures pipelines + renderer whenever MSAA (M) or FXAA (X) toggles.
+    bool msaaOn = true, fxaaOn = false, skyOn = true;
+    render::MeshHandle boxMesh = box;
+    render::RenderItem item{ boxMesh, pipeMesh1, 0, 0 };   // instanceCount filled after building instances
+    auto applyAA = [&]() {
+        renderer.setMSAA(msaaOn ? 4 : 1);
+        item.pipeline = msaaOn ? pipeMesh4 : pipeMesh1;
+        renderer.setSky(skyOn ? (msaaOn ? pipeSky4 : pipeSky1) : PipelineHandle{});
+        renderer.setTonemap(fxaaOn ? tmLDR : tmSwap, linSamp);
+        renderer.setFXAA(fxaaOn ? fxPipe : PipelineHandle{}, fxaaOn ? linSamp : SamplerHandle{});
+    };
 
     // Ground + a long avenue of pillars receding in -Z, heights varying, both sides of the path.
     std::vector<render::InstanceData> inst;
@@ -134,18 +169,23 @@ TST_CASE(graphics, visual, atmosphere_scene) {
             mats.push_back(m);
         }
     }
-    render::RenderItem item{ box, pipe, 0, static_cast<uint32_t>(inst.size()) };
+    item.instanceCount = static_cast<uint32_t>(inst.size());
+    applyAA();   // set the initial MSAA/FXAA/sky pipeline configuration
 
-    std::printf("atmosphere_scene: %zu pillars receding to the horizon. Press F to toggle fog. Close to exit.\n",
-                inst.size() - 1);
+    std::printf("atmosphere_scene: %zu pillars receding to the horizon. Close to exit.\n", inst.size() - 1);
+    std::printf("  keys:  F = fog   K = sky   M = MSAA(4x)   X = FXAA\n");
 
-    bool prevF = false;
+    engine::demo::KeyToggle fogT { GLFW_KEY_F, true,  "fog" };
+    engine::demo::KeyToggle skyT { GLFW_KEY_K, true,  "sky" };
+    engine::demo::KeyToggle msaaT{ GLFW_KEY_M, true,  "MSAA 4x" };
+    engine::demo::KeyToggle fxaaT{ GLFW_KEY_X, false, "FXAA" };
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
-        const bool fNow = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
-        if (fNow && !prevF) { fogOn = !fogOn; if (fogOn) enableFog(); else renderer.setFog(0.0f);
-                              std::printf("fog: %s\n", fogOn ? "ON" : "OFF"); }
-        prevF = fNow;
+        if (fogT.poll(window))  { if (fogT.on) enableFog(); else renderer.setFog(0.0f); }
+        if (skyT.poll(window))  { skyOn  = skyT.on;  applyAA(); }
+        if (msaaT.poll(window)) { msaaOn = msaaT.on; applyAA(); }
+        if (fxaaT.poll(window)) { fxaaOn = fxaaT.on; applyAA(); }
 
         const float t = static_cast<float>(glfwGetTime());
 

@@ -159,18 +159,30 @@ culling in v1). Implemented so far:
   intact). Verified by `graphics.fog` (far object washes toward fog color, monotonic with distance;
   sun-ahead in-scatter 765 vs 486 behind; height fog base foggier than top); benchmark **~0.005 ms**
   (a few fragment ALU, within noise).
+- **Anti-aliasing — MSAA + FXAA** (RF6 AA): hardware **MSAA** on the forward pass (RHI now honors
+  `TextureDesc.sampleCount` → Metal `Type2DMultisample`, `createGraphicsPipeline` →
+  `setRasterSampleCount`, and a `ColorAttachment.resolveTarget` → `StoreActionMultisampleResolve`).
+  `Renderer::setMSAA(n)` renders into memoryless MSAA color+depth and resolves on-tile into the
+  single-sample HDR/view target (app builds mesh+sky pipelines with matching `sampleCount`). Plus an
+  optional **FXAA** post pass (`fxaa.slang`, compact luma-FXAA after Lottes) — `Renderer::setFXAA`
+  inserts an intermediate LDR texture (tonemap→LDR→FXAA→present) and catches shading aliasing MSAA
+  misses (the sun disc). Both opt-in, off by default. Verified by `graphics.aa` (rotated slab: 0
+  partial-coverage edge px → 540 with 4× MSAA, 628 with FXAA; interior/bg untouched). Benchmark:
+  MSAA 4× **+0.29/+1.2 ms** at 4k/16k instances (4× coverage raster, on-tile resolve); FXAA
+  **~0.01 ms** (one fullscreen pass).
 - **Tests**: `graphics.{barrier_transient, multiview_ring, multi_light, compute_smoke,
-  cluster_binning, clustered_forward, hdr_tonemap, shadow_map, shadow_bias, sky, fog}`; parity
+  cluster_binning, clustered_forward, hdr_tonemap, shadow_map, shadow_bias, sky, fog, aa}`; parity
   anchors intact.
-  **Visuals**: `clustered_lights` (moving colored point lights, clustered + HDR), `shadow_scene`
-  (cubes + rotating sun casting shadows + sky + aerial-perspective fog + HDR), and
-  `atmosphere_scene` (an avenue of pillars receding to the horizon under a low sun — a fog/aerial-
-  perspective showcase; press F to toggle fog). **Benchmark**:
-  `render_graph` (instance/light sweeps + clustered speedups + sky + fog overhead).
+  **Visuals**: `clustered_lights` (clustered + HDR), `shadow_scene` (cubes + rotating sun +
+  shadows + sky + fog + HDR), and `atmosphere_scene` (pillars receding to the horizon — fog/aerial-
+  perspective + AA showcase). Each graphics demo exposes its features as **key A/B toggles** (a
+  shared `tst/graphics/visual/demo_toggles.h` `KeyToggle`): `clustered_lights` C; `shadow_scene`
+  S/K/F (shadows/sky/fog); `atmosphere_scene` F/K/M/X (fog/sky/MSAA/FXAA). **Benchmark**:
+  `render_graph` (instance/light sweeps + clustered speedups + sky/fog/MSAA/FXAA overhead).
 
-**Pending (todo.md "Render framework")**: AA (MSAA or post); later CSM/soft shadows, Hillaire
+**Pending (todo.md "Render framework")**: later CSM/soft shadows, TAA/MetalFX temporal AA, Hillaire
 LUT sky/aerial-perspective upgrade, volumetric light shafts; and (non-Apple) the Vulkan backend
-behind the same RHI.
+behind the same RHI. The RF6 shadows/sky/AA trio is complete.
 
 ### Legacy Vulkan code (parked under `src/graphics/vulkan/`, NOT the current path)
 

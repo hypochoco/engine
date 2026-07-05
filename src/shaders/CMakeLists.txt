@@ -25,6 +25,7 @@ set(SHADER_SOURCES
     tonemap.slang
     shadow.slang
     sky.slang
+    fxaa.slang
 )
 
 set(SHADER_OUTPUTS)
