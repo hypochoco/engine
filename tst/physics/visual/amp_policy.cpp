@@ -115,6 +115,7 @@ TST_CASE(physics, visual, amp_policy) {
     if (static_cast<int>(env.actDim()) != policy.actDim)
         std::printf("WARN: env actDim %zu != policy actDim %d (rig mismatch?)\n", env.actDim(), policy.actDim);
     const float standingH = env.rootPose().position.y;   // authored standing height (fall reference)
+    const int cmdDim = policy.commandDim;                 // goal channels this policy expects (0 = none)
 
     // --- window + device + pipeline (same scaffold as amp_humanoid) -----------------------------
     if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return; }
@@ -215,12 +216,11 @@ TST_CASE(physics, visual, amp_policy) {
         obs.clear();
         obs.push_back(packed[1]);
         for (size_t i = 3; i < packed.size(); ++i) obs.push_back(packed[i]);
-        // Forward-compat: goal-conditioned policies expect extra command channels appended.
-        if (static_cast<int>(obs.size()) < policy.obsDim) {
-            obs.push_back(command.move.x);
-            obs.push_back(command.move.y);
-            obs.push_back(command.turn);
-        }
+        // Append the goal channels the policy was trained with (root-local target from user input).
+        // Convention: channel 0 = local strafe (move.x), channel 1 = local forward (move.y).
+        const float steerSpeed = 1.0f;
+        for (int i = 0; i < cmdDim; ++i)
+            obs.push_back(i == 0 ? command.move.x * steerSpeed : i == 1 ? command.move.y * steerSpeed : 0.0f);
         obs.resize(static_cast<size_t>(policy.obsDim), 0.0f);   // pad/truncate to the trained obs
 
         const std::vector<float> act = policy.action(obs);
@@ -239,7 +239,8 @@ TST_CASE(physics, visual, amp_policy) {
     scene::ExtractedScene extracted;
     double last = glfwGetTime(), accumulator = 0.0;
     const double fixed = policy.controlDt;
-    std::printf("amp_policy: WASD/right-drag = camera. Arrows tilt gravity, Space shoves, R resets, P pauses, Esc quits.\n");
+    std::printf("amp_policy: WASD/right-drag = camera. Arrows %s, Space shoves, R resets, P pauses, Esc quits.\n",
+                cmdDim > 0 ? "steer the walk command" : "tilt gravity (perturb balance)");
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -255,14 +256,23 @@ TST_CASE(physics, visual, amp_policy) {
         if (in.keyPressed(input::Key::P)) paused = !paused;
         if (in.keyPressed(input::Key::R)) env.reset(0);
 
-        // --- controllability: tilt gravity with the arrow keys (perturb the balance) ------------
-        glm::vec3 g(0.0f, -9.81f, 0.0f);
-        const float tilt = 3.0f;
+        // --- controllability ----------------------------------------------------------------
+        // Goal policies (walk): arrows STEER (feed the command channels). Non-goal (stand/getup):
+        // arrows TILT GRAVITY to perturb balance. Space shoves either way.
         command.move = glm::vec2(0.0f);
-        if (in.keyDown(input::Key::Up))    { g.z -= tilt; command.move.y += 1.0f; }
-        if (in.keyDown(input::Key::Down))  { g.z += tilt; command.move.y -= 1.0f; }
-        if (in.keyDown(input::Key::Left))  { g.x -= tilt; command.move.x -= 1.0f; }
-        if (in.keyDown(input::Key::Right)) { g.x += tilt; command.move.x += 1.0f; }
+        glm::vec3 g(0.0f, -9.81f, 0.0f);
+        if (cmdDim > 0) {
+            if (in.keyDown(input::Key::Up))    command.move.y += 1.0f;
+            if (in.keyDown(input::Key::Down))  command.move.y -= 1.0f;
+            if (in.keyDown(input::Key::Left))  command.move.x -= 1.0f;
+            if (in.keyDown(input::Key::Right)) command.move.x += 1.0f;
+        } else {
+            const float tilt = 3.0f;
+            if (in.keyDown(input::Key::Up))    g.z -= tilt;
+            if (in.keyDown(input::Key::Down))  g.z += tilt;
+            if (in.keyDown(input::Key::Left))  g.x -= tilt;
+            if (in.keyDown(input::Key::Right)) g.x += tilt;
+        }
         env.world().setGravity(g);
 
         // Space = shove the pelvis (velocity impulse). NOTE: on the reduced backend this nudges the

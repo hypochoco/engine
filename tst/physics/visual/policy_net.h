@@ -35,6 +35,8 @@ struct PolicyNet {
     // --- policy shape ---
     int    ndof = 0, nbody = 0, obsDim = 0, actDim = 0;
     double actionScale = 1.0, normEps = 1e-8;
+    std::string commandType = "none";   // V2: how the goal channels (if any) are interpreted
+    int    commandDim = 0;              // V2: # of goal channels appended after proprioception
     std::vector<float> mean, var;                    // obs normalizer (running stats), length obsDim
     struct Layer { int out = 0, in = 0; std::vector<float> W, b; };  // W row-major [out][in]
     std::vector<Layer> layers;                       // forward order; tanh on all but the last
@@ -43,7 +45,8 @@ struct PolicyNet {
         std::ifstream f(path);
         if (!f) throw std::runtime_error("PolicyNet: cannot open " + path);
         std::string tag; f >> tag;
-        if (tag != "SIM1_POLICY_V1") throw std::runtime_error("PolicyNet: bad magic '" + tag + "'");
+        const int version = (tag == "SIM1_POLICY_V2") ? 2 : (tag == "SIM1_POLICY_V1") ? 1 : 0;
+        if (version == 0) throw std::runtime_error("PolicyNet: bad magic '" + tag + "'");
 
         PolicyNet p;
         auto key = [&](const char* want) {
@@ -67,6 +70,7 @@ struct PolicyNet {
         key("act_dim");      f >> p.actDim;
         key("action_scale"); f >> p.actionScale;
         key("norm_eps");     f >> p.normEps;
+        if (version >= 2) { key("command_type"); f >> p.commandType; key("command_dim"); f >> p.commandDim; }
         key("norm_mean");    p.mean.resize(p.obsDim); for (float& x : p.mean) f >> x;
         key("norm_var");     p.var.resize(p.obsDim);  for (float& x : p.var)  f >> x;
         key("n_layers");     int L = 0; f >> L;
