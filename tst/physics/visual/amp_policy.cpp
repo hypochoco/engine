@@ -91,9 +91,9 @@ TST_CASE(physics, visual, amp_policy) {
         std::printf("FAIL: %s\n  (set ENGINE_POLICY to an exported policy.txt — see sim1.export_policy)\n", e.what());
         return;
     }
-    std::printf("amp_policy: loaded %s — model=%s backend=%s action_mode=%s obs=%d act=%d substeps=%d\n",
+    std::printf("amp_policy: loaded %s — model=%s backend=%s action_mode=%s obs=%d act=%d substeps=%d rotation=%s command_dim=%d\n",
                 polPath.c_str(), policy.model.c_str(), policy.backend.c_str(), policy.actionMode.c_str(),
-                policy.obsDim, policy.actDim, policy.substeps);
+                policy.obsDim, policy.actDim, policy.substeps, policy.rotation.c_str(), policy.commandDim);
 
     // --- build the env exactly as trained (single Environment == one VecEnv lane) ---------------
     phys::SimConfig sim;
@@ -116,6 +116,7 @@ TST_CASE(physics, visual, amp_policy) {
         std::printf("WARN: env actDim %zu != policy actDim %d (rig mismatch?)\n", env.actDim(), policy.actDim);
     const float standingH = env.rootPose().position.y;   // authored standing height (fall reference)
     const int cmdDim = policy.commandDim;                 // goal channels this policy expects (0 = none)
+    const bool sixd = (policy.rotation == "sixd");        // root-orientation obs encoding
 
     // --- window + device + pipeline (same scaffold as amp_humanoid) -----------------------------
     if (!glfwInit()) { std::printf("FAIL: glfwInit\n"); return; }
@@ -214,8 +215,16 @@ TST_CASE(physics, visual, amp_policy) {
         env.packDefaultObs(packed);
         // StandTask.observe: drop root x,z (idx 0,2), keep height (idx 1) + the rest.
         obs.clear();
-        obs.push_back(packed[1]);
-        for (size_t i = 3; i < packed.size(); ++i) obs.push_back(packed[i]);
+        obs.push_back(packed[1]);   // root height
+        // Root orientation: packed[3..6] is the quat (w,x,y,z). Match the policy's encoding.
+        if (sixd) {
+            float r6[6];
+            tst::quatTo6D(packed[3], packed[4], packed[5], packed[6], r6);
+            for (float v : r6) obs.push_back(v);
+            for (size_t i = 7; i < packed.size(); ++i) obs.push_back(packed[i]);   // linvel..contacts
+        } else {
+            for (size_t i = 3; i < packed.size(); ++i) obs.push_back(packed[i]);   // quat..contacts
+        }
         // Append the goal channels the policy was trained with (root-local target from user input).
         // Convention: channel 0 = local strafe (move.x), channel 1 = local forward (move.y).
         const float steerSpeed = 1.0f;
