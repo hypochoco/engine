@@ -21,6 +21,8 @@ file(GLOB_RECURSE BENCH_SRC CONFIGURE_DEPENDS
 if(APPLE)
     file(GLOB_RECURSE GFX_TEST_SRC CONFIGURE_DEPENDS
         graphics/unit/*.cpp graphics/integration/*.cpp)
+    file(GLOB_RECURSE GFX_BENCH_SRC CONFIGURE_DEPENDS
+        graphics/benchmark/*.cpp)
     file(GLOB_RECURSE VISUAL_SRC   CONFIGURE_DEPENDS
         physics/visual/*.cpp graphics/visual/*.cpp)
 endif()
@@ -40,9 +42,14 @@ foreach(module core ecs physics graphics input controls physics_env)
 endforeach()
 
 # --- benchmarks: perf suites (run in Release; not pass/fail) ---
-add_executable(benchmarks ${HARNESS} ${BENCH_SRC})
+add_executable(benchmarks ${HARNESS} ${BENCH_SRC} ${GFX_BENCH_SRC})
 target_include_directories(benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(benchmarks PRIVATE engine::physics_ecs engine::physics_env)
+if(APPLE)
+    target_link_libraries(benchmarks PRIVATE engine::graphics)
+    add_dependencies(benchmarks shaders)
+    target_compile_definitions(benchmarks PRIVATE ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+endif()
 
 # --- visuals: interactive windowed demos (Apple; run one by name, e.g. `visuals rolling`) ---
 if(APPLE)

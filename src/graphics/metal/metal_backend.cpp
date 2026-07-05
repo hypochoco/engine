@@ -21,6 +21,7 @@
 
 #include <dispatch/dispatch.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -144,6 +145,15 @@ struct Device::Impl {
     NS::SharedPtr<MTL::CommandQueue> queue;
     DeviceConfig                     config;
 
+    // Frames-in-flight throttle: a counting semaphore (value = framesInFlight) waited in
+    // beginFrame and signaled from each command buffer's completion handler, so the CPU never
+    // gets more than framesInFlight frames ahead of the GPU. frameCounter cycles the frame
+    // index (0..framesInFlight-1) that the render layer's ring allocator keys on.
+    dispatch_semaphore_t frameSem = nullptr;
+    uint64_t             frameCounter = 0;
+
+    ~Impl() { if (frameSem) dispatch_release(frameSem); }
+
     // Windowed swapchain (CAMetalLayer); unused in headless mode.
     CA::MetalLayer* layer      = nullptr;   // retained by the .mm shim
     bool            windowed   = false;
@@ -158,15 +168,19 @@ struct Device::Impl {
                          uint32_t generation = 0; bool alive = false; };
     struct PipelineSlot{ NS::SharedPtr<MTL::RenderPipelineState> state;
                          NS::SharedPtr<MTL::DepthStencilState> depthState;
+                         NS::SharedPtr<MTL::ComputePipelineState> computeState;
+                         bool isCompute = false;
                          MTL::PrimitiveType topology = MTL::PrimitiveTypeTriangle;
                          uint32_t generation = 0; bool alive = false; };
     struct RenderTargetSlot { uint32_t textureIndex = 0; uint32_t generation = 0; bool alive = false; };
+    struct SamplerSlot { NS::SharedPtr<MTL::SamplerState> sampler; uint32_t generation = 0; bool alive = false; };
 
     std::vector<BufferSlot>       buffers;
     std::vector<TextureSlot>      textures;
     std::vector<ShaderSlot>       shaders;
     std::vector<PipelineSlot>     pipelines;
     std::vector<RenderTargetSlot> renderTargets;
+    std::vector<SamplerSlot>      samplers;
 
     template <class Vec>
     static uint32_t acquire(Vec& pool, std::vector<uint32_t>& freeList) {
@@ -174,7 +188,7 @@ struct Device::Impl {
         pool.emplace_back();
         return static_cast<uint32_t>(pool.size() - 1);
     }
-    std::vector<uint32_t> freeBuffers, freeTextures, freeShaders, freePipelines, freeRenderTargets;
+    std::vector<uint32_t> freeBuffers, freeTextures, freeShaders, freePipelines, freeRenderTargets, freeSamplers;
 };
 
 // -----------------------------------------------------------------------------
@@ -184,6 +198,7 @@ struct CommandList::Impl {
     Device::Impl*                dev = nullptr;
     MTL::CommandBuffer*          cmd = nullptr;      // borrowed (autoreleased, owned by frame pool)
     MTL::RenderCommandEncoder*   encoder = nullptr;  // borrowed (autoreleased)
+    MTL::ComputeCommandEncoder*  computeEncoder = nullptr;  // borrowed (autoreleased); compute scope
     MTL::PrimitiveType           topology = MTL::PrimitiveTypeTriangle;
     MTL::Buffer*                 indexBuffer = nullptr;   // borrowed
     MTL::IndexType               indexType = MTL::IndexTypeUInt32;
@@ -225,6 +240,7 @@ Device Device::createHeadless(const DeviceConfig& config) {
     if (d.impl_->device) {
         d.impl_->queue = NS::TransferPtr(d.impl_->device->newCommandQueue());
     }
+    d.impl_->frameSem = dispatch_semaphore_create(std::max(config.framesInFlight, 1u));
     return d;
 }
 
@@ -234,6 +250,7 @@ Device Device::createWindowed(const WindowSurface& surface, const DeviceConfig& 
     d.impl_->config = config;
     d.impl_->device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
     d.impl_->queue  = NS::TransferPtr(d.impl_->device->newCommandQueue());
+    d.impl_->frameSem = dispatch_semaphore_create(std::max(config.framesInFlight, 1u));
 
     // Attach a CAMetalLayer to the window (Objective-C++ shim) and reserve swapchain slots.
     void* layerPtr = engine_metal_create_layer(surface.nativeWindow, d.impl_->device.get(),
@@ -308,7 +325,19 @@ TextureHandle Device::createTexture(const TextureDesc& desc, std::span<const std
     td->setMipmapLevelCount(desc.mipLevels);
     // Depth targets must be Private on Apple Silicon; color targets stay Shared so we can
     // read them back on the headless path. TODO(metal): Private + blit for GPU-only color.
-    td->setStorageMode(isDepthFormat(desc.format) ? MTL::StorageModePrivate : MTL::StorageModeShared);
+    // A transient render-target-only texture (not sampled, not read back) can live purely in
+    // on-chip tile memory (Memoryless) — a TBDR bandwidth win, and the RHI's `transient` hint.
+    const bool renderTargetOnly =
+        (has(desc.usage, TextureUsage::ColorTarget) || has(desc.usage, TextureUsage::DepthTarget)) &&
+        !has(desc.usage, TextureUsage::Sampled) &&
+        !has(desc.usage, TextureUsage::TransferSrc) &&
+        !has(desc.usage, TextureUsage::TransferDst) &&
+        !has(desc.usage, TextureUsage::Storage);
+    if (desc.transient && renderTargetOnly) {
+        td->setStorageMode(MTL::StorageModeMemoryless);
+    } else {
+        td->setStorageMode(isDepthFormat(desc.format) ? MTL::StorageModePrivate : MTL::StorageModeShared);
+    }
 
     MTL::TextureUsage usage = 0;
     if (has(desc.usage, TextureUsage::Sampled))     usage |= MTL::TextureUsageShaderRead;
@@ -472,9 +501,64 @@ PipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) 
     return PipelineHandle{ idx, I.pipelines[idx].generation };
 }
 
-PipelineHandle Device::createComputePipeline(const ComputePipelineDesc&) { return {}; }  // TODO
-SamplerHandle  Device::createSampler(const SamplerDesc&)                 { return {}; }  // TODO
-void Device::destroy(SamplerHandle) {}
+PipelineHandle Device::createComputePipeline(const ComputePipelineDesc& desc) {
+    Impl& I = *impl_;
+    if (!desc.compute.valid() || desc.compute.index >= I.shaders.size()) return {};
+    MTL::Function* fn = I.shaders[desc.compute.index].function.get();
+    if (!fn) return {};
+    NS::Error* err = nullptr;
+    MTL::ComputePipelineState* state = I.device->newComputePipelineState(fn, &err);
+    if (!state) {
+        if (err) std::fprintf(stderr, "createComputePipeline: %s\n", err->localizedDescription()->utf8String());
+        return {};
+    }
+    uint32_t idx = Impl::acquire(I.pipelines, I.freePipelines);
+    I.pipelines[idx].computeState = NS::TransferPtr(state);
+    I.pipelines[idx].isCompute    = true;
+    I.pipelines[idx].alive        = true;
+    return PipelineHandle{ idx, I.pipelines[idx].generation };
+}
+SamplerHandle Device::createSampler(const SamplerDesc& desc) {
+    Impl& I = *impl_;
+    auto toFilter = [](Filter f) {
+        return f == Filter::Nearest ? MTL::SamplerMinMagFilterNearest : MTL::SamplerMinMagFilterLinear;
+    };
+    auto toMip = [](MipmapMode m) {
+        return m == MipmapMode::Nearest ? MTL::SamplerMipFilterNearest : MTL::SamplerMipFilterLinear;
+    };
+    auto toAddr = [](AddressMode a) {
+        switch (a) {
+            case AddressMode::Repeat:      return MTL::SamplerAddressModeRepeat;
+            case AddressMode::ClampToEdge: return MTL::SamplerAddressModeClampToEdge;
+            case AddressMode::MirrorRepeat:return MTL::SamplerAddressModeMirrorRepeat;
+        }
+        return MTL::SamplerAddressModeClampToEdge;
+    };
+    auto* sd = MTL::SamplerDescriptor::alloc()->init();
+    sd->setMinFilter(toFilter(desc.minFilter));
+    sd->setMagFilter(toFilter(desc.magFilter));
+    sd->setMipFilter(toMip(desc.mipmap));
+    sd->setSAddressMode(toAddr(desc.addressU));
+    sd->setTAddressMode(toAddr(desc.addressV));
+    sd->setRAddressMode(toAddr(desc.addressW));
+    sd->setMaxAnisotropy(static_cast<NS::UInteger>(desc.maxAnisotropy < 1.0f ? 1.0f : desc.maxAnisotropy));
+    MTL::SamplerState* s = I.device->newSamplerState(sd);
+    sd->release();
+    if (!s) return {};
+    uint32_t idx = Impl::acquire(I.samplers, I.freeSamplers);
+    I.samplers[idx].sampler = NS::TransferPtr(s);
+    I.samplers[idx].alive   = true;
+    return SamplerHandle{ idx, I.samplers[idx].generation };
+}
+void Device::destroy(SamplerHandle h) {
+    if (!h.valid() || !impl_ || h.index >= impl_->samplers.size()) return;
+    auto& s = impl_->samplers[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.sampler.reset();
+    s.alive = false;
+    ++s.generation;
+    impl_->freeSamplers.push_back(h.index);
+}
 void Device::destroy(PipelineHandle h) {
     if (!h.valid() || h.index >= impl_->pipelines.size()) return;
     auto& s = impl_->pipelines[h.index];
@@ -494,6 +578,12 @@ void     Device::unregisterBindlessTexture(uint32_t)    {}
 FrameContext Device::beginFrame() {
     FrameContext f;
     f.impl_ = std::make_unique<FrameContext::Impl>();
+    // Throttle to framesInFlight: block until the frame slot we're about to reuse has completed
+    // on the GPU. Signaled from the command buffer's completion handler in endFrame.
+    if (impl_->frameSem) dispatch_semaphore_wait(impl_->frameSem, DISPATCH_TIME_FOREVER);
+    const uint32_t fif = std::max(impl_->config.framesInFlight, 1u);
+    f.impl_->frameIndex = static_cast<uint32_t>(impl_->frameCounter % fif);
+    ++impl_->frameCounter;
     f.impl_->pool = NS::AutoreleasePool::alloc()->init();
     f.impl_->cmd  = impl_->queue->commandBuffer();   // autoreleased into the pool
 
@@ -522,6 +612,14 @@ void Device::submit(FrameContext&, CommandList&) { /* Metal: recorded on the fra
 
 void Device::endFrame(FrameContext&& f) {
     if (!f.impl_) return;
+    // Signal the frames-in-flight semaphore once the GPU finishes this frame's work, freeing the
+    // slot for reuse framesInFlight frames later.
+    if (f.impl_->cmd && impl_->frameSem) {
+        dispatch_semaphore_t sem = impl_->frameSem;
+        f.impl_->cmd->addCompletedHandler([sem](MTL::CommandBuffer*) {
+            dispatch_semaphore_signal(sem);
+        });
+    }
     if (impl_->windowed && f.impl_->drawable) {
         f.impl_->cmd->presentDrawable(f.impl_->drawable);
         f.impl_->cmd->commit();                 // let it pipeline; CAMetalLayer paces frames
@@ -533,6 +631,8 @@ void Device::endFrame(FrameContext&& f) {
 }
 
 void Device::waitIdle() { /* per-frame waitUntilCompleted covers the headless path for now */ }
+
+uint32_t Device::framesInFlight() const { return std::max(impl_->config.framesInFlight, 1u); }
 
 Swapchain* Device::swapchain() { return nullptr; }
 
@@ -568,8 +668,29 @@ void CommandList::endRendering() {
     if (impl_->encoder) { impl_->encoder->endEncoding(); impl_->encoder = nullptr; }
 }
 
+void CommandList::resourceBarrier(std::span<const ResourceTransition>) {
+    // Metal tracks hazards automatically for tracked resources within a command buffer: a later
+    // encoder that reads a resource an earlier encoder wrote is synchronized by the driver. So
+    // there is nothing to do here for the default (tracked) path. The call exists so the render
+    // graph can emit explicit transitions that the Vulkan backend WILL need (image-layout
+    // transitions + pipeline barriers). If we later adopt untracked/heap/argument-buffer
+    // resources, this is where MTL::Fence / useResource residency calls would go.
+}
+
+void CommandList::beginCompute() {
+    impl_->computeEncoder = impl_->cmd->computeCommandEncoder();   // autoreleased
+}
+
+void CommandList::endCompute() {
+    if (impl_->computeEncoder) { impl_->computeEncoder->endEncoding(); impl_->computeEncoder = nullptr; }
+}
+
 void CommandList::bindPipeline(PipelineHandle h) {
     auto& slot = impl_->dev->pipelines[h.index];
+    if (impl_->computeEncoder) {
+        if (slot.computeState) impl_->computeEncoder->setComputePipelineState(slot.computeState.get());
+        return;
+    }
     impl_->encoder->setRenderPipelineState(slot.state.get());
     if (slot.depthState) impl_->encoder->setDepthStencilState(slot.depthState.get());
     impl_->topology = slot.topology;
@@ -585,12 +706,30 @@ void CommandList::bindIndexBuffer(BufferHandle b, IndexType t) {
     impl_->indexType   = toMTLIndexType(t);
 }
 void CommandList::bindResources(const ResourceBindings& bindings) {
-    // Bind resource buffers at their (low) Metal indices, for both vertex and fragment stages
-    // (Slang declares the uniform in both). Bindless textures/samplers: TODO.
+    // Bind resource buffers at their (low) Metal indices. In a compute scope, bind to the compute
+    // encoder; otherwise to both vertex and fragment stages (Slang declares the uniform in both).
+    // Bindless textures/samplers: TODO.
+    if (impl_->computeEncoder) {
+        for (const auto& b : bindings.buffers) {
+            MTL::Buffer* buf = impl_->dev->buffers[b.buffer.index].buffer.get();
+            impl_->computeEncoder->setBuffer(buf, b.offset, b.binding);
+        }
+        return;
+    }
     for (const auto& b : bindings.buffers) {
         MTL::Buffer* buf = impl_->dev->buffers[b.buffer.index].buffer.get();
         impl_->encoder->setVertexBuffer(buf, b.offset, b.binding);
         impl_->encoder->setFragmentBuffer(buf, b.offset, b.binding);
+    }
+    // Explicitly-bound sampled textures + samplers (fragment stage) — e.g. tone-mapping the HDR
+    // target. Bindless material textures are a separate (future) path.
+    for (const auto& t : bindings.textures) {
+        if (t.texture.index < impl_->dev->textures.size())
+            impl_->encoder->setFragmentTexture(impl_->dev->textures[t.texture.index].texture.get(), t.binding);
+    }
+    for (const auto& s : bindings.samplers) {
+        if (s.sampler.index < impl_->dev->samplers.size())
+            impl_->encoder->setFragmentSamplerState(impl_->dev->samplers[s.sampler.index].sampler.get(), s.binding);
     }
 }
 void CommandList::setPushConstants(std::span<const std::byte>) { /* TODO */ }
@@ -629,6 +768,13 @@ void CommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount,
         static_cast<NS::UInteger>(firstInstance));
 }
 void CommandList::drawIndexedIndirect(BufferHandle, uint64_t, uint32_t, uint32_t) { /* TODO */ }
-void CommandList::dispatch(uint32_t, uint32_t, uint32_t) { /* TODO(compute) */ }
+void CommandList::dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) {
+    if (!impl_->computeEncoder) return;
+    // RHI convention: dispatch() takes THREADGROUP counts; kernels use 64-wide 1D threadgroups
+    // ([numthreads(64,1,1)]). The caller passes ceil(N/64) as groupsX.
+    MTL::Size groups{ groupsX, groupsY, groupsZ };
+    MTL::Size threadsPerGroup{ 64, 1, 1 };
+    impl_->computeEncoder->dispatchThreadgroups(groups, threadsPerGroup);
+}
 
 } // namespace engine::rhi

@@ -35,6 +35,18 @@ public:
     // owns pipelinesʼ per-frame buffers + the depth target. Manages no scene data.
     void render(rhi::FrameContext& frame, std::span<const RenderView> views);
 
+    // Enable clustered forward+ lighting. Pass a compute pipeline built from cluster.metallib
+    // (the engine loads no shaders itself). When enabled, each view with point lights runs a
+    // froxel light-binning compute pass before its forward pass, and the forward shader loops
+    // only its cluster's lights. Pass an invalid handle to disable (loop-all fallback).
+    void setClusterBinning(rhi::PipelineHandle binningPipeline);
+
+    // Enable HDR + tone mapping. Pass a fullscreen tonemap pipeline built from tonemap.metallib
+    // (color format = the final target's) and a sampler. When set, each view renders into an
+    // RGBA16F HDR target, then a fullscreen tonemap pass resolves it to view.target. The scene
+    // (mesh) pipeline must then target RGBA16Float. Pass an invalid pipeline to disable.
+    void setTonemap(rhi::PipelineHandle tonemapPipeline, rhi::SamplerHandle sampler);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

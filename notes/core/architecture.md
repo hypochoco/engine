@@ -1,7 +1,7 @@
 # Architecture (as-is)
 
 Snapshot of the current structure. This describes what exists today, not the target.
-Last synced with code: 2026-07-03.
+Last synced with code: 2026-07-04.
 
 ## Build & layout
 
@@ -14,6 +14,10 @@ Last synced with code: 2026-07-03.
   (`core + physics + physics_env`) and skips the graphics stack (RHI/Metal/Vulkan), GLFW, shaders,
   and the test/visual runners — so the Python binding (`engine::training` aggregate) links clean on a
   GPU/display-less Linux box. Default (`OFF`) is the full dev build (`engine::engine`).
+  **`tinyobjloader` (.obj loader) + `stb` (image loader) are graphics-only deps** and are gated behind
+  `NOT ENGINE_TRAINING_ONLY` at both the top level and in `engine_core` (2026-07-04) — so a training
+  build is graphics-dependency-free and those submodules need not even be initialized. `engine::core`
+  links them only in a full build (it does not use them itself; they're consumed by the graphics module).
 - Split `include/` (public headers) vs `src/` (implementation).
 - Per-module build files live under a single top-level **`modules/`** dir (`modules/<name>/
   CMakeLists.txt`, aggregated by `modules/CMakeLists.txt`), separate from their source under
@@ -46,7 +50,7 @@ engine/
 
 ```
 engine::engine (INTERFACE)
-├── engine::core        (STATIC)    → glm, tinyobjloader, stb, Threads
+├── engine::core        (STATIC)    → glm, Threads (+ tinyobjloader, stb in FULL builds only)
 │                                     geometry, memory/Handle, math/{Transform,Camera}, Time, threading
 ├── engine::ecs         (STATIC)    → engine::core   (archetype World, queries, resources, Schedule)
 ├── engine::input       (INTERFACE) → engine::core, glm            (InputState + Key/MouseButton; GLFW-free)
@@ -61,7 +65,9 @@ engine::engine (INTERFACE)
 ```
 
 Dependencies: `glm` via `find_package`; `glfw` + `tinyobjloader` via `add_subdirectory`;
-`stb` header-only INTERFACE; `metal-cpp` vendored on the include path (Apple).
+`stb` header-only INTERFACE; `metal-cpp` vendored on the include path (Apple). All of
+`glfw`/`tinyobjloader`/`stb` (and the whole backend block) are inside `if(NOT ENGINE_TRAINING_ONLY)`,
+so a headless training build pulls in only `glm` + `Threads`.
 
 > ✅ **Build reality (2026-07-03)**: full tree builds on macOS; the Metal backend renders
 > **instanced core meshes through the Renderer/RenderView path**, offscreen and to a window.
@@ -91,6 +97,53 @@ a working **Metal backend** (`src/graphics/metal/`), plus a **render layer**
 (camera + `RenderItem[]` + per-instance `InstanceData[]` + `MaterialGPU[]`), and `Renderer`
 (instanced `drawIndexed`, per-instance materials, depth, offscreen + windowed present). Slang
 shaders (`src/shaders/*.slang` → `.metallib`). This is what the tests and the milestone exercise.
+
+### Rendering framework (clustered forward+ render graph, 2026-07-04)
+
+A mid-level **framework** now sits between the ECS extraction and the RHI (design/diagram/perf/
+multithreading review: [2026-07-04-render-framework-plan.md](../investigations/2026-07-04-render-framework-plan.md)).
+**Decided (owner)**: lighting = **clustered Forward+** (graph kept G-buffer-capable for a later
+deferred/offline path); the graph is **explicit + correctness-first** (no reorder/aliasing/pass-
+culling in v1). Implemented so far:
+- **RHI additions**: `TextureDesc::transient` → Metal `MTLStorageModeMemoryless` (tile-memory
+  render targets; the renderer depth target is transient); `CommandList::resourceBarrier` +
+  `ResourceState`/`ResourceTransition` (near-no-op on auto-tracked Metal; the explicit contract
+  Vulkan will need). `Device::framesInFlight()`.
+- **`FrameRingAllocator`** (`render/frame_ring.h`, header-only): per-frame-in-flight arenas +
+  per-view bump sub-allocation. Fixes two latent renderer hazards — a per-frame overwrite race
+  (single upload buffers vs framesInFlight=2) and multi-view clobber (one instance buffer reused
+  across views). The Metal backend now **cycles the frame index** + throttles with a
+  `dispatch_semaphore(framesInFlight)` (completion-handler signal).
+- **`RenderGraph`** (`render/render_graph.h`, header-only): raster/compute passes declare
+  reads/writes; `execute()` records them in registration order, emits `resourceBarrier`s at pass
+  boundaries, and wraps raster passes in begin/endRendering. `Renderer::render` builds a graph
+  (one forward pass per view) — the public API is unchanged, so the existing pixel tests are the
+  parity check.
+- **Multi-light forward + clustered forward+**: `render::PointLight` + `RenderView::pointLights`;
+  `mesh.slang` does Lambert + smooth range attenuation. **Metal compute** is implemented
+  (`createComputePipeline` + a `beginCompute`/`dispatch` encoder path); a **froxel light-binning
+  compute pass** (`cluster.slang`, 12×12×24 grid, view-space AABB + sphere test) bins lights into
+  per-cluster lists, and `Renderer::setClusterBinning(pipeline)` enables it (a binning pass per view
+  before the forward pass; the forward shader loops only its froxel's lights). Clustered output is
+  **pixel-identical** to loop-all (verified). Binning is a **thread-per-light scatter** (RF4b-opt,
+  O(lights × local-froxels)); on a wide field of localized lights clustered beats loop-all by
+  **2.3× / 5.3× / 17.9×** at 256 / 1024 / 4096 lights (stays ~1 ms as lights scale).
+- **HDR + tone mapping** (RF5): added **explicit texture+sampler binding** to the RHI
+  (`TextureBinding`/`SamplerBinding`; Metal `createSampler` — the first shader texture sampling).
+  `Renderer::setTonemap(pipeline, sampler)` is opt-in: the forward pass renders into an RGBA16F HDR
+  target, then a fullscreen ACES tonemap pass (`tonemap.slang`) resolves to the view target — which
+  exercises the graph's HDR RenderTarget→ShaderRead barrier for real. Verified by
+  `graphics.hdr_tonemap` (bright input clips to 255 without, ACES→241 with).
+- **Tests**: `graphics.{barrier_transient, multiview_ring, multi_light, compute_smoke,
+  cluster_binning, clustered_forward, hdr_tonemap}`; parity anchors (`154 31 32 255`, `131 66 58`)
+  intact. **Visual**: `tst/graphics/visual/clustered_lights.cpp` (windowed field of spheres under
+  many moving colored point lights, clustered forward+ + HDR/ACES; run `visuals clustered_lights`).
+  **Benchmark** `tst/graphics/benchmark/render_graph.cpp`: CPU record time flat (~0.02 ms) to 65k
+  instances; instance-count + light-count sweeps; clustered-vs-loop-all on a wide local-light field
+  (the 2.3×/5.3×/17.9× numbers above).
+
+**Pending (todo.md "Render framework")**: faster light binning (RF4b-opt); then shadows/sky/AA as
+additive graph nodes; and (later, non-Apple) the Vulkan backend behind the same RHI.
 
 ### Legacy Vulkan code (parked under `src/graphics/vulkan/`, NOT the current path)
 
@@ -204,6 +257,17 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   skeleton"). **Feet are the last two bodies** by contract so a renderer can draw them as boxes
   and the rest as stretched spheres (ellipsoids). Headless `tst/physics/integration/ragdoll.cpp`
   (passive ragdoll collapses + settles on the plane).
+  **Rig-agnostic (2026-07-04)**: a rig is *data* (`ArticulationDef`), not code — the converter, both
+  physics backends, and the env layer operate on any def, so multiple rig factories coexist and are
+  chosen per experiment. A second preset **`makeAMPHumanoid()`** now sits alongside `makeHumanoid`:
+  the DeepMimic/AMP standard rig — **15 bodies / 28 actuated DOF** (ball abdomen/neck/shoulders/hips/
+  ankles, hinge elbows/knees, fixed wrists; hands are rigid tip bodies), authored in our Y-up
+  convention from `ase/data/assets/mjcf/amp_humanoid.xml` (feet still last). Validated headless
+  (`tst/physics/integration/amp_humanoid.cpp`: 15 bodies / 28 DOF / floating, converts to a
+  `DiffModel`, passive drop rests on the plane) + windowed (`tst/physics/visual/amp_humanoid.cpp`).
+  Deferred: faithful mass-from-density + per-joint stiffness/damping/armature transcribed from the
+  MJCF, obs/act 21→28 validation, offline poselib retargeting, reduced-backend parity. Plan:
+  [2026-07-04-humanoid-rig-adoption.md](../investigations/2026-07-04-humanoid-rig-adoption.md).
 - **Humanoid behaviours (B5)**: `tst/physics/integration/humanoid_control.cpp` — `pd_stand_holds_pose`
   (pinned pelvis; PD servos drive bent knees against gravity + hold neutral elbows) and
   `articulation_determinism` (serial vs pooled/parallel bit-identical with joints+actuators).
@@ -298,6 +362,14 @@ the maximal/reduced `PhysicsWorld`s. Under `include/engine/physics/diff/`:
   **physical joint damping** `jointDamping` is available (τ=−b·q̇, default 0). Defaults `groundK=4e4,
   C=1000` (stiff + over-damped ⇒ ~3 cm transient impact penetration, low bounce, no clip-through),
   `β=120, μ=0.8`. See notes/investigations/2026-07-04-diff-semiimplicit-testing.md.
+- **Per-joint MJCF-authoring props (2026-07-04, on `DiffLink`)** — rig-agnostic, all default to no-ops
+  so existing models are unchanged: **`jointDamping`** (per-joint viscous τ=−b·q̇; `<0` ⇒ inherit the
+  `DiffModel` global), **`jointStiffness`** (passive spring τ=−k·q pulling the joint toward its rest
+  pose, via `logSO3`/`vee`), and **`armature`** (rotor/reflected inertia added to the joint-space
+  inertia diagonal `D` in ABA pass 2 — stabilizes stiff joints). These let the diff engine faithfully
+  express an MJCF/URDF rig (the AMP humanoid target). Tests: `diff_joint_damping_per_link`,
+  `_stiffness_restores_to_rest`, `_armature_adds_rotor_inertia`, `_stiffness_differentiable`. Applied in
+  the differentiable engine first; **reduced-backend parity is a follow-up**.
 - **`zeroth_order.h`** antithetic Gaussian-smoothing ES gradient; **`hybrid.h`** `alphaOrderGradient`
   (min-variance blend of analytic first-order + zeroth-order — Suh et al.); **`jacobian.h`** per-step
   tangent Jacobian `∂s_{t+1}/∂(s_t,a_t)` (exact `Dual<1>` per column, SO(3) exp/vee).
@@ -338,13 +410,17 @@ investigations/2026-07-04-physics-config-system.md.
   [2026-07-03-physics-test-findings.md](../investigations/2026-07-03-physics-test-findings.md).
 - **Recent solver additions**: **kinematic bodies** advance by their scripted velocity (ignore
   gravity/impulses, still infinite-mass to the solver); **restitution works under CCD**.
-- **Not yet (Phase 3, deferred)**: implicit/differentiable backend + parallel worlds as an
-  ML training harness. Physics **Phase 2 + collision polish complete**: SAP + uniform-grid
+- **Since then (Phases B–F, 2026-07-04)** — what was "Phase 3, deferred" now largely exists:
+  a **reduced-coordinate (Featherstone/ABA) backend**, a **differentiable engine** (`physics::diff`,
+  forward-mode AD), **joints/constraints + actuators + articulation** (incl. the `makeHumanoid` /
+  `makeAMPHumanoid` rigs), a **centralized `SimConfig`**, and the **parallel-world ML harness**
+  (`physics_env` `Environment`/`VecEnv`). See those sections above. Physics **Phase 2 + collision
+  polish complete**: SAP + uniform-grid
   broadphase (parallel-sorted), ThreadPool (parallel worlds + colored solver + parallel sort),
   sphere/plane/box/hull/capsule colliders with GJK/EPA + GJK-distance + resting/stacking
   **manifolds**, clamped-Baumgarte solver, and **CCD** (swept AABBs + speculative contacts).
   Possible later: persistent warm-started manifolds, box-box/hull CCD (conservative advancement),
-  joints/constraints, sleeping/islands.
+  sleeping/islands.
 
 ## ECS module (`engine::ecs`, 2026-07-03)
 
@@ -439,7 +515,11 @@ Genuinely open gaps (see todo.md for the full backlog):
 - **Compute**: no compute pipelines or compute-queue usage (needed for ML + some rendering).
 - **`core::io`/`image`**: `readFile`/`loadObj`/`loadImage` + `Image` not yet in `engine::core`
   (loaders still live in the parked graphics code).
-- **Physics Phase 3**: implicit/differentiable backend + parallel-world ML harness.
+- **Physics — remaining**: the reduced-coordinate + differentiable backends, joints/actuators/
+  articulation, `SimConfig`, and the `physics_env` parallel-world harness all exist now (see the
+  physics sections). Still open: **reduced-backend parity** for the diff engine's per-joint
+  MJCF props (damping/stiffness/armature), authoring a **faithful mass-from-density `makeAMPHumanoid`**
+  + the obs/act 21→28 ripple, and **terrain (non-flat) collision** for the walking milestone.
 - **Application entry point**: intentionally none — this is a library; driver tests under
   `tst/` stand in for the consuming app.
 

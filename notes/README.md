@@ -21,6 +21,7 @@ Working notes for the engine project.
   - [`2026-07-03-ecs-plan.md`](investigations/2026-07-03-ecs-plan.md)
   - [`2026-07-03-physics-plan.md`](investigations/2026-07-03-physics-plan.md)
   - [`2026-07-03-physics-baseline.md`](investigations/2026-07-03-physics-baseline.md)
+  - `2026-07-04-render-framework-plan.md` — clustered forward+ render graph (framework design)
 
 ## Conventions
 

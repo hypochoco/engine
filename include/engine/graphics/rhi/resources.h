@@ -31,6 +31,11 @@ struct TextureDesc {
     uint32_t     sampleCount = 1;
     Format       format = Format::RGBA8Unorm;
     TextureUsage usage  = TextureUsage::Sampled;
+    // Transient render targets never leave the frame (not sampled later, not read back). The
+    // backend may keep them in on-chip tile memory — Metal MTLStorageModeMemoryless / Vulkan
+    // LAZILY_ALLOCATED — a bandwidth win on tile-based GPUs (depth, MSAA, G-buffer). Only honored
+    // for render-target-only textures (ignored if Sampled/TransferSrc/TransferDst is set).
+    bool         transient = false;
     const char*  debugName = nullptr;
 };
 

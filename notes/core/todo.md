@@ -434,6 +434,93 @@ details in the refactor investigation):
 - [ ] `GlobalUBO` lights (`// todo: lights`).
 - [ ] Deferred deletion queue (readme.md sketch), once resources outlive a frame.
 
+## Render framework — clustered forward+ render graph (ACTIVE, 2026-07-04)
+
+The mid-level framework between ECS extraction and the RHI. Everything modern (multi-light,
+shadows, AA, sky, post) depends on it. Design + diagram + perf/backend/multithreading review:
+[2026-07-04-render-framework-plan.md](../investigations/2026-07-04-render-framework-plan.md).
+**DECIDED (owner, 2026-07-04)**: lighting = **clustered Forward+** (graph kept G-buffer-capable
+for a later deferred/offline path); render graph is **explicit + correctness-first** (no memory
+aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by owner.
+
+- [x] **RF1. RHI additions** — DONE (2026-07-04). `transient` texture hint → Metal
+      `MTLStorageModeMemoryless` for render-target-only textures (renderer depth is now transient);
+      `CommandList::resourceBarrier(span<ResourceTransition>)` + `ResourceState` enum (Vulkan real
+      barriers later; Metal near-no-op, auto-tracked). Test `graphics.barrier_transient` (transient
+      depth + barriers, clear read back 64/128/191/255). Parity anchors intact.
+- [x] **RF2. FrameRingAllocator + per-view sub-allocation** — DONE (2026-07-04).
+      `include/engine/graphics/render/frame_ring.h` (header-only: per-frame-in-flight arenas +
+      per-view bump sub-alloc, grow-by-retire). Metal backend now **cycles frameIndex** +
+      `dispatch_semaphore(framesInFlight)` throttle (completion-handler signal) — fixes the real
+      windowed hazard by construction; `Device::framesInFlight()` added. Renderer reworked to
+      ring-allocate camera/instances/materials per view. Test `graphics.multiview_ring` (2 views/
+      frame → 2 targets over 3 frames; A red r153/b24, B blue r23/b157 — proves no clobber).
+- [x] **RF3. Minimal RenderGraph** — DONE (2026-07-04).
+      `include/engine/graphics/render/render_graph.h` (header-only; addRasterPass/addComputePass +
+      declared reads/writes; registration-order execute with auto `resourceBarrier` + begin/end
+      Rendering wrapping the record callback; state tracked per texture). Renderer builds a graph
+      (one forward raster pass per view) — `render()` API unchanged so mesh/scene/triangle/multiview
+      are the pixel-parity check (all hold). Reorder/aliasing/pass-culling still deferred (per scope).
+- [~] **RF4a. Multi-light forward (loop-all)** — DONE (2026-07-04). `render::PointLight` +
+      `RenderView.pointLights`; `GlobalUniforms.params.x` = light count; ring-uploaded + bound at
+      buffer 3; `mesh.slang` adds world-pos + a punctual light loop (Lambert + smooth range
+      attenuation). Test `graphics.multi_light` (ambient-only center red=13 → 1 point light=255 →
+      4 lights=255). This is the correct data path; clustering (RF4b) is the perf scaling on top.
+- [x] **RF4b. Cluster-binning compute pass (clustered forward+)** — DONE + verified (2026-07-04).
+      **Metal compute subsystem**: `createComputePipeline` (`MTL::ComputePipelineState`) + a compute
+      encoder path (`CommandList::beginCompute/endCompute`, `bindPipeline`/`bindResources`/`dispatch`
+      compute-aware) — smoke test `graphics.compute_smoke` (kernel writes i·2+1 → readback). **Binning**:
+      `src/shaders/cluster.slang` (one thread/froxel: view-space AABB + sphere-overlap test → per-cluster
+      light index list); `graphics.cluster_binning` verifies GPU==CPU reference over all 512 clusters
+      (0 mismatches) + in-frustum light binned / out-of-frustum lights culled. **Integration**:
+      `mesh.slang` clustered path (froxel lookup from SV_Position + view-space depth) behind a param
+      flag; `Renderer::setClusterBinning(pipeline)` adds a per-view binning compute pass before the
+      forward pass. `graphics.clustered_forward` proves clustered output is **pixel-identical** to
+      loop-all (MAD=0.0, maxDiff=0 over 22.8k lit px). Grid 12×12×24, maxLights/cluster 64.
+      **Note**: an early benchmark showed clustered ≈ loop-all; that was NOT a binning-cost issue
+      but two bugs (uncapped forward loop + the `params.y` "use clusters" flag set AFTER the camera
+      upload, so the clustered branch never ran — the equivalence test couldn't catch it as both
+      paths were loop-all). Both fixed in RF4b-opt, which then measured up to **17.9×**.
+      Deferred (still): full LightList (spot lights), Z-slice exponential distribution.
+- [x] **RF4b-opt. Faster light binning** — DONE (2026-07-04). Rewrote `cluster.slang` as a
+      **thread-per-light scatter**: each light computes the small froxel range it covers (tile
+      range + depth-slice range, +1 conservative margin) and appends itself into overlapping
+      clusters via `InterlockedAdd` on the per-cluster count (host zero-clears the count buffer
+      each frame; dispatch is now per-light). O(lights × local-froxels) vs the old
+      O(clusters × lights). **Two bugs found + fixed while benchmarking** (this is why the earlier
+      "naive binning offsets the win" note was wrong — clustering wasn't actually running):
+      (1) the forward shader looped the **uncapped** atomic count and read past the 64-entry list
+      into garbage — now `min(count, maxPer)`; (2) the renderer set `params.y` (the "use clusters"
+      flag) **after** uploading the camera uniform, so the shader always took the loop-all branch —
+      the `clustered_forward` equivalence test couldn't catch it (both paths were loop-all). Fixed
+      the ordering; clustering now genuinely runs. **Result** (wide field of 4096 spheres, local
+      lights, 512×512): clustered vs loop-all **256 lights 2.3×** (1.83→0.81 ms), **1024 5.3×**
+      (4.90→0.93 ms), **4096 17.9×** (17.7→0.99 ms) — clustered stays ~1 ms as lights scale.
+      Correctness held throughout (`clustered_forward` MAD=0, `cluster_binning` 0 mismatches).
+- [x] **RF5. HDR + tonemap** — DONE (2026-07-04). Added **texture+sampler binding** to the RHI
+      (`TextureBinding`/`SamplerBinding` in `ResourceBindings`; Metal `createSampler` + fragment
+      texture/sampler binds — the first shader texture sampling). `tonemap.slang` = fullscreen
+      triangle (SV_VertexID) + ACES (Narkowicz) + sRGB. `Renderer::setTonemap(pipeline, sampler)`
+      opt-in: forward renders into an RGBA16F HDR target, then a fullscreen tonemap pass resolves to
+      view.target (the graph inserts the HDR RenderTarget→ShaderRead barrier). Test
+      `graphics.hdr_tonemap` (bright ambient: tonemap OFF clips to 255, ON=241 via ACES). Wired into
+      the `clustered_lights` visual. App builds the mesh pipeline as RGBA16Float + a tonemap pipeline
+      (cull None, no depth) matching the final target when tonemapping.
+- [ ] **RF6+.** Additive graph nodes: **shadows** (CSM), **sky/atmosphere**, **AA** (MSAA or post).
+- [x] **Benchmark** — DONE (2026-07-04), `tst/graphics/benchmark/render_graph.cpp` (in the
+      `benchmarks` runner; graphics bench now globbed + `engine::graphics` linked). Numbers (Apple,
+      RelWithDebInfo, 512×512, headless — relative baseline for THIS machine):
+      **instance sweep (0 lights)** CPU record 0.011/0.022/0.056/0.214 ms and frame(incl GPU)
+      0.66/2.0/3.1/10.5 ms at 256/4k/16k/65k instances → the graph+ring CPU path stays flat/cheap.
+      **light sweep (4096 inst)** frame 1.06/1.21/2.33/7.15 ms at 0/16/64/256 lights while CPU record
+      stays ~0.02 ms → confirms the cost is GPU fragment shading looping all lights ⇒ **clustering
+      (RF4b) is the right lever** (scale with lights-per-cluster, not total lights).
+- **Multithreading (notes only, not now)**: parallel command recording (per-pass, once record time
+      is a measured bottleneck), parallel extraction (`parallelFor` per archetype chunk), and
+      **parallel-world rendering** (mirrors the physics parallel-worlds win) — the graph is per-view
+      so these slot in without contract changes. Do NOT thread the Device pools / submit. See the
+      note §9.
+
 ## Compute / ML
 
 - [ ] **Compute pipeline + compute-queue support.** Needed for ML workloads and some
