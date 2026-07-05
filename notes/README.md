@@ -24,6 +24,8 @@ Working notes for the engine project.
   - `2026-07-04-render-framework-plan.md` — clustered forward+ render graph (framework design)
   - `2026-07-05-sky-atmosphere.md` — procedural sun-coupled sky pass (RF6 sky) design
   - `2026-07-05-atmosphere-aerial-perspective.md` — aerial-perspective + height fog (RF6 atmosphere) design
+  - `2026-07-05-antialiasing-msaa-fxaa.md` — MSAA + optional FXAA anti-aliasing (RF6 AA) design
+  - `2026-07-05-graphics-config-system.md` — centralized GraphicsConfig + RenderResources (G1–G3) design
 
 ## Conventions
 

@@ -12,6 +12,7 @@
 #include <memory>
 #include <span>
 
+#include "engine/graphics/render/graphics_config.h"
 #include "engine/graphics/render/render_view.h"
 
 namespace engine::rhi { class Device; class FrameContext; }
@@ -35,6 +36,16 @@ public:
     // owns pipelinesʼ per-frame buffers + the depth target. Manages no scene data.
     void render(rhi::FrameContext& frame, std::span<const RenderView> views);
 
+    // --- Centralized config (preferred) -------------------------------------------------------
+    // The renderer holds one GraphicsConfig (tunable params + per-feature enable flags) and one
+    // RenderResources bundle (the app-supplied pipeline/sampler handles). A feature runs when its
+    // config flag is on AND its resource is valid. Set the resources once (or on pipeline rebuild)
+    // and drive everything else by mutating the config — see engine/graphics/render/graphics_config.h.
+    void setConfig(const GraphicsConfig& config);
+    const GraphicsConfig& config() const;
+    void setResources(const RenderResources& resources);
+
+    // --- Feature setters (thin wrappers over the config/resources above; kept for convenience) --
     // Enable clustered forward+ lighting. Pass a compute pipeline built from cluster.metallib
     // (the engine loads no shaders itself). When enabled, each view with point lights runs a
     // froxel light-binning compute pass before its forward pass, and the forward shader loops
@@ -75,6 +86,21 @@ public:
                 const glm::vec3& color = glm::vec3(0.7f, 0.8f, 0.9f),
                 const glm::vec3& inscatterColor = glm::vec3(0.0f),
                 float inscatterExponent = 8.0f);
+
+    // Enable hardware MSAA on the forward pass. The forward pass renders into `sampleCount`× MSAA
+    // color + depth targets and resolves into the single-sample target (the HDR buffer when
+    // tonemapping, else the view target). `sampleCount` must be a power of two the device supports
+    // (2/4/8); 1 disables. **The app must build its mesh AND sky pipelines with a matching
+    // `GraphicsPipelineDesc.sampleCount`** (the engine builds no pipelines).
+    void setMSAA(uint32_t sampleCount);
+
+    // Enable FXAA post anti-aliasing. Pass a fullscreen pipeline built from fxaa.metallib (color
+    // format = the FINAL/present target's) and a linear-clamp sampler. When set, the pre-FXAA stage
+    // (tonemap if HDR, else the forward pass) writes to an intermediate RGBA8 LDR texture, then FXAA
+    // resolves it to the view target. So: **when FXAA is on, build the tonemap pipeline to output
+    // RGBA8Unorm** (the intermediate) and the FXAA pipeline to output the final target format. Pass
+    // an invalid pipeline to disable. Independent of MSAA (use either or both).
+    void setFXAA(rhi::PipelineHandle fxaaPipeline, rhi::SamplerHandle sampler);
 
 private:
     struct Impl;

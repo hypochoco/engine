@@ -551,6 +551,37 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       height fog base foggier than top). Wired into `shadow_scene`. **Benchmark ~0.005 ms** (few
       fragment ALU, within noise). Deferred: Hillaire aerial-perspective 3D LUT, volumetric fog /
       light shafts, fog influencing the sky pass.
+      **Known limitation (2026-07-05)**: fog blends geometry toward a *constant* `fogColor`, but the
+      sky pass is *not* fogged, so distant geometry (→fogColor) meets the sky (→sky-horizon color) at
+      a visible seam on the horizon line. Cheap mitigation = set `fogColor` ≈ the sky horizon color.
+      Proper fix (the correct "aerial perspective") = make the fog color **view-direction dependent**:
+      fade geometry toward the *sky color along that ray* (evaluate the sky gradient in `mesh.slang`
+      from the sky palette passed in Globals) so geometry converges exactly to the sky behind it —
+      no seam. Deferred pending owner call (flagged 2026-07-05; demo look is acceptable as-is).
+      **AA (MSAA + FXAA) DONE (2026-07-05)** — RF6 shadows/sky/AA trio complete. Hardware MSAA on
+      the forward pass: RHI honors `TextureDesc.sampleCount` (Metal `Type2DMultisample`),
+      `createGraphicsPipeline` sets `rasterSampleCount`, `ColorAttachment.resolveTarget` →
+      `StoreActionMultisampleResolve`; `Renderer::setMSAA(n)` renders memoryless MSAA color+depth and
+      resolves on-tile into the single-sample HDR/view target (app builds mesh+sky pipelines with
+      matching sampleCount). Optional FXAA post pass (`fxaa.slang`, compact luma-FXAA) via
+      `Renderer::setFXAA` with tonemap→intermediate-LDR→FXAA→present ordering (catches the sun-disc
+      shading aliasing MSAA misses). Both opt-in, off by default. Design note
+      `investigations/2026-07-05-antialiasing-msaa-fxaa.md`. Test `graphics.aa` (rotated slab: 0
+      partial-coverage edge px → 540 @4× MSAA, 628 @FXAA; interior/bg untouched). Benchmark: MSAA 4×
+      **+0.29/+1.2 ms** @4k/16k instances (4× coverage raster, on-tile resolve); FXAA **~0.01 ms**.
+      Wired into `atmosphere_scene` (M/X toggles). Deferred: TAA/MetalFX temporal, SMAA, custom
+      tonemap-weighted HDR MSAA resolve, alpha-to-coverage.
+      **Graphics config system DONE (2026-07-05)** — the scattered `Renderer::setX()` toggles +
+      tuning knobs are centralized into a value-type `GraphicsConfig` (nested Shadow/Sky/Fog/AA/
+      Cluster + hdr) split from a `RenderResources` handle bundle (feature active = config.enabled &&
+      resource valid). `Renderer::setConfig`/`setResources`; the 7 setters are thin wrappers.
+      Un-buried `shadow::MAP_SIZE`→`shadow.mapSize` (now tunable) + the froxel grid→`ClusterConfig`
+      (compile-time-effective, decision 5). G2: `GraphicsConfigOverride` + `resolve(base, override)`
+      + `presets::{baseline,performance,cinematic}`. G3: write-only `serialize`/`configHash`/`dump`
+      (`graphics_config_io.h`; reader deferred). Tests `graphics.config_*` (4 cases); `atmosphere_scene`
+      migrated to drive its toggles from one config. Suite 167/0 (was 163 + 4 config). Design note
+      `investigations/2026-07-05-graphics-config-system.md`. Deferred: kv READER (needs a tools/CLI),
+      runtime froxel-grid resize, a pipeline-variant helper to remove the app's MSAA sample-count juggling.
 - [x] **Benchmark** — DONE (2026-07-04), `tst/graphics/benchmark/render_graph.cpp` (in the
       `benchmarks` runner; graphics bench now globbed + `engine::graphics` linked). Numbers (Apple,
       RelWithDebInfo, 512×512, headless — relative baseline for THIS machine):

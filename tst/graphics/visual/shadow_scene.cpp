@@ -29,6 +29,7 @@
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
+#include "graphics/visual/demo_toggles.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -110,12 +111,16 @@ TST_CASE(graphics, visual, shadow_scene) {
     render::MeshHandle box = geometry.upload(primitives::makeBox(glm::vec3(0.5f)));
     render::Renderer renderer(device, geometry);
     renderer.setTonemap(tonemapPipe, linSamp);
-    renderer.setShadows(shadowPipe, shadowSamp, 28.0f, 120.0f);
+    // Feature enablers (wrapped so the A/B toggles can re-apply them).
+    auto enableShadows = [&]() { renderer.setShadows(shadowPipe, shadowSamp, 28.0f, 120.0f); };
+    auto enableFog = [&]() {
+        renderer.setFog(/*density*/ 0.008f, /*heightFalloff*/ 0.02f, /*baseHeight*/ 0.0f,
+                        /*color*/ glm::vec3(0.55f, 0.62f, 0.78f), /*inscatter*/ glm::vec3(1.4f, 1.0f, 0.6f),
+                        /*inscatterExp*/ 8.0f);
+    };
+    enableShadows();
     renderer.setSky(skyPipe);
-    // Aerial-perspective + height fog: distant cubes fade into the sky, warmer toward the sun.
-    renderer.setFog(/*density*/ 0.008f, /*heightFalloff*/ 0.02f, /*baseHeight*/ 0.0f,
-                    /*color*/ glm::vec3(0.55f, 0.62f, 0.78f), /*inscatter*/ glm::vec3(1.4f, 1.0f, 0.6f),
-                    /*inscatterExp*/ 8.0f);
+    enableFog();
 
     // Ground slab (instance 0) + a grid of cubes of varying height (single mesh, one draw).
     const int G = 7;
@@ -138,9 +143,17 @@ TST_CASE(graphics, visual, shadow_scene) {
     render::RenderItem item{ box, pipe, 0, static_cast<uint32_t>(inst.size()) };
 
     std::printf("shadow_scene: %zu boxes on a ground, rotating sun casting shadows, HDR. Close to exit.\n", inst.size() - 1);
+    std::printf("  keys:  S = shadows   K = sky   F = fog\n");
+
+    engine::demo::KeyToggle shadowsT{ GLFW_KEY_S, true, "shadows" };
+    engine::demo::KeyToggle skyT    { GLFW_KEY_K, true, "sky" };
+    engine::demo::KeyToggle fogT    { GLFW_KEY_F, true, "fog" };
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        if (shadowsT.poll(window)) { if (shadowsT.on) enableShadows(); else renderer.setShadows({}, {}); }
+        if (skyT.poll(window))     renderer.setSky(skyT.on ? skyPipe : PipelineHandle{});
+        if (fogT.poll(window))     { if (fogT.on) enableFog(); else renderer.setFog(0.0f); }
         const float t = static_cast<float>(glfwGetTime());
 
         render::RenderView view;

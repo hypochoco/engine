@@ -19,6 +19,7 @@ namespace engine::rhi {
 // One color attachment for a rendering pass.
 struct ColorAttachment {
     RenderTargetHandle target;          // offscreen texture view or swapchain image
+    RenderTargetHandle resolveTarget;   // MSAA resolve destination (single-sample); invalid = none
     LoadOp  load  = LoadOp::Clear;
     StoreOp store = StoreOp::Store;
     float   clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};

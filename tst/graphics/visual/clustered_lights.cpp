@@ -30,6 +30,7 @@
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
+#include "graphics/visual/demo_toggles.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -131,9 +132,13 @@ TST_CASE(graphics, visual, clustered_lights) {
 
     std::printf("clustered_lights: %d spheres (%dx%d), %d moving colored lights, %ux%u — close to exit.\n",
                 count, grid, grid, numLights, W, H);
+    std::printf("  keys:  C = clustered forward+ vs loop-all\n");
+
+    engine::demo::KeyToggle clusteredT{ GLFW_KEY_C, true, "clustered" };
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        if (clusteredT.poll(window)) renderer.setClusterBinning(clusteredT.on ? clusterPipe : PipelineHandle{});
         const float t = static_cast<float>(glfwGetTime());
 
         // Animate the point lights: each orbits its own circle just above the field.

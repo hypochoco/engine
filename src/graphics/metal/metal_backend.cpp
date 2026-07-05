@@ -318,7 +318,9 @@ void Device::updateBuffer(BufferHandle h, uint64_t offset, std::span<const std::
 TextureHandle Device::createTexture(const TextureDesc& desc, std::span<const std::byte> initialData) {
     Impl& I = *impl_;
     auto* td = MTL::TextureDescriptor::alloc()->init();
-    td->setTextureType(MTL::TextureType2D);
+    const bool msaa = desc.sampleCount > 1;
+    td->setTextureType(msaa ? MTL::TextureType2DMultisample : MTL::TextureType2D);
+    if (msaa) td->setSampleCount(desc.sampleCount);
     td->setPixelFormat(toMTLPixelFormat(desc.format));
     td->setWidth(desc.width);
     td->setHeight(desc.height);
@@ -327,6 +329,8 @@ TextureHandle Device::createTexture(const TextureDesc& desc, std::span<const std
     // read them back on the headless path. TODO(metal): Private + blit for GPU-only color.
     // A transient render-target-only texture (not sampled, not read back) can live purely in
     // on-chip tile memory (Memoryless) — a TBDR bandwidth win, and the RHI's `transient` hint.
+    // MSAA targets are never Shared/readable (you read the resolve): Memoryless if transient,
+    // else Private.
     const bool renderTargetOnly =
         (has(desc.usage, TextureUsage::ColorTarget) || has(desc.usage, TextureUsage::DepthTarget)) &&
         !has(desc.usage, TextureUsage::Sampled) &&
@@ -335,6 +339,8 @@ TextureHandle Device::createTexture(const TextureDesc& desc, std::span<const std
         !has(desc.usage, TextureUsage::Storage);
     if (desc.transient && renderTargetOnly) {
         td->setStorageMode(MTL::StorageModeMemoryless);
+    } else if (msaa) {
+        td->setStorageMode(MTL::StorageModePrivate);
     } else {
         td->setStorageMode(isDepthFormat(desc.format) ? MTL::StorageModePrivate : MTL::StorageModeShared);
     }
@@ -460,6 +466,7 @@ PipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) 
     if (desc.depthFormat != Format::Undefined) {
         pd->setDepthAttachmentPixelFormat(toMTLPixelFormat(desc.depthFormat));
     }
+    pd->setRasterSampleCount(desc.sampleCount > 0 ? desc.sampleCount : 1);   // MSAA (1 = off)
 
     // Vertex descriptor from the backend-agnostic VertexLayout (single interleaved buffer at 0).
     if (!desc.vertexLayout.attributes.empty()) {
@@ -651,7 +658,16 @@ void CommandList::beginRendering(const RenderTargetDesc& desc) {
         auto* ca = rp->colorAttachments()->object(0);
         ca->setTexture(dev->textures[texIndex].texture.get());
         ca->setLoadAction(toMTLLoad(c.load));
-        ca->setStoreAction(toMTLStore(c.store));
+        // MSAA resolve: if a resolve target is set, resolve the multisampled attachment into it
+        // (on Apple TBDR this happens on-tile). We only need the resolved image, so resolve-only.
+        if (c.resolveTarget.valid()) {
+            uint32_t rIndex = dev->renderTargets[c.resolveTarget.index].textureIndex;
+            ca->setResolveTexture(dev->textures[rIndex].texture.get());
+            ca->setStoreAction(c.store == StoreOp::Store ? MTL::StoreActionStoreAndMultisampleResolve
+                                                         : MTL::StoreActionMultisampleResolve);
+        } else {
+            ca->setStoreAction(toMTLStore(c.store));
+        }
         ca->setClearColor(MTL::ClearColor::Make(c.clearColor[0], c.clearColor[1],
                                                 c.clearColor[2], c.clearColor[3]));
     }
