@@ -450,7 +450,9 @@ PipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) 
     Impl& I = *impl_;
     auto* pd = MTL::RenderPipelineDescriptor::alloc()->init();
     pd->setVertexFunction(I.shaders[desc.vertex.index].function.get());
-    pd->setFragmentFunction(I.shaders[desc.fragment.index].function.get());
+    // Depth-only pipelines (e.g. shadow maps) have no fragment shader + no color attachments.
+    if (desc.fragment.valid() && desc.fragment.index < I.shaders.size())
+        pd->setFragmentFunction(I.shaders[desc.fragment.index].function.get());
 
     if (!desc.colorFormats.empty()) {
         pd->colorAttachments()->object(0)->setPixelFormat(toMTLPixelFormat(desc.colorFormats[0]));

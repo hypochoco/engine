@@ -23,6 +23,8 @@ set(SHADER_SOURCES
     compute_smoke.slang
     cluster.slang
     tonemap.slang
+    shadow.slang
+    sky.slang
 )
 
 set(SHADER_OUTPUTS)

@@ -113,7 +113,10 @@ public:
                 }
 
                 rhi::RenderTargetDesc rtd;
-                rtd.color = std::span<const rhi::ColorAttachment>(&ca, 1);
+                // Depth-only pass (e.g. shadow map): no color attachment.
+                const bool hasColor = p.color.rt.valid();
+                rtd.color = hasColor ? std::span<const rhi::ColorAttachment>(&ca, 1)
+                                     : std::span<const rhi::ColorAttachment>();
                 rtd.depth = p.depth.used ? &da : nullptr;
                 rtd.width = p.width; rtd.height = p.height;
 

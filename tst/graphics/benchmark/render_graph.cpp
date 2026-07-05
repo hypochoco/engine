@@ -80,6 +80,19 @@ TST_CASE(graphics, benchmark, render_graph) {
     PipelineHandle clusterPipe = device.createComputePipeline({ .compute = cs });
     TST_REQUIRE_MSG(clusterPipe.valid(), "cluster pipeline creation failed");
 
+    // Sky pipeline (fullscreen, depth test LessEqual + no write) for the sky-overhead section.
+    const auto skyBlob = readFileBin(std::string(ENGINE_SHADER_DIR) + "/sky.metallib");
+    ShaderHandle skvs = device.createShader(skyBlob, ShaderStage::Vertex);
+    ShaderHandle skfs = device.createShader(skyBlob, ShaderStage::Fragment);
+    GraphicsPipelineDesc skd;
+    skd.vertex = skvs; skd.fragment = skfs;
+    skd.colorFormats = std::span<const Format>(&colorFormat, 1);
+    skd.depthFormat = Format::Depth32Float;
+    skd.depth = { .test = true, .write = false, .op = CompareOp::LessEqual };
+    skd.raster.cull = CullMode::None;
+    PipelineHandle skyPipe = device.createGraphicsPipeline(skd);
+    TST_REQUIRE_MSG(skyPipe.valid(), "sky pipeline creation failed");
+
     TextureHandle color = device.createTexture(
         { .width = W, .height = H, .format = colorFormat, .usage = TextureUsage::ColorTarget | TextureUsage::Sampled });
     RenderTargetHandle colorRT = device.createRenderTarget(color);
@@ -192,5 +205,42 @@ TST_CASE(graphics, benchmark, render_graph) {
                     frameClus > 0 ? frameLoop / frameClus : 0.0);
     }
     renderer.setClusterBinning({});
+
+    std::printf("\n--- sky pass overhead (far-plane fullscreen triangle, fills background only) ---\n");
+    std::printf("(fewer instances ⇒ more background ⇒ more sky fragments)\n");
+    std::printf("%10s %14s %14s %12s\n", "instances", "no-sky ms", "sky ms", "delta ms");
+    for (uint32_t n : {256u, 4096u}) {
+        auto instances = buildInstances(n);
+        render::RenderItem item{ sphere, pipe, 0, n };
+        auto view = makeView(instances, item, {});
+        renderer.setSky({});                              // sky off
+        runFrames(view, 3);
+        auto [r0, fOff] = runFrames(view, 30);
+        renderer.setSky(skyPipe);                         // sky on
+        runFrames(view, 3);
+        auto [r1, fOn] = runFrames(view, 30);
+        (void)r0; (void)r1;
+        std::printf("%10u %14.3f %14.3f %12.3f\n", n, fOff, fOn, fOn - fOff);
+    }
+    renderer.setSky({});
+
+    std::printf("\n--- fog overhead (aerial perspective + height, in the forward shader) ---\n");
+    std::printf("%10s %14s %14s %12s\n", "instances", "no-fog ms", "fog ms", "delta ms");
+    for (uint32_t n : {4096u, 16384u}) {
+        auto instances = buildInstances(n);
+        render::RenderItem item{ sphere, pipe, 0, n };
+        auto view = makeView(instances, item, {});
+        renderer.setFog(0.0f);                            // fog off
+        runFrames(view, 3);
+        auto [r0, fOff] = runFrames(view, 30);
+        renderer.setFog(0.02f, 0.1f, 0.0f, glm::vec3(0.6f, 0.7f, 0.85f),
+                        glm::vec3(2.0f, 1.6f, 1.0f), 8.0f); // fog on (distance + height + in-scatter)
+        runFrames(view, 3);
+        auto [r1, fOn] = runFrames(view, 30);
+        (void)r0; (void)r1;
+        std::printf("%10u %14.3f %14.3f %12.3f\n", n, fOff, fOn, fOn - fOff);
+    }
+    renderer.setFog(0.0f);
+
     std::printf("\nrender_graph benchmark done\n");
 }

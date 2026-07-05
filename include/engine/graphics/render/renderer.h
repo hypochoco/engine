@@ -47,6 +47,35 @@ public:
     // (mesh) pipeline must then target RGBA16Float. Pass an invalid pipeline to disable.
     void setTonemap(rhi::PipelineHandle tonemapPipeline, rhi::SamplerHandle sampler);
 
+    // Enable directional (sun) shadow mapping. Pass a depth-only pipeline built from shadow.metallib
+    // (no fragment; depthFormat Depth32Float) and a Nearest sampler. Each view renders the scene
+    // into an orthographic shadow map from the sun's direction (view.light.direction), then the
+    // forward shader PCF-samples it. `orthoHalfExtent`/`depthRange` size the light volume (centered
+    // at the origin). Pass an invalid pipeline to disable.
+    void setShadows(rhi::PipelineHandle shadowPipeline, rhi::SamplerHandle sampler,
+                    float orthoHalfExtent = 25.0f, float depthRange = 100.0f, float bias = 0.0018f);
+
+    // Enable the procedural sky. Pass a fullscreen pipeline built from sky.metallib (color format =
+    // the forward color target's — RGBA16Float when tonemapping, else the final target; depthFormat
+    // Depth32Float; depth test LessEqual, depth write OFF). The sky is drawn at the far plane at the
+    // END of each forward pass, filling only background pixels; it is coupled to the view's sun
+    // (view.light.direction). Pass an invalid pipeline to disable (flat clear color). `setSkyColors`
+    // optionally overrides the default palette / sun look. Colors are scene-referred (HDR).
+    void setSky(rhi::PipelineHandle skyPipeline);
+    void setSkyColors(const glm::vec3& zenith, const glm::vec3& horizon, const glm::vec3& ground,
+                      const glm::vec3& sunColor, float sunAngularRadiusDeg, float glowExponent,
+                      float glowStrength, float brightness);
+
+    // Enable aerial-perspective + height fog on opaque geometry (applied in the forward shader —
+    // no pipeline needed). Distant/low fragments blend toward `color` (a sky-consistent tint) plus
+    // a sun in-scatter glow (`inscatterColor`, sharpened by `inscatterExponent`) toward the view's
+    // sun. `density` sets distance extinction; fog thins above `baseHeight` at `heightFalloff` per
+    // world unit. Colors are scene-referred (HDR). OFF by default; call setFog(0) to disable.
+    void setFog(float density, float heightFalloff = 0.0f, float baseHeight = 0.0f,
+                const glm::vec3& color = glm::vec3(0.7f, 0.8f, 0.9f),
+                const glm::vec3& inscatterColor = glm::vec3(0.0f),
+                float inscatterExponent = 8.0f);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
