@@ -112,11 +112,13 @@ open: articulated dynamics + actuation, non-flat (terrain) collision, input, lig
 vectorized headless env interface. Phased plan (A input+graphics → B articulated physics →
 C terrain → D env interface) is in the investigation doc; backlog items in todo.md.
 
-Key open decision: **articulation approach** — maximal-coordinate joint *constraints* on the
-existing impulse solver (fast to a visible result, reuses everything) vs **reduced-coordinate**
-articulation (Featherstone/ABA; what real humanoid-RL uses; differentiable-friendly; a much
-bigger build). Recommendation: constraints first, then add reduced-coordinate as a second
-`PhysicsWorld` backend. Settle in a dedicated design doc before the physics phase.
+Key decision (RESOLVED 2026-07-04): **articulation approach** — maximal-coordinate joint
+*constraints* on the existing impulse solver (fast to a visible result, reuses everything) vs
+**reduced-coordinate** articulation (Featherstone/ABA; what real humanoid-RL uses; differentiable-
+friendly; a much bigger build). We took the recommended path and now have **both**: constraints
+first, then a reduced-coordinate `PhysicsWorld` backend, plus a separate **differentiable** reduced
+engine. See architecture.md (physics reduced/diff sections) + the reduced-coordinate/differentiable
+investigation docs.
 
 ## Direction: engine ↔ simulation split
 

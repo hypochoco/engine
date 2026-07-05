@@ -120,6 +120,10 @@ public:
     void         endFrame(FrameContext&&);   // present (windowed) or finish/readback (headless)
     void         waitIdle();
 
+    // Number of frames the Device pipelines (from DeviceConfig::framesInFlight). The render
+    // layer sizes its per-frame ring allocators to this.
+    uint32_t     framesInFlight() const;
+
     // Copy a render target / texture back to CPU (headless offline rendering).
     void readback(TextureHandle, std::span<std::byte> out);
 

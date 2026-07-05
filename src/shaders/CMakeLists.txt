@@ -20,6 +20,9 @@ file(MAKE_DIRECTORY "${SHADER_OUT_DIR}")
 set(SHADER_SOURCES
     triangle.slang
     mesh.slang
+    compute_smoke.slang
+    cluster.slang
+    tonemap.slang
 )
 
 set(SHADER_OUTPUTS)

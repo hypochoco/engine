@@ -58,6 +58,15 @@ struct DirectionalLight {
     glm::vec3 ambient{0.12f, 0.13f, 0.16f};     // flat ambient term
 };
 
+// A punctual point light. Contributes Lambert diffuse with smooth range-based attenuation.
+// std430/16-byte-friendly layout (vec3+float, vec3+float) — matches the shader's PointLight.
+struct PointLight {
+    glm::vec3 position{0.0f};      // world-space position
+    float     radius   = 5.0f;     // influence radius (attenuation → 0 at radius)
+    glm::vec3 color{1.0f};         // light color
+    float     intensity = 1.0f;    // scalar multiplier
+};
+
 // A single view/pass to render. Multiple views enable multi-pass (deferred G-buffer →
 // lighting), multiple cameras, or many parallel-env targets.
 struct RenderView {
@@ -67,11 +76,12 @@ struct RenderView {
     uint32_t  width  = 0;                     // target dimensions (viewport + depth sizing)
     uint32_t  height = 0;
     float     clearColor[4] = {0.08f, 0.10f, 0.14f, 1.0f};
-    DirectionalLight light{};                 // world lighting for this view
+    DirectionalLight light{};                 // world directional (sun) + ambient for this view
 
     std::span<const RenderItem>   items;      // pre-sorted by pipeline → mesh → material
     std::span<const InstanceData> instances;  // indexed by RenderItem instance ranges
     std::span<const MaterialGPU>  materials;  // indexed by InstanceData::materialIndex
+    std::span<const PointLight>   pointLights; // punctual lights affecting this view
 };
 
 } // namespace engine::render

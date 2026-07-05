@@ -50,11 +50,49 @@ struct BufferBinding {
     uint64_t     range  = ~0ull;   // whole buffer
 };
 
+// A sampled texture bound at an explicit slot (non-bindless; for post/compute passes that sample
+// a specific target, e.g. tone-mapping the HDR buffer). Bindless material textures are separate.
+struct TextureBinding {
+    uint32_t      binding = 0;
+    TextureHandle texture;
+};
+
+struct SamplerBinding {
+    uint32_t      binding = 0;
+    SamplerHandle sampler;
+};
+
 // The bindless texture table is owned + bound globally by the Device; per-view bindings
-// only carry the uniform/storage buffers and sampler(s).
+// carry the uniform/storage buffers, plus explicitly-bound sampled textures + sampler(s).
 struct ResourceBindings {
-    std::span<const BufferBinding> buffers;
-    std::span<const SamplerHandle> samplers;
+    std::span<const BufferBinding>  buffers;
+    std::span<const TextureBinding> textures;
+    std::span<const SamplerBinding> samplers;
+};
+
+// -----------------------------------------------------------------------------
+// Resource state transitions (explicit barriers for multi-pass graphs)
+// -----------------------------------------------------------------------------
+// A pass that samples a texture a prior pass wrote (or reads a buffer a compute pass wrote)
+// needs a dependency between them. Vulkan REQUIRES an explicit barrier + image-layout
+// transition; Metal auto-tracks hazards for tracked resources within a command buffer, so the
+// same call is a near-no-op there. The render graph derives these from declared pass reads/
+// writes and emits them at pass boundaries — keeping the contract explicit (correct on Vulkan)
+// without penalizing Metal.
+enum class ResourceState {
+    Undefined,
+    RenderTarget,   // color/depth attachment being written
+    ShaderRead,     // sampled / read in a shader
+    StorageRW,      // read-write storage (compute)
+    TransferSrc,
+    TransferDst,
+    Present,        // swapchain image ready to present
+};
+
+struct ResourceTransition {
+    TextureHandle texture;
+    ResourceState from = ResourceState::Undefined;
+    ResourceState to   = ResourceState::Undefined;
 };
 
 class CommandList {
@@ -63,6 +101,17 @@ public:
 
     void beginRendering(const RenderTargetDesc&);
     void endRendering();
+
+    // Compute scope (outside a rendering scope). Between beginCompute()/endCompute(), bindPipeline
+    // binds a compute pipeline, bindResources binds storage/uniform buffers to the compute stage,
+    // and dispatch() launches threadgroups. The render graph wraps compute passes in these.
+    void beginCompute();
+    void endCompute();
+
+    // Insert resource-state transitions (see ResourceTransition). Call OUTSIDE a rendering
+    // scope (at a pass boundary). No-op / lightweight on auto-tracked Metal; real barriers on
+    // Vulkan. Safe to call with an empty span.
+    void resourceBarrier(std::span<const ResourceTransition>);
 
     void bindPipeline(PipelineHandle);
     void bindVertexBuffer(BufferHandle, uint32_t slot = 0);
