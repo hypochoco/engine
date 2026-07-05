@@ -183,6 +183,13 @@ public:
     // events — together they restart an episode deterministically without destroy/recreate.
     virtual void setBodyState(BodyHandle, const Vec3& position, const Quat& orientation,
                               const Vec3& linearVelocity, const Vec3& angularVelocity) = 0;
+    // Reference-state-init primitive: set the WHOLE articulation from per-body world states (indexed
+    // by BodyHandle.index) — the inverse of poses()/linearVelocities()/angularVelocities(). The
+    // reduced backend reconstructs its generalized coordinates (base + per-joint rotation/rate) from
+    // these; the maximal backend sets body poses directly. Recomputes readback (implies refreshState).
+    virtual void setArticulationState(std::span<const engine::Transform> poses,
+                                      std::span<const Vec3> linearVelocities,
+                                      std::span<const Vec3> angularVelocities) = 0;
     virtual void clearState() = 0;
     // Recompute bulk readback (poses/velocities/joint q,qd) from current state WITHOUT advancing
     // time — so observations are valid immediately after an in-place reset (before the first step).

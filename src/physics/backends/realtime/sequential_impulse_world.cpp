@@ -244,6 +244,20 @@ public:
         events_.clear();
         for (JointState& js : jointStates_) js = JointState{};
     }
+
+    // Maximal coords: set each dynamic body's pose+velocity directly (static bodies untouched).
+    void setArticulationState(std::span<const engine::Transform> poses,
+                              std::span<const Vec3> linVel,
+                              std::span<const Vec3> angVel) override {
+        const size_t n = std::min({ poses.size(), linVel.size(), angVel.size(), bodies_.size() });
+        for (size_t i = 0; i < n; ++i) {
+            BodyData& b = bodies_[i];
+            if (!b.alive || b.type != BodyType::Dynamic) continue;
+            b.position = poses[i].position; b.orientation = glm::normalize(poses[i].rotation);
+            b.linVel = linVel[i]; b.angVel = angVel[i];
+        }
+        refreshState();
+    }
     void refreshState() override {
         for (uint32_t i = 0; i < bodies_.size(); ++i) writeOutputs(i);
         writeJointStates();

@@ -278,6 +278,40 @@ public:
         for (Joint& j : joints_) { j.locRot = Quat(1, 0, 0, 0); for (int a = 0; a < 3; ++a) j.q[a] = j.qd[a] = 0; }
         baseTwist_ = Vec6{};
         if (rootIndex_ >= 0) { basePos_ = links_[rootIndex_].pos0; baseQuat_ = links_[rootIndex_].quat0; }
+        impulseCache_.clear();   // drop stale contact warm-start so a reset starts cleanly
+        refreshState();
+    }
+
+    // Reconstruct the generalized state (base + per-joint rotation/rate) from target per-body world
+    // states — the inverse of poses()/linearVelocities()/angularVelocities(). Arrays are indexed by
+    // BodyHandle.index; only articulation bodies (the floating root + jointed children) are touched,
+    // so any static/ground entries are ignored. Exact for pose AND velocity.
+    void setArticulationState(std::span<const engine::Transform> poses,
+                              std::span<const Vec3> linVel,
+                              std::span<const Vec3> angVel) override {
+        ensureInit();
+        const size_t n = links_.size();
+        if (poses.size() < n || linVel.size() < n || angVel.size() < n) return;
+
+        if (rootIndex_ >= 0 && floating_) {
+            basePos_  = poses[rootIndex_].position;
+            baseQuat_ = glm::normalize(poses[rootIndex_].rotation);
+            const Mat3 Rt = glm::transpose(glm::mat3_cast(baseQuat_));   // world → base frame
+            baseTwist_ = v6(Rt * angVel[rootIndex_], Rt * linVel[rootIndex_]);
+        }
+        for (Joint& j : joints_) {
+            const Quat qp = glm::normalize(poses[j.parent].rotation);
+            const Quat qc = glm::normalize(poses[j.child].rotation);
+            const Quat R_cp = glm::normalize(glm::conjugate(qp) * qc);              // child-in-parent
+            j.locRot = glm::normalize(glm::conjugate(j.restRel) * R_cp);            // strip the rest
+            // relative angular velocity (world) → child frame → per-DOF rate along each axis
+            const Vec3 wRelC = glm::transpose(glm::mat3_cast(qc)) * (angVel[j.child] - angVel[j.parent]);
+            for (int a = 0; a < 3; ++a) j.qd[a] = 0;
+            for (int a = 0; a < j.dof; ++a) j.qd[a] = glm::dot(wRelC, j.axis[a]);
+            if (j.dof == 1) j.q[0] = glm::dot(quatToRotvec(j.locRot), j.axis[0]);   // revolute angle
+            else            for (int a = 0; a < 3; ++a) j.q[a] = 0;                 // ball q unused
+        }
+        impulseCache_.clear();
         refreshState();
     }
     void refreshState() override { ensureInit(); updatePoses(); computeVelocities(); writeJointStates(); }
