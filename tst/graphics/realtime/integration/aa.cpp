@@ -95,7 +95,7 @@ TST_CASE(graphics, integration, aa) {
     inst.model = glm::rotate(glm::mat4(1.0f), glm::radians(27.0f), glm::vec3(0, 0, 1)) *
                  glm::scale(glm::mat4(1.0f), glm::vec3(2.6f, 2.6f, 0.1f));
     inst.normalModel = inst.model; inst.materialIndex = 0;
-    render::RenderItem item{ box, pipe1, 0, 1 };
+    render::RenderItem item{ box, 0, 1 };
 
     render::RenderView view;
     view.view = glm::lookAt(glm::vec3(0, 0, 4), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
@@ -119,8 +119,8 @@ TST_CASE(graphics, integration, aa) {
     };
 
     std::vector<uint8_t> off, on;
-    item.pipeline = pipe1; renderer.setMSAA(1); renderTo(off);
-    item.pipeline = pipe4; renderer.setMSAA(4); renderTo(on);
+    renderer.setMeshPipeline(pipe1); renderer.setMSAA(1); renderTo(off);
+    renderer.setMeshPipeline(pipe4); renderer.setMSAA(4); renderTo(on);
 
     const int gIn = g(on, W / 2, H / 2);   // slab interior (bright)
     const int gBg = g(on, 4, 4);           // corner background (dark)
@@ -146,7 +146,7 @@ TST_CASE(graphics, integration, aa) {
 
     // --- FXAA (post, no MSAA): softens the same hard edge into partial-coverage pixels. ---
     std::vector<uint8_t> fx;
-    item.pipeline = pipe1; renderer.setMSAA(1); renderer.setFXAA(fxaaPipe, fxaaSamp); renderTo(fx);
+    renderer.setMeshPipeline(pipe1); renderer.setMSAA(1); renderer.setFXAA(fxaaPipe, fxaaSamp); renderTo(fx);
     renderer.setFXAA({}, {});
     const size_t interFX = intermediate(fx);
     std::printf("FXAA edge pixels (partial coverage): no-AA=%zu FXAA=%zu\n", interOff, interFX);

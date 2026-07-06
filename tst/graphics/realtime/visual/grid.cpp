@@ -120,7 +120,7 @@ TST_CASE(graphics, visual, grid) {
         });
 
         // extraction system: world -> render lists.
-        scene::extract(world, pipe, extracted);
+        scene::extract(world, extracted); renderer.setMeshPipeline(pipe);
 
         const float r = extent * 2.2f + 3.0f;
         glm::vec3 eye(std::sin(t * 0.3f) * r, extent * 0.9f + 2.0f, std::cos(t * 0.3f) * r);

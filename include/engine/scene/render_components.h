@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "engine/graphics/render/render_view.h"   // render::MeshHandle
+#include "engine/graphics/view/render_view.h"   // render::MeshHandle
 
 namespace engine::scene {
 

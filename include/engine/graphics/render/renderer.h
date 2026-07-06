@@ -13,7 +13,7 @@
 #include <span>
 
 #include "engine/graphics/render/graphics_config.h"
-#include "engine/graphics/render/render_view.h"
+#include "engine/graphics/view/render_view.h"
 
 namespace engine::rhi { class Device; class FrameContext; }
 
@@ -31,8 +31,8 @@ public:
     ~Renderer();
 
     // Records the given views into the frame's command list: uploads per-view camera +
-    // instance data, then for each RenderItem binds its pipeline and issues one instanced
-    // indexed draw. The Device owns beginFrame/endFrame (present or readback); the Renderer
+    // instance data, then binds the scene mesh pipeline once and issues one instanced indexed
+    // draw per RenderItem. The Device owns beginFrame/endFrame (present or readback); the Renderer
     // owns pipelinesʼ per-frame buffers + the depth target. Manages no scene data.
     void render(rhi::FrameContext& frame, std::span<const RenderView> views);
 
@@ -44,6 +44,10 @@ public:
     void setConfig(const GraphicsConfig& config);
     const GraphicsConfig& config() const;
     void setResources(const RenderResources& resources);
+
+    // Set the opaque scene (mesh) pipeline the forward pass binds for every RenderItem. Convenience
+    // wrapper over RenderResources.mesh (the app builds the pipeline; the engine builds none).
+    void setMeshPipeline(rhi::PipelineHandle meshPipeline);
 
     // --- Feature setters (thin wrappers over the config/resources above; kept for convenience) --
     // Enable clustered forward+ lighting. Pass a compute pipeline built from cluster.metallib

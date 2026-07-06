@@ -86,8 +86,9 @@ TST_CASE(graphics, integration, mesh) {
         instances[i].materialIndex = i;
     }
     render::RenderItem item;
-    item.mesh = sphere; item.pipeline = pipe;
+    item.mesh = sphere;
     item.firstInstance = 0; item.instanceCount = static_cast<uint32_t>(instances.size());
+    renderer.setMeshPipeline(pipe);
 
     render::RenderView view;
     view.view = glm::lookAt(glm::vec3(0, 0, 3), glm::vec3(0), glm::vec3(0, 1, 0));

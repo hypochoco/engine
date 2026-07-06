@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "engine/ecs/world.h"
-#include "engine/graphics/render/render_view.h"
+#include "engine/graphics/view/render_view.h"
 #include "engine/graphics/rhi/types.h"
 #include "engine/scene/render_components.h"
 
@@ -25,9 +25,10 @@ struct ExtractedScene {
 };
 
 // Queries <Transform, RenderMesh, RenderMaterial>, buckets instances by mesh, and fills `out`
-// with one RenderItem per mesh + a contiguous InstanceData run. `pipeline` is applied to all
-// items (single-pipeline scene for now). Deterministic order (mesh id).
-void extract(ecs::World& world, rhi::PipelineHandle pipeline, ExtractedScene& out);
+// with one RenderItem per mesh + a contiguous InstanceData run. Deterministic order (mesh id).
+// Pipeline-free: how the items are drawn (the mesh pipeline) is the consuming renderer's concern
+// (see Renderer::setMeshPipeline), not part of the extracted scene.
+void extract(ecs::World& world, ExtractedScene& out);
 
 // Builds one render::RenderView per camera entity (<Transform, engine::Camera>): the view
 // matrix is the inverse of the camera's pose, the projection comes from the Camera (aspect =

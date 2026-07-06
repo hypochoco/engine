@@ -56,9 +56,11 @@ engine::engine (INTERFACE)
 ├── engine::input       (INTERFACE) → engine::core, glm            (InputState + Key/MouseButton; GLFW-free)
 ├── engine::input_glfw  (STATIC)    → engine::input, glfw          (GlfwInput adapter; future: input_qt)
 ├── engine::controls    (STATIC)    → engine::ecs, engine::input, engine::core   (FlyController + system → Transform)
-├── engine::graphics    (STATIC)    → engine::core, glfw, glm, tinyobjloader, stb,
-│                                  (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan   (RHI + Metal backend)
-├── engine::scene       (STATIC) → engine::ecs + engine::graphics   (ECS↔render bridge; extract)
+├── engine::rhi         (STATIC)    → engine::core, glfw, glm,
+│                                  (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan
+│                                     RHI (rhi/) + neutral scene contract (view/) + backend — the head-agnostic GPU base
+├── engine::render      (STATIC) → engine::rhi, engine::core, glm    (realtime renderer head; render/ + geometry store)
+├── engine::scene       (STATIC) → engine::ecs + engine::rhi         (ECS↔render bridge; extract → neutral RenderView)
 ├── engine::physics     (STATIC) → engine::core   (shapes/collision/broadphase/solver, PhysicsWorld)
 └── engine::physics_ecs (STATIC) → engine::physics + engine::ecs    (RigidBody + step/sync systems)
 └── engine::physics_env (STATIC) → engine::physics + engine::core   (Environment + VecEnv; ECS-free RL layer)
@@ -88,7 +90,7 @@ so a headless training build pulls in only `glm` + `Threads`.
 > `slangc` (column-major). Legacy Vulkan parked under
 > `src/graphics/vulkan/`. See investigations/realtime-rendering/2026-07-02-rhi-interface-plan.md §13.
 
-## Graphics module (`engine::graphics`)
+## Graphics module (`engine::rhi` + `engine::render`)
 
 **Current path (RHI + Metal)** — see the "Build reality (2026-07-03)" callout above for the
 authoritative description. In short: a hand-written **RHI** (`include/engine/graphics/rhi/`) with
@@ -97,6 +99,17 @@ a working **Metal backend** (`src/graphics/metal/`), plus a **render layer**
 (camera + `RenderItem[]` + per-instance `InstanceData[]` + `MaterialGPU[]`), and `Renderer`
 (instanced `drawIndexed`, per-instance materials, depth, offscreen + windowed present). Slang
 shaders (`src/shaders/*.slang` → `.metallib`). This is what the tests and the milestone exercise.
+
+> **Swappable graphics head (2026-07-06).** The graphics module is split into two targets so the
+> renderer head can be swapped (realtime | future path tracer): **`engine::rhi`** = the head-agnostic
+> GPU base (`rhi/` backend interface + Metal/Vulkan impl + the neutral scene contract in `view/`),
+> and **`engine::render`** = the realtime renderer (`render/`) over it. The contract `RenderView` is
+> **de-rasterized** — `RenderItem` is `{mesh, firstInstance, instanceCount}` (no pipeline); the
+> realtime renderer holds the opaque mesh pipeline (`RenderResources.mesh` / `setMeshPipeline()`) and
+> binds it once. `scene::extract` is pipeline-free and depends only on `engine::rhi`, so both heads
+> consume its output. A path tracer will be `engine::pathtracer` over `engine::rhi`. Design:
+> [2026-07-06-renderer-head-swap-readiness.md](../investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md)
+> + [2026-07-06-head-swap-refactor-plan.md](../investigations/path-tracing/2026-07-06-head-swap-refactor-plan.md).
 
 ### Rendering framework (clustered forward+ render graph, 2026-07-04)
 
@@ -533,15 +546,17 @@ backend-agnostic (GLFW today, Qt/other later) and headless/ML-friendly:
 
 ## Scene module (`engine::scene`, 2026-07-03)
 
-The ECS↔render bridge — the only module that depends on **both** `engine::ecs` and
-`engine::graphics` (keeps `ecs` graphics-free and the `Renderer` ECS-free).
+The ECS↔render bridge — depends on `engine::ecs` and the neutral `engine::rhi` scene contract
+(NOT a specific renderer head), so it stays head-agnostic: both the realtime renderer and a future
+path tracer consume its output. Keeps `ecs` graphics-free and the renderer ECS-free.
 - **Render components**: `RenderMesh { render::MeshHandle }`, `RenderMaterial { uint32_t
   materialIndex }` (trivially copyable → usable as ECS components).
-- **Extraction system**: `scene::extract(World, pipeline, ExtractedScene&)` queries
+- **Extraction system**: `scene::extract(World, ExtractedScene&)` (pipeline-free) queries
   `<Transform, RenderMesh, RenderMaterial>`, buckets instances by mesh (one instanced draw per
-  mesh), and fills `RenderItem[] + InstanceData[]` for a `render::RenderView`.
-- Driver: `tst/graphics/integration/scene.cpp` (ECS entities → extract → render → pixel-verified);
-  `tst/graphics/visual/grid.cpp` is ECS-driven (a bob system + extraction each frame).
+  mesh), and fills `RenderItem[] + InstanceData[]` for a `render::RenderView`. How the items are
+  drawn (the mesh pipeline) is the consuming renderer's concern (`Renderer::setMeshPipeline`).
+- Driver: `tst/graphics/realtime/integration/scene.cpp` (ECS entities → extract → render → pixel-
+  verified); `tst/graphics/realtime/visual/grid.cpp` is ECS-driven (a bob system + extraction each frame).
 - **Environment** (`scene/environment.h`, Phase A): `Background` + `SceneLighting` ECS resources
   + `applyEnvironment(world, view)` copies them onto a `RenderView` (clearColor + directional
   light). The Renderer packs `RenderView::light` into a `GlobalUniforms` (viewProj + light) at

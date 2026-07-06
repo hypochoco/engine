@@ -1,7 +1,8 @@
 # scene
 #
-# The ECS <-> render bridge: render components + the extraction system. Depends on both
-# engine::ecs and engine::graphics (the only place that knows about both).
+# The ECS <-> render bridge: render components + the extraction system. Depends on engine::ecs and
+# engine::rhi (the neutral scene contract in graphics/view/ — NOT a specific renderer head, so this
+# bridge stays head-agnostic; the realtime renderer and a future path tracer both consume its output).
 
 file(GLOB_RECURSE SCENE_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../include/engine/scene/*.h"
@@ -29,5 +30,5 @@ target_include_directories(engine_scene
 target_link_libraries(engine_scene
     PUBLIC
         engine::ecs
-        engine::graphics
+        engine::rhi
 )

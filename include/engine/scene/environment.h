@@ -13,7 +13,7 @@
 #include <glm/glm.hpp>
 
 #include "engine/ecs/world.h"
-#include "engine/graphics/render/render_view.h"
+#include "engine/graphics/view/render_view.h"
 
 namespace engine::scene {
 

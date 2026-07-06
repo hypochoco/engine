@@ -170,7 +170,7 @@ TST_CASE(graphics, visual, input_demo) {
             world.setResource(lighting);
         }
 
-        scene::extract(world, pipe, extracted);
+        scene::extract(world, extracted); renderer.setMeshPipeline(pipe);
         scene::extractViews(world, extracted, views, W, H);   // camera entity → RenderView(s)
 
         FrameContext frame = device.beginFrame();

@@ -103,8 +103,9 @@ TST_CASE(graphics, integration, hdr_tonemap) {
         // Bright ambient (>1) so the surface is over-white in linear space.
         v.light.intensity = 0.0f;
         v.light.ambient = glm::vec3(1.6f, 1.6f, 1.6f);
+        renderer.setMeshPipeline(meshPipe);
         static render::RenderItem item;   // static so its address stays valid in the span
-        item = render::RenderItem{ sphere, meshPipe, 0, 1 };
+        item = render::RenderItem{ sphere, 0, 1 };
         v.items = std::span<const render::RenderItem>(&item, 1);
         v.instances = std::span<const render::InstanceData>(&inst, 1);
         v.materials = std::span<const render::MaterialGPU>(&white, 1);

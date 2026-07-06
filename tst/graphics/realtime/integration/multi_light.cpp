@@ -72,7 +72,8 @@ TST_CASE(graphics, integration, multi_light) {
 
     render::MaterialGPU white; white.baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
     render::InstanceData inst; inst.model = glm::mat4(1.0f); inst.normalModel = glm::mat4(1.0f); inst.materialIndex = 0;
-    render::RenderItem item{ sphere, pipe, 0, 1 };
+    render::RenderItem item{ sphere, 0, 1 };
+    renderer.setMeshPipeline(pipe);
 
     auto baseView = [&]() {
         render::RenderView v;

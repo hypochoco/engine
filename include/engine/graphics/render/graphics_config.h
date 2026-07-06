@@ -97,6 +97,7 @@ struct GraphicsConfig {
 // GraphicsConfig because handles aren't tunable data and can't have meaningful defaults. Set once
 // (or whenever pipelines are rebuilt); the enable flags in GraphicsConfig gate whether they run.
 struct RenderResources {
+    rhi::PipelineHandle mesh;            // the opaque scene (mesh) pipeline, bound for every RenderItem
     rhi::PipelineHandle tonemap;         // fullscreen HDR tone-map (color format = pre-FXAA target)
     rhi::PipelineHandle shadow;          // depth-only shadow caster
     rhi::PipelineHandle sky;             // fullscreen procedural sky

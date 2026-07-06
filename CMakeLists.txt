@@ -88,7 +88,8 @@ if(NOT ENGINE_TRAINING_ONLY)
         engine::input_glfw
         engine::controls
         engine::ecs
-        engine::graphics
+        engine::rhi
+        engine::render
         engine::scene
         engine::physics
         engine::physics_ecs

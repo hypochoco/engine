@@ -30,7 +30,7 @@
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
-#include "graphics/visual/demo_toggles.h"
+#include "graphics/realtime/visual/demo_toggles.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -121,7 +121,8 @@ TST_CASE(graphics, visual, clustered_lights) {
             instances[i].materialIndex = static_cast<uint32_t>(i);
         }
     }
-    render::RenderItem item{ sphere, pipe, 0, static_cast<uint32_t>(count) };
+    render::RenderItem item{ sphere, 0, static_cast<uint32_t>(count) };
+    renderer.setMeshPipeline(pipe);
 
     // A palette for the moving lights.
     const glm::vec3 palette[] = {

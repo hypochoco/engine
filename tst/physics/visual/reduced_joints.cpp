@@ -269,7 +269,7 @@ TST_CASE(physics, visual, reduced_joints) {
         if (in.mouseReleased(input::MouseButton::Right)) adapter.setCursorCaptured(false);
         while (accumulator >= fixed) { simSched.run(ecsWorld); accumulator -= fixed; }
 
-        scene::extract(ecsWorld, pipe, extracted);
+        scene::extract(ecsWorld, extracted); renderer.setMeshPipeline(pipe);
         scene::extractViews(ecsWorld, extracted, views, W, H);
 
         FrameContext frame = device.beginFrame();

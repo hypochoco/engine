@@ -91,7 +91,8 @@ TST_CASE(graphics, integration, shadow_map) {
     inst[0].model = glm::scale(glm::mat4(1.0f), glm::vec3(30.0f, 0.1f, 30.0f));                    // ground slab
     inst[1].model = glm::translate(glm::mat4(1.0f), glm::vec3(0, 4, 0)) * glm::scale(glm::mat4(1.0f), glm::vec3(3.0f)); // caster
     for (auto& in : inst) { in.normalModel = in.model; in.materialIndex = 0; }
-    render::RenderItem item{ box, pipe, 0, 2 };
+    render::RenderItem item{ box, 0, 2 };
+    renderer.setMeshPipeline(pipe);
 
     render::RenderView view;
     view.view = glm::lookAt(glm::vec3(0, 14, 16), glm::vec3(0, 1, 0), glm::vec3(0, 1, 0));

@@ -29,7 +29,7 @@
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
-#include "graphics/visual/demo_toggles.h"
+#include "graphics/realtime/visual/demo_toggles.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -140,7 +140,8 @@ TST_CASE(graphics, visual, shadow_scene) {
             render::MaterialGPU m; m.baseColorFactor = glm::vec4(0.4f + 0.5f * float(ix) / G, 0.55f, 0.4f + 0.5f * float(iz) / G, 1.0f);
             mats.push_back(m);
         }
-    render::RenderItem item{ box, pipe, 0, static_cast<uint32_t>(inst.size()) };
+    render::RenderItem item{ box, 0, static_cast<uint32_t>(inst.size()) };
+    renderer.setMeshPipeline(pipe);
 
     std::printf("shadow_scene: %zu boxes on a ground, rotating sun casting shadows, HDR. Close to exit.\n", inst.size() - 1);
     std::printf("  keys:  S = shadows   K = sky   F = fog\n");

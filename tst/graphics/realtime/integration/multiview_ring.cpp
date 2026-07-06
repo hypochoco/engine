@@ -89,8 +89,9 @@ TST_CASE(graphics, integration, multiview_ring) {
     render::InstanceData instA; instA.model = glm::mat4(1.0f); instA.normalModel = glm::mat4(1.0f); instA.materialIndex = 0;
     render::InstanceData instB = instA;
 
-    render::RenderItem itemA{ sphere, pipe, 0, 1 };
-    render::RenderItem itemB{ sphere, pipe, 0, 1 };
+    render::RenderItem itemA{ sphere, 0, 1 };
+    render::RenderItem itemB{ sphere, 0, 1 };
+    renderer.setMeshPipeline(pipe);
 
     auto makeView = [&](RenderTargetHandle target, const render::RenderItem& item,
                         const render::InstanceData& inst, const render::MaterialGPU& mat) {

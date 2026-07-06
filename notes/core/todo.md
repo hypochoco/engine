@@ -443,6 +443,20 @@ shadows, AA, sky, post) depends on it. Design + diagram + perf/backend/multithre
 for a later deferred/offline path); render graph is **explicit + correctness-first** (no memory
 aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by owner.
 
+**Head-swap prep DONE (2026-07-06)** — groundwork so the graphics head is swappable (realtime |
+path tracer) before the path tracer is written. (a) De-rasterized the `RenderView` contract:
+`RenderItem = {mesh, firstInstance, instanceCount}` (no pipeline); the realtime renderer holds the
+opaque mesh pipeline (`RenderResources.mesh` / `Renderer::setMeshPipeline`, bound once);
+`scene::extract(world, out)` is pipeline-free. (b) Moved the neutral contract to
+`include/engine/graphics/view/render_view.h`. (c) Split `engine::graphics` → **`engine::rhi`** (rhi/
++ view/ + backend, head-agnostic base) + **`engine::render`** (realtime renderer); `scene` now
+depends only on `engine::rhi`. (d) Reorganized graphics tests into `tst/graphics/realtime/{unit,
+integration,benchmark,visual}` with `tst/graphics/path-tracer/` ready. Behavior-preserving: suite
+167/0, benchmark MSAA delta nominal. A path tracer is now a clean `engine::pathtracer` sibling over
+`engine::rhi` consuming the same `RenderView`. Notes:
+[head-swap-readiness](../investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md),
+[refactor-plan](../investigations/path-tracing/2026-07-06-head-swap-refactor-plan.md).
+
 - [x] **RF1. RHI additions** — DONE (2026-07-04). `transient` texture hint → Metal
       `MTLStorageModeMemoryless` for render-target-only textures (renderer depth is now transient);
       `CommandList::resourceBarrier(span<ResourceTransition>)` + `ResourceState` enum (Vulkan real

@@ -32,7 +32,7 @@
 #include "engine/graphics/rhi/rhi.h"
 #include "engine/graphics/render/geometry_store.h"
 #include "engine/graphics/render/renderer.h"
-#include "graphics/visual/demo_toggles.h"
+#include "graphics/realtime/visual/demo_toggles.h"
 
 namespace {
 std::vector<std::byte> readFile(const std::string& path) {
@@ -140,7 +140,7 @@ TST_CASE(graphics, visual, atmosphere_scene) {
     cfg.fog.inscatterExponent = 6.0f;
 
     bool msaaOn = true, fxaaOn = false;
-    render::RenderItem item{ box, pipeMesh1, 0, 0 };   // instanceCount + pipeline set in applyAA
+    render::RenderItem item{ box, 0, 0 };   // instanceCount set after building instances; mesh pipeline set in applyAA
     auto applyAA = [&]() {
         cfg.aa.msaaSamples = msaaOn ? 4 : 1;
         cfg.aa.fxaa        = fxaaOn;
@@ -152,7 +152,7 @@ TST_CASE(graphics, visual, atmosphere_scene) {
         res.fxaa           = fxaaOn ? fxPipe : PipelineHandle{};
         res.fxaaSampler    = linSamp;
         renderer.setResources(res);
-        item.pipeline      = msaaOn ? pipeMesh4 : pipeMesh1;
+        renderer.setMeshPipeline(msaaOn ? pipeMesh4 : pipeMesh1);
     };
 
     // Ground + a long avenue of pillars receding in -Z, heights varying, both sides of the path.

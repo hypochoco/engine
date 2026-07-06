@@ -180,7 +180,7 @@ TST_CASE(physics, visual, rolling) {
         last = now;
         while (accumulator >= fixed) { sim.run(ecsWorld); accumulator -= fixed; }
 
-        scene::extract(ecsWorld, pipe, extracted);
+        scene::extract(ecsWorld, extracted); renderer.setMeshPipeline(pipe);
 
         const glm::vec3 eye(9.0f, 7.0f, 11.0f);   // static camera
         render::RenderView view;

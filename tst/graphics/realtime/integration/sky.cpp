@@ -95,7 +95,8 @@ TST_CASE(graphics, integration, sky) {
     render::MaterialGPU white; white.baseColorFactor = {0.85f, 0.85f, 0.85f, 1.0f};
     render::InstanceData inst; inst.model = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
     inst.normalModel = inst.model; inst.materialIndex = 0;
-    render::RenderItem item{ box, pipe, 0, 1 };
+    render::RenderItem item{ box, 0, 1 };
+    renderer.setMeshPipeline(pipe);
 
     render::RenderView view;
     view.view = glm::lookAt(glm::vec3(0, 0, 6), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));

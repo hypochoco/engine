@@ -216,6 +216,8 @@ void Renderer::setConfig(const GraphicsConfig& config) { impl_->config_ = config
 const GraphicsConfig& Renderer::config() const { return impl_->config_; }
 void Renderer::setResources(const RenderResources& resources) { impl_->resources_ = resources; }
 
+void Renderer::setMeshPipeline(rhi::PipelineHandle meshPipeline) { impl_->resources_.mesh = meshPipeline; }
+
 void Renderer::setClusterBinning(rhi::PipelineHandle binningPipeline) {
     impl_->resources_.clusterBinning = binningPipeline;
     impl_->config_.cluster.enabled   = binningPipeline.valid();
@@ -480,11 +482,12 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
             skyA = I.ring.upload(&sk, 1);
         }
         rhi::PipelineHandle skyPipe = I.resources_.sky;
+        rhi::PipelineHandle meshPipe = I.resources_.mesh;
 
         graph.addRasterPass(
             "forward", color, depth, view.width, view.height, forwardReads,
             [geom, vtx, idx, items, cam, inst, mat, lights, clustered, cparamsA, gridA, idxA,
-             shadows, shadowTex, shadowSamp, skyOn, skyPipe, skyA](rhi::CommandList& cl) {
+             shadows, shadowTex, shadowSamp, skyOn, skyPipe, skyA, meshPipe](rhi::CommandList& cl) {
                 std::array<rhi::BufferBinding, 7> binds{};
                 uint32_t n = 0;
                 binds[n++] = { .binding = 0, .buffer = cam.buffer, .offset = cam.offset };
@@ -508,8 +511,8 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                 cl.bindResources(rb);
                 cl.bindVertexBuffer(vtx, 0);
                 cl.bindIndexBuffer(idx, rhi::IndexType::Uint32);
+                cl.bindPipeline(meshPipe);   // one opaque scene pipeline for all items (single-pipeline scene)
                 for (const auto& item : items) {
-                    cl.bindPipeline(item.pipeline);
                     const auto range = geom->range(item.mesh);
                     cl.drawIndexed(range.indexCount, item.instanceCount,
                                    range.firstIndex, range.vertexOffset, item.firstInstance);

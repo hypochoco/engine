@@ -25,7 +25,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "engine/graphics/rhi/rhi.h"
-#include "engine/graphics/render/render_view.h"
+#include "engine/graphics/view/render_view.h"
 
 namespace {
 std::vector<std::byte> readFileBin(const std::string& path) {

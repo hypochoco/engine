@@ -73,7 +73,8 @@ TST_CASE(graphics, integration, fog) {
 
     render::MaterialGPU redd; redd.baseColorFactor = {0.9f, 0.2f, 0.2f, 1.0f};   // distinct from the fog color
     render::InstanceData inst; inst.materialIndex = 0;
-    render::RenderItem item{ box, pipe, 0, 1 };
+    render::RenderItem item{ box, 0, 1 };
+    renderer.setMeshPipeline(pipe);
 
     const glm::vec3 fogColor(0.55f, 0.62f, 0.78f);   // pale blue, distinct from the red box
 

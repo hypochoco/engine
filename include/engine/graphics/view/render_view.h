@@ -1,9 +1,12 @@
 //
 //  render_view.h
-//  engine::graphics / render
+//  engine::graphics / view
 //
-//  The ECS-facing contract. An extraction system turns world state into these plain-data
-//  render lists each frame; the Renderer consumes them. No Vk*/MTL:: and no ECS types here.
+//  The neutral, head-agnostic scene contract. An extraction system turns world state into these
+//  plain-data render lists each frame; a renderer head (realtime OR path tracer) consumes them.
+//  No Vk*/MTL::, no ECS types, and nothing renderer-specific (no pipelines) — just "what's in the
+//  scene." Lives in graphics/view/ (not render/) so both heads depend on it without pulling either
+//  renderer.
 //
 
 #pragma once
@@ -24,13 +27,13 @@ using MeshHandle = rhi::Handle<MeshTag>;
 // Index into the per-frame materials storage buffer.
 using MaterialHandle = uint32_t;
 
-// One batchable unit: a contiguous run of instances sharing a pipeline + mesh + material.
-// Becomes one (indexed, instanced) draw.
+// One batchable unit: a contiguous run of instances sharing a mesh + material. Becomes one
+// (indexed, instanced) draw. Head-neutral: how it is drawn (raster pipeline, or accel-structure
+// hit shading) is the consuming renderer's concern, not part of this scene contract.
 struct RenderItem {
-    MeshHandle         mesh;
-    rhi::PipelineHandle pipeline;
-    uint32_t           firstInstance = 0;
-    uint32_t           instanceCount = 0;
+    MeshHandle mesh;
+    uint32_t   firstInstance = 0;
+    uint32_t   instanceCount = 0;
 };
 
 // Per-instance record, SoA-friendly, uploaded into the per-frame instance storage buffer.
@@ -78,7 +81,7 @@ struct RenderView {
     float     clearColor[4] = {0.08f, 0.10f, 0.14f, 1.0f};
     DirectionalLight light{};                 // world directional (sun) + ambient for this view
 
-    std::span<const RenderItem>   items;      // pre-sorted by pipeline → mesh → material
+    std::span<const RenderItem>   items;      // pre-sorted by mesh → material
     std::span<const InstanceData> instances;  // indexed by RenderItem instance ranges
     std::span<const MaterialGPU>  materials;  // indexed by InstanceData::materialIndex
     std::span<const PointLight>   pointLights; // punctual lights affecting this view

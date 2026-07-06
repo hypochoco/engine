@@ -16,7 +16,7 @@
 #include "engine/core/geometry/mesh.h"
 #include "engine/graphics/rhi/types.h"
 #include "engine/graphics/rhi/resources.h"
-#include "engine/graphics/render/render_view.h"
+#include "engine/graphics/view/render_view.h"
 
 namespace engine::rhi { class Device; }
 

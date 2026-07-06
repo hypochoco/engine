@@ -90,7 +90,8 @@ TST_CASE(graphics, integration, scene) {
 
     // Extract -> render lists.
     scene::ExtractedScene extracted;
-    scene::extract(world, pipe, extracted);
+    scene::extract(world, extracted);
+    renderer.setMeshPipeline(pipe);
     std::printf("extracted: %zu items, %zu instances\n", extracted.items.size(), extracted.instances.size());
 
     render::RenderView view;

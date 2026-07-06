@@ -89,7 +89,8 @@ TST_CASE(graphics, integration, shadow_bias) {
     std::vector<render::InstanceData> inst(1);
     inst[0].model = glm::scale(glm::mat4(1.0f), glm::vec3(80.0f, 0.2f, 80.0f));
     inst[0].normalModel = inst[0].model; inst[0].materialIndex = 0;
-    render::RenderItem item{ boxMesh, pipe, 0, 1 };
+    render::RenderItem item{ boxMesh, 0, 1 };
+    renderer.setMeshPipeline(pipe);
 
     render::RenderView view;
     view.view = glm::lookAt(glm::vec3(0, 6, 24), glm::vec3(0, 0, -10), glm::vec3(0, 1, 0));

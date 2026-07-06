@@ -19,7 +19,7 @@
 
 namespace engine::scene {
 
-void extract(ecs::World& world, rhi::PipelineHandle pipeline, ExtractedScene& out) {
+void extract(ecs::World& world, ExtractedScene& out) {
     out.instances.clear();
     out.items.clear();
 
@@ -41,7 +41,6 @@ void extract(ecs::World& world, rhi::PipelineHandle pipeline, ExtractedScene& ou
     for (auto& [meshIdx, insts] : byMesh) {
         render::RenderItem item;
         item.mesh = meshOf[meshIdx];
-        item.pipeline = pipeline;
         item.firstInstance = static_cast<uint32_t>(out.instances.size());
         item.instanceCount = static_cast<uint32_t>(insts.size());
         out.items.push_back(item);

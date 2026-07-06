@@ -219,7 +219,7 @@ TST_CASE(physics, visual, diff_humanoid) {
             accumulator -= fixed;
         }
 
-        scene::extract(ecsWorld, pipe, extracted);
+        scene::extract(ecsWorld, extracted); renderer.setMeshPipeline(pipe);
         scene::extractViews(ecsWorld, extracted, views, W, H);
         FrameContext frame = device.beginFrame();
         if (!frame.swapchainTarget().valid()) { device.endFrame(std::move(frame)); continue; }

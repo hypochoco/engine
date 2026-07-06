@@ -77,7 +77,8 @@ TST_CASE(graphics, integration, clustered_forward) {
 
     render::MaterialGPU white; white.baseColorFactor = {0.9f, 0.9f, 0.9f, 1.0f};
     render::InstanceData inst; inst.model = glm::mat4(1.0f); inst.normalModel = glm::mat4(1.0f); inst.materialIndex = 0;
-    render::RenderItem item{ sphere, pipe, 0, 1 };
+    render::RenderItem item{ sphere, 0, 1 };
+    renderer.setMeshPipeline(pipe);
 
     // Several point lights around the sphere so shading varies across the surface (exercises many
     // froxels in x/y/z — a mis-mapped cluster lookup would diverge from the reference).

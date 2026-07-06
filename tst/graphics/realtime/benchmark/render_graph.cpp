@@ -160,11 +160,13 @@ TST_CASE(graphics, benchmark, render_graph) {
         return v;
     };
 
+    renderer.setMeshPipeline(pipe);   // renderer-held opaque mesh pipeline (sampleCount=1)
+
     std::printf("\n--- instance-count sweep (0 point lights) ---\n");
     std::printf("%10s %12s %12s %16s\n", "instances", "record ms", "frame ms", "Minst/s(frame)");
     for (uint32_t n : {256u, 4096u, 16384u, 65536u}) {
         auto instances = buildInstances(n);
-        render::RenderItem item{ sphere, pipe, 0, n };
+        render::RenderItem item{ sphere, 0, n };
         auto view = makeView(instances, item, {});
         runFrames(view, 3);                       // warmup
         auto [rec, frame] = runFrames(view, 20);
@@ -186,7 +188,7 @@ TST_CASE(graphics, benchmark, render_graph) {
             in.model = glm::translate(glm::mat4(1.0f), glm::vec3(ix * fsp - fext, 0.0f, iz * fsp - fext));
             in.normalModel = in.model; in.materialIndex = 0;
         }
-    render::RenderItem fieldItem{ sphere, pipe, 0, static_cast<uint32_t>(field.size()) };
+    render::RenderItem fieldItem{ sphere, 0, static_cast<uint32_t>(field.size()) };
 
     auto makeFieldView = [&](std::span<const render::PointLight> lights) {
         render::RenderView v;
@@ -229,7 +231,7 @@ TST_CASE(graphics, benchmark, render_graph) {
     std::printf("%10s %14s %14s %12s\n", "instances", "no-sky ms", "sky ms", "delta ms");
     for (uint32_t n : {256u, 4096u}) {
         auto instances = buildInstances(n);
-        render::RenderItem item{ sphere, pipe, 0, n };
+        render::RenderItem item{ sphere, 0, n };
         auto view = makeView(instances, item, {});
         renderer.setSky({});                              // sky off
         runFrames(view, 3);
@@ -246,7 +248,7 @@ TST_CASE(graphics, benchmark, render_graph) {
     std::printf("%10s %14s %14s %12s\n", "instances", "no-fog ms", "fog ms", "delta ms");
     for (uint32_t n : {4096u, 16384u}) {
         auto instances = buildInstances(n);
-        render::RenderItem item{ sphere, pipe, 0, n };
+        render::RenderItem item{ sphere, 0, n };
         auto view = makeView(instances, item, {});
         renderer.setFog(0.0f);                            // fog off
         runFrames(view, 3);
@@ -264,13 +266,15 @@ TST_CASE(graphics, benchmark, render_graph) {
     std::printf("%10s %14s %14s %12s\n", "instances", "no-MSAA ms", "4x MSAA ms", "delta ms");
     for (uint32_t n : {4096u, 16384u}) {
         auto instances = buildInstances(n);
-        render::RenderItem item1{ sphere, pipe, 0, n };
+        render::RenderItem item1{ sphere, 0, n };
         auto view = makeView(instances, item1, {});
+        renderer.setMeshPipeline(pipe);   // sampleCount=1 pipeline for the no-MSAA run
         renderer.setMSAA(1);
         runFrames(view, 3);
         auto [r0, fOff] = runFrames(view, 30);
-        render::RenderItem item4{ sphere, pipe4, 0, n };
+        render::RenderItem item4{ sphere, 0, n };
         auto view4 = makeView(instances, item4, {});
+        renderer.setMeshPipeline(pipe4);   // sampleCount=4 pipeline for the 4x run
         renderer.setMSAA(4);
         runFrames(view4, 3);
         auto [r1, fOn] = runFrames(view4, 30);
@@ -278,12 +282,13 @@ TST_CASE(graphics, benchmark, render_graph) {
         std::printf("%10u %14.3f %14.3f %12.3f\n", n, fOff, fOn, fOn - fOff);
     }
     renderer.setMSAA(1);
+    renderer.setMeshPipeline(pipe);   // restore the sampleCount=1 pipeline for the FXAA section
 
     std::printf("\n--- FXAA overhead (fullscreen post pass) ---\n");
     std::printf("%10s %14s %14s %12s\n", "instances", "no-FXAA ms", "FXAA ms", "delta ms");
     for (uint32_t n : {4096u, 16384u}) {
         auto instances = buildInstances(n);
-        render::RenderItem item{ sphere, pipe, 0, n };
+        render::RenderItem item{ sphere, 0, n };
         auto view = makeView(instances, item, {});
         renderer.setFXAA({}, {});
         runFrames(view, 3);
