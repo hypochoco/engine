@@ -22,7 +22,7 @@ A single engine serving three workloads on shared foundations:
 - **Entity Component System (ECS)** as the core organizing model for simulation state.
 - **Multi-backend rendering behind a common interface (RHI)**: **Metal on Apple, Vulkan
   elsewhere**, selected at build time. Both backends are written by us. (Was Vulkan-only;
-  Metal added 2026-07-02 — see investigations/2026-07-02-metal-backend.md.)
+  Metal added 2026-07-02 — see investigations/realtime-rendering/2026-07-02-metal-backend.md.)
 - **C++23**, CMake build, dependencies vendored as git submodules under `external/`.
 
 ## Testing / entry points
@@ -95,7 +95,7 @@ refactor pass must ultimately support.
 
 ## Next milestone: "a physics humanoid walking on terrain" (RL-ready)
 
-Full plan: investigations/2026-07-03-humanoid-rl-milestone-plan.md.
+Full plan: investigations/physics/2026-07-03-humanoid-rl-milestone-plan.md.
 
 > An **articulated, physically-simulated humanoid** (jointed limbs, actuated, affected by
 > gravity/contact/friction) that can be **driven interactively (keyboard/mouse) or

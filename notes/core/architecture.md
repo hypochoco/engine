@@ -86,7 +86,7 @@ so a headless training build pulls in only `glm` + `Threads`.
 > different material color, pixel-verified red center), `visual_window` (windowed: NxN
 > instanced sphere grid with a per-instance color gradient, orbiting camera). Shaders via
 > `slangc` (column-major). Legacy Vulkan parked under
-> `src/graphics/vulkan/`. See investigations/2026-07-02-rhi-interface-plan.md §13.
+> `src/graphics/vulkan/`. See investigations/realtime-rendering/2026-07-02-rhi-interface-plan.md §13.
 
 ## Graphics module (`engine::graphics`)
 
@@ -101,7 +101,7 @@ shaders (`src/shaders/*.slang` → `.metallib`). This is what the tests and the 
 ### Rendering framework (clustered forward+ render graph, 2026-07-04)
 
 A mid-level **framework** now sits between the ECS extraction and the RHI (design/diagram/perf/
-multithreading review: [2026-07-04-render-framework-plan.md](../investigations/2026-07-04-render-framework-plan.md)).
+multithreading review: [2026-07-04-render-framework-plan.md](../investigations/realtime-rendering/2026-07-04-render-framework-plan.md)).
 **Decided (owner)**: lighting = **clustered Forward+** (graph kept G-buffer-capable for a later
 deferred/offline path); the graph is **explicit + correctness-first** (no reorder/aliasing/pass-
 culling in v1). Implemented so far:
@@ -225,7 +225,7 @@ still in that code: `MAX_FRAMES_IN_FLIGHT = 1`, `NUM_TEXTURES = 16`, `MAX_ENTITI
 ## Physics module (`engine::physics`, Phase 0–2 + collision polish, 2026-07-03)
 
 ECS-free, backend-agnostic core (depends on `engine::core` only — no ecs, no graphics).
-Design + phasing + differentiable-backend design-ahead: investigations/2026-07-03-physics-plan.md.
+Design + phasing + differentiable-backend design-ahead: investigations/physics/2026-07-03-physics-plan.md.
 - **Shapes**: `Sphere`, `Plane` (half-space), `Box` (oriented), `ConvexHull` (vertex set),
   `Capsule` (segment + radius). GJK `support()` seam via `SupportShape`.
 - **Collision**: exact primitive fast paths (`sphereVsSphere`, `sphereVsPlane`, analytic
@@ -273,7 +273,7 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   0.1%/0.24%, sphere rests / box holds+slides by friction, and the full **`makeHumanoid`** (14
   bodies/13 joints, floating pelvis) ragdoll-settles + holds a PD pose. `physics_env` can select it
   via `EnvConfig.backend` with no env-layer changes (E3 wires it into `VecEnv`). Roadmap:
-  [reduced-coordinate-backend.md](../investigations/2026-07-04-reduced-coordinate-backend.md).
+  [reduced-coordinate-backend.md](../investigations/physics/2026-07-04-reduced-coordinate-backend.md).
 - **Joints** (Milestone 2, Phase B1, 2026-07-03): maximal-coordinate **bilateral constraints**
   solved in the same velocity loop as contacts, but **persistent** (created once via
   `createJoint(JointDef)`; kept in an index-stable `joints_` store) and **warm-started across
@@ -319,7 +319,7 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   `DiffModel`, passive drop rests on the plane) + windowed (`tst/physics/visual/amp_humanoid.cpp`).
   Deferred: faithful mass-from-density + per-joint stiffness/damping/armature transcribed from the
   MJCF, obs/act 21→28 validation, offline poselib retargeting, reduced-backend parity. Plan:
-  [2026-07-04-humanoid-rig-adoption.md](../investigations/2026-07-04-humanoid-rig-adoption.md).
+  [2026-07-04-humanoid-rig-adoption.md](../investigations/physics/2026-07-04-humanoid-rig-adoption.md).
 - **Humanoid behaviours (B5)**: `tst/physics/integration/humanoid_control.cpp` — `pd_stand_holds_pose`
   (pinned pelvis; PD servos drive bent knees against gravity + hold neutral elbows) and
   `articulation_determinism` (serial vs pooled/parallel bit-identical with joints+actuators).
@@ -340,7 +340,7 @@ Design + phasing + differentiable-backend design-ahead: investigations/2026-07-0
   bodies grid = **19.9 ms/step** vs SAP 192 ms vs the O(n²) baseline's ~14 s extrapolation
   (~**700×**); grid throughput ~3.3–5.4 M body-steps/s across 256→65k (flat), SAP falls
   15.6M→0.34M. Crossover ~1–2k. 100k ≈ 30 ms/step single-threaded. See
-  investigations/2026-07-03-physics-baseline.md.
+  investigations/physics/2026-07-03-physics-baseline.md.
 
 ### Threading (`engine::core::ThreadPool`)
 A minimal fixed-size worker pool with a blocking `parallelFor` (dynamic work-stealing; the
@@ -413,7 +413,7 @@ the maximal/reduced `PhysicsWorld`s. Under `include/engine/physics/diff/`:
   explicit/symplectic). Normal force is **non-adhesive** (damping gated off on separation) and
   **physical joint damping** `jointDamping` is available (τ=−b·q̇, default 0). Defaults `groundK=4e4,
   C=1000` (stiff + over-damped ⇒ ~3 cm transient impact penetration, low bounce, no clip-through),
-  `β=120, μ=0.8`. See notes/investigations/2026-07-04-diff-semiimplicit-testing.md.
+  `β=120, μ=0.8`. See notes/investigations/physics/2026-07-04-diff-semiimplicit-testing.md.
 - **Per-joint MJCF-authoring props (2026-07-04, on `DiffLink`)** — rig-agnostic, all default to no-ops
   so existing models are unchanged: **`jointDamping`** (per-joint viscous τ=−b·q̇; `<0` ⇒ inherit the
   `DiffModel` global), **`jointStiffness`** (passive spring τ=−k·q pulling the joint toward its rest
@@ -431,7 +431,7 @@ the maximal/reduced `PhysicsWorld`s. Under `include/engine/physics/diff/`:
   mirrors `physics_env::Environment` (`reset`/`setAction`/`step`) + exposes `jacobian()` and
   `rolloutGradient<NA>()`. All gradients validated vs finite differences (≤1e-5, mostly 8+ digits).
   Forward substep ≈0.7× the reduced backend (faster; header-only + inlined). Design + hardening:
-  investigations/2026-07-04-differentiable-reduced.md, -contact-geometry.md.
+  investigations/physics/2026-07-04-differentiable-reduced.md, -contact-geometry.md.
 
 ### Physics configuration (`engine/physics/config.h`, 2026-07-04)
 Centralized, value-type (no global singleton) tuning config. **`SolverConfig`** un-buries the 10
@@ -444,7 +444,7 @@ sim (gravity, controlDt, substeps, velocityIterations, damping, backend, ground,
 presets. **`config_io.h`** = write-only `serialize`/`configHash` (FNV-1a)/`dump` + `configVersion` for
 per-run history (reader deferred until a training launcher). The **differentiable engine keeps its own
 `DiffModel` config** (two-surface split; cross-engine unification deferred). Plan/decisions:
-investigations/2026-07-04-physics-config-system.md.
+investigations/physics/2026-07-04-physics-config-system.md.
 
 ### Milestone status — "ball rolling down a plane" ✅ (physics + sim)
 - `tst/physics/integration/milestone.cpp` (headless): sphere on a 30° incline via the ECS bridge
@@ -459,7 +459,7 @@ investigations/2026-07-04-physics-config-system.md.
   stacking incl. 3-box, capsule, CCD, **restitution**, **friction**, **elastic collision**,
   **broadphase equivalence**, **kinematic motion**). Two bugs found + fixed 2026-07-03
   (kinematic bodies didn't move; CCD suppressed restitution) — see
-  [2026-07-03-physics-test-findings.md](../investigations/2026-07-03-physics-test-findings.md).
+  [2026-07-03-physics-test-findings.md](../investigations/physics/2026-07-03-physics-test-findings.md).
 - **Recent solver additions**: **kinematic bodies** advance by their scripted velocity (ignore
   gravity/impulses, still infinite-mass to the solver); **restitution works under CCD**.
 - **Since then (Phases B–F, 2026-07-04)** — what was "Phase 3, deferred" now largely exists:
@@ -477,7 +477,7 @@ investigations/2026-07-04-physics-config-system.md.
 ## ECS module (`engine::ecs`, 2026-07-03)
 
 Archetype (table) ECS, std-only + `engine::core` (no graphics/physics dependency — they're
-consumers). Design: investigations/2026-07-03-ecs-plan.md.
+consumers). Design: investigations/core/2026-07-03-ecs-plan.md.
 
 - `Entity` = `core::Handle<EntityTag>` (generational). `World` maps entity index → generation
   + location `{archetype, row}`.

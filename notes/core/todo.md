@@ -14,7 +14,7 @@ Not commitments — a backlog to reason about.
       parallel worlds. **Render-extraction DONE** (2026-07-03):
       `engine::scene` bridge (`RenderMesh`/`RenderMaterial` components + `scene::extract` →
       `RenderView`); `tst/graphics/integration/scene.cpp` + ECS-driven `tst/graphics/visual/grid.cpp`. Plan:
-      [2026-07-03-ecs-plan.md](../investigations/2026-07-03-ecs-plan.md).
+      [2026-07-03-ecs-plan.md](../investigations/core/2026-07-03-ecs-plan.md).
 - [x] **Driver test harness (not a `main`).** DONE (2026-07-03). The engine is a library with
       no application entry point; consuming apps own the loop. A self-registering harness
       (`tst/harness/`, `TST_CASE(module, category, name)`) drives subsystems; tests are organized
@@ -36,7 +36,7 @@ is "good enough" and defines what the graphics refactor pass must support.
 
 ## Next milestone: "a physics humanoid walking on terrain" (RL-ready)
 
-See goals.md + full plan: [2026-07-03-humanoid-rl-milestone-plan.md](../investigations/2026-07-03-humanoid-rl-milestone-plan.md).
+See goals.md + full plan: [2026-07-03-humanoid-rl-milestone-plan.md](../investigations/physics/2026-07-03-humanoid-rl-milestone-plan.md).
 Articulated, actuated humanoid on procedural terrain, drivable by keyboard OR an action vector,
 lit + steppable headless in parallel batches with batched obs/action tensors. Engine-side
 mechanism only — reward/RL-algorithm/cloud/task live in a **downstream sim repo** (see goals.md
@@ -66,7 +66,7 @@ Qt/other later) and headless/ML use:
 
 ### Phase B — Articulated physics (the core; long pole)
 - [x] **B0 design doc**: DECIDED (2026-07-03) —
-      [2026-07-03-articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
+      [2026-07-03-articulation-approach.md](../investigations/physics/2026-07-03-articulation-approach.md).
       **Maximal-coordinate joint constraints first** on the existing impulse solver; add a
       **reduced-coordinate (Featherstone) `PhysicsWorld` backend later** (deferred, but integral
       once training starts — smaller observations → throughput). Keep joint/actuator + obs/action
@@ -112,7 +112,7 @@ backend + terrain (Phase C) remain deferred.
 Deferred: a flat `Plane` is enough to get a humanoid balancing + walking; varied terrain is a
 refinement, not a prerequisite. Design + rationale + the "GJK/EPA ≠ arbitrary mesh collider"
 analysis preserved in
-[2026-07-03-terrain-collision-deferred.md](../investigations/2026-07-03-terrain-collision-deferred.md).
+[2026-07-03-terrain-collision-deferred.md](../investigations/physics/2026-07-03-terrain-collision-deferred.md).
 Revisit when locomotion needs slopes/stairs/rough ground (e.g. an RL terrain curriculum).
 - [ ] (deferred) Heightfield collider (sphere→capsule; AABB-reject broadphase like Plane;
       analytic surface normal to dodge the internal-edge problem).
@@ -122,7 +122,7 @@ Revisit when locomotion needs slopes/stairs/rough ground (e.g. an RL terrain cur
       per-triangle + BVH + internal-edge filtering). Convex meshes already work via `ConvexHull`.
 
 ### Phase D — RL-ready env interface (on the flat plane) ✅ DONE (2026-07-04)
-Reviewed plan: [2026-07-04-phase-d-plan.md](../investigations/2026-07-04-phase-d-plan.md). Headless
+Reviewed plan: [2026-07-04-phase-d-plan.md](../investigations/physics/2026-07-04-phase-d-plan.md). Headless
 `Environment` drives a `PhysicsWorld` **directly (ECS-free)** in the new `engine::physics_env` module.
 - [x] **D0 Solver perf micro-opt**: per-body world inverse inertia cached once per substep
       (`computeWorldInvInertia`), read by contacts + joints + actuators + limits. Bit-identical
@@ -145,13 +145,13 @@ batched state + Torque actions, parallel-worlds throughput, determinism) on the 
 ### Phase E — Reduced-coordinate Featherstone backend (own track, after D)
 Second `PhysicsWorld` (`Backend::Reduced`) behind the same Environment/obs-action API; the largest
 single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decision:
-[articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
+[articulation-approach.md](../investigations/physics/2026-07-03-articulation-approach.md).
 - [x] **E0** ABA spatial-algebra core (no contacts); validate a free chain/pendulum vs invariants.
       DONE (2026-07-04): `Backend::Reduced` + `src/physics/backends/reduced/featherstone_world.cpp`
       (fixed + floating base, revolute/fixed joints, explicit per-link gravity, 6×6 spatial algebra,
       semi-implicit Euler). Validated in `tst/physics/integration/reduced.cpp`: pendulum period 0.5%,
       double-pendulum energy drift 0.54%, floating free-chain linear/angular momentum 0.1%/0.24%.
-      Design + results: [reduced-coordinate-backend.md](../investigations/2026-07-04-reduced-coordinate-backend.md).
+      Design + results: [reduced-coordinate-backend.md](../investigations/physics/2026-07-04-reduced-coordinate-backend.md).
 - [x] **E1** contact coupling (contact-space inertia + PGS). DONE (2026-07-04): CRBA joint-space
       inertia `H`, generalized contact Jacobians (ancestor revolute cols + floating-base 6 cols),
       sequential-impulse **PGS in generalized coords** (Δq̇ = H⁻¹Jᵀλ; normal λ≥0 + Baumgarte +
@@ -171,7 +171,7 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       throughput benchmark reduced vs maximal (~2× slower/step — dense H⁻¹ contact solve dominates;
       reduced needs finer substeps under strong torque). **Phase E COMPLETE.**
 - [x] **Phase F — differentiable reduced env (hybrid α-order).** Primary research objective — **engine
-      side COMPLETE** (2026-07-04). Review + A/D/hybrid comparison + plan: [2026-07-04-differentiable-reduced.md](../investigations/2026-07-04-differentiable-reduced.md).
+      side COMPLETE** (2026-07-04). Review + A/D/hybrid comparison + plan: [2026-07-04-differentiable-reduced.md](../investigations/physics/2026-07-04-differentiable-reduced.md).
       Build (A) analytic differentiable step as the core, (D) zeroth-order over the fast VecEnv as the
       baseline, converge on the α-order hybrid. Forward-mode duals → per-step Jacobian at the env boundary.
   - [x] **F1** differentiable smooth dynamics (no contact) — **COMPLETE** (2026-07-04): `Dual`
@@ -209,16 +209,16 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
         Fixes: **softened contact defaults** (groundK 3e3→2.5e3, C 30→80, β 800→120) + **`DiffEnvironment`
         auto substeps** (contact 48 / free 16) ⇒ passive humanoid drop stable at all substeps. Perf: diff
         forward 0.70× reduced (faster); rolloutGradient ~linear in seeds (NA=21 ≈50× fwd); Jacobian 11 ms.
-        Note: [2026-07-04-differentiable-reduced.md](../investigations/2026-07-04-differentiable-reduced.md)
+        Note: [2026-07-04-differentiable-reduced.md](../investigations/physics/2026-07-04-differentiable-reduced.md)
         "Bug-hunting / hardening round".
   - [x] **Contact geometry + stability (F2/F3/F4) DONE** (2026-07-04), plan+results:
-        [2026-07-04-differentiable-contact-geometry.md](../investigations/2026-07-04-differentiable-contact-geometry.md).
+        [2026-07-04-differentiable-contact-geometry.md](../investigations/physics/2026-07-04-differentiable-contact-geometry.md).
         (2) multi-point contact mechanism; (3) shape-aware points (capsule caps / box corners, `DiffContact::{None,Feet,All}`);
         (4) semi-implicit contact behind `ContactIntegration` switch. Feature 3's multi-point contact conditioned the
         humanoid so the explicit path is stable to k=8e4 ⇒ restored groundK 2.5e3→1e4 (contact penetration ~0, ragdoll
         rests cleanly), explicit default, semi-implicit available for harder regimes. Full IMEX (M4) not needed.
 - [x] **Physics config system (P1–P3) DONE** (2026-07-04), plan+results:
-      [2026-07-04-physics-config-system.md](../investigations/2026-07-04-physics-config-system.md).
+      [2026-07-04-physics-config-system.md](../investigations/physics/2026-07-04-physics-config-system.md).
       Centralized `SimConfig` (`include/engine/physics/config.h`) — un-buried the 10 solver constants
       (`SolverConfig`), `WorldDef`/`EnvConfig` derive from it (no duplication); `SimConfigOverride`+
       `resolve` sparse override layering + `configs.h` named presets; write-only `serialize`/`configHash`/
@@ -243,7 +243,7 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       (`caa5256` not yet pushed to origin), **(2) `nanobind`/`scikit-build-core` install + a C++ compile pass.**
       SHAC/`DiffEnvironment` binding is a later add. Not compiled yet.
 - [~] **Adopt a richer humanoid model for mocap training** — plan:
-      [2026-07-04-humanoid-rig-adoption.md](../investigations/2026-07-04-humanoid-rig-adoption.md).
+      [2026-07-04-humanoid-rig-adoption.md](../investigations/physics/2026-07-04-humanoid-rig-adoption.md).
       **Decision:** rig-agnostic engine, support BOTH rigs (existing 21-DOF `makeHumanoid` + AMP 28-DOF
       `makeAMPHumanoid`, SMPL later) — rigs are `ArticulationDef` data, selectable per experiment; only
       trained weights + retarget config are per-rig.
@@ -285,7 +285,7 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
 - [ ] **`DiffEnvironment` binding for SHAC** — wrap `jacobian()`/`rolloutGradient()` as a torch
       autograd Function (custom VJP) for the analytic policy gradient. Deliberately after the PPO baseline (P3).
 - [x] **Deep-dive testing: semi-implicit contact + contact force model** (2026-07-04). Report:
-      [2026-07-04-diff-semiimplicit-testing.md](../investigations/2026-07-04-diff-semiimplicit-testing.md).
+      [2026-07-04-diff-semiimplicit-testing.md](../investigations/physics/2026-07-04-diff-semiimplicit-testing.md).
       Added `tst/physics/unit/diff_semiimplicit.cpp` (adhesion probe / smooth-dynamics damping / freefall
       equivalence / determinism), a humanoid explicit-vs-semi rest-parity integration test, and
       `ENGINE_SEMI`/`ENGINE_SUBSTEPS` toggles on the `diff_humanoid` visual. Tree green (141/0). Fixes
@@ -303,7 +303,7 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       `DiffModel::jointDamping` (viscous `τ=−b·q̇`, default 0). Timestep-independent + differentiable
       (verified identical at h and h/2); the diff humanoid doesn't need it for stability, it's for realism /
       settling free DOFs / matching the RL backend (ties into cross-engine config unification). Guard
-      `diff_joint_damping_physical`. Report: [2026-07-04-diff-semiimplicit-testing.md](../investigations/2026-07-04-diff-semiimplicit-testing.md) (Resolution).
+      `diff_joint_damping_physical`. Report: [2026-07-04-diff-semiimplicit-testing.md](../investigations/physics/2026-07-04-diff-semiimplicit-testing.md) (Resolution).
 - [x] contact-solve perf: **sparse LDLᵀ factorization of `H`** exploiting the DOF-ancestor tree
       (replaces the dense O(ndof³) inverse). DONE (2026-07-04): ~1.5–1.65× env-steps/s for the
       reduced humanoid (N=1024: 16.5k→26.8k); validated vs the dense inverse (≤1.5e-4). When contacts
@@ -312,7 +312,7 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       reduction** (Delassus skipped — wrong tool when contacts > ndof). DONE (2026-07-04): 20→12
       iters at equal quality; flat-humanoid contact-solve −26% (0.989→0.732 ms), reduced env-steps/s
       +18–22%. End-to-end vs original dense-inverse ≈ 1.9× (N=1024 16.5k→31.3k). Analysis + results:
-      [2026-07-04-reduced-contact-pgs.md](../investigations/2026-07-04-reduced-contact-pgs.md).
+      [2026-07-04-reduced-contact-pgs.md](../investigations/physics/2026-07-04-reduced-contact-pgs.md).
 - [x] reduced-backend coverage hardening (2026-07-04): added `tst/physics/integration/reduced_joints.cpp`
       (fixed/revolute-torque/revolute-PD/off-axis hinge/capsule) + visual gallery
       `tst/physics/visual/reduced_joints.cpp`. Surfaced + fixed two bugs: **joint limits** (were
@@ -332,7 +332,7 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
 ## Core (mostly done — geometry/primitives/Handle/Transform/threading landed; image + io remain)
 
 Build `engine::core` to a good state before touching graphics. See
-[2026-07-02-core-module-plan.md](../investigations/2026-07-02-core-module-plan.md).
+[2026-07-02-core-module-plan.md](../investigations/core/2026-07-02-core-module-plan.md).
 
 - [x] **geometry/**: `Vertex` (position, **normal**, uv, color), `MeshData`, `Mesh`,
       minimal `Material`, `ModelData`. + `core.h` umbrella. DONE.
@@ -349,7 +349,7 @@ Build `engine::core` to a good state before touching graphics. See
 - [x] Also landed in `core` (not originally listed here): `memory/Handle<Tag>` (shared by rhi +
       ecs), `math/Transform`, and `threading/` (`ThreadPool` + `parallelSort`).
 
-Scaling / ownership (from [2026-07-02-geometry-scaling.md](../investigations/2026-07-02-geometry-scaling.md)):
+Scaling / ownership (from [2026-07-02-geometry-scaling.md](../investigations/core/2026-07-02-geometry-scaling.md)):
 - [ ] Treat `MeshData`/`ModelData` as **loader output only** — not the runtime store; never
       hold ~100k of them (scattered heap allocs + deep-copy value semantics don't scale).
 - [ ] **Central geometry store (pooled vertex/index arenas) + generational `MeshHandle`s** as
@@ -368,8 +368,8 @@ Scaling / ownership (from [2026-07-02-geometry-scaling.md](../investigations/202
 
 **Do NOT refactor graphics incrementally.** Once core is in a good state, refactor the entire
 graphics package in one dedicated pass, behind the RHI. Full analysis:
-[2026-07-01-graphics-refactor.md](../investigations/2026-07-01-graphics-refactor.md) and
-[2026-07-02-metal-backend.md](../investigations/2026-07-02-metal-backend.md).
+[2026-07-01-graphics-refactor.md](../investigations/realtime-rendering/2026-07-01-graphics-refactor.md) and
+[2026-07-02-metal-backend.md](../investigations/realtime-rendering/2026-07-02-metal-backend.md).
 **Key framing: "add Metal" and "do the refactor" are the same effort** — both require
 extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
 
@@ -385,7 +385,7 @@ extracting a backend-agnostic interface (RHI) and putting Vulkan behind it.
       renderer). Interface-only, no backend, compiles clean (`-Wall -Wextra`). Decisions:
       handle-based, compile-time backend, **bindless**, Vulkan dynamic rendering; **Metal
       first**; **Slang** shaders. Design + sequencing:
-      [2026-07-02-rhi-interface-plan.md](../investigations/2026-07-02-rhi-interface-plan.md)
+      [2026-07-02-rhi-interface-plan.md](../investigations/realtime-rendering/2026-07-02-rhi-interface-plan.md)
       (§13 supersedes the ordering below).
 - [ ] **3. Reorganize existing Vulkan code** into `src/graphics/vulkan/` behind the RHI;
       delete the 3 duplicated pipeline builders; fold `graphics_custom.cpp` offscreen helpers
@@ -438,7 +438,7 @@ details in the refactor investigation):
 
 The mid-level framework between ECS extraction and the RHI. Everything modern (multi-light,
 shadows, AA, sky, post) depends on it. Design + diagram + perf/backend/multithreading review:
-[2026-07-04-render-framework-plan.md](../investigations/2026-07-04-render-framework-plan.md).
+[2026-07-04-render-framework-plan.md](../investigations/realtime-rendering/2026-07-04-render-framework-plan.md).
 **DECIDED (owner, 2026-07-04)**: lighting = **clustered Forward+** (graph kept G-buffer-capable
 for a later deferred/offline path); render graph is **explicit + correctness-first** (no memory
 aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by owner.
@@ -530,7 +530,7 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       PCF→PCSS soft edges.
       **Sky/atmosphere DONE (2026-07-05)**: procedural sun-coupled sky (`sky.slang`) — cheap
       analytic horizon→zenith gradient warmed toward the sun + HDR sun disc + forward-scatter glow
-      (~20 ALU/pixel, no LUTs; design note `investigations/2026-07-05-sky-atmosphere.md`). Drawn as
+      (~20 ALU/pixel, no LUTs; design note `investigations/realtime-rendering/2026-07-05-sky-atmosphere.md`). Drawn as
       a far-plane fullscreen triangle at the END of the forward pass (same render pass ⇒ on-tile on
       Apple, no HDR store/load; the depth buffer is transient/memoryless so a separate pass couldn't
       read it anyway), depth-tested LessEqual + no depth write ⇒ fills only background pixels.
@@ -546,7 +546,7 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       memoryless so no separate pass). Exponential distance × height falloff.
       `Renderer::setFog(density, heightFalloff, baseHeight, color, inscatterColor, inscatterExp)`
       opt-in, **off by default** (parity anchors intact). Design note
-      `investigations/2026-07-05-atmosphere-aerial-perspective.md`. Test `graphics.fog` (far object
+      `investigations/realtime-rendering/2026-07-05-atmosphere-aerial-perspective.md`. Test `graphics.fog` (far object
       washes toward fog color + monotonic with distance; sun-ahead in-scatter 765 vs 486 behind;
       height fog base foggier than top). Wired into `shadow_scene`. **Benchmark ~0.005 ms** (few
       fragment ALU, within noise). Deferred: Hillaire aerial-perspective 3D LUT, volumetric fog /
@@ -566,7 +566,7 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       matching sampleCount). Optional FXAA post pass (`fxaa.slang`, compact luma-FXAA) via
       `Renderer::setFXAA` with tonemap→intermediate-LDR→FXAA→present ordering (catches the sun-disc
       shading aliasing MSAA misses). Both opt-in, off by default. Design note
-      `investigations/2026-07-05-antialiasing-msaa-fxaa.md`. Test `graphics.aa` (rotated slab: 0
+      `investigations/realtime-rendering/2026-07-05-antialiasing-msaa-fxaa.md`. Test `graphics.aa` (rotated slab: 0
       partial-coverage edge px → 540 @4× MSAA, 628 @FXAA; interior/bg untouched). Benchmark: MSAA 4×
       **+0.29/+1.2 ms** @4k/16k instances (4× coverage raster, on-tile resolve); FXAA **~0.01 ms**.
       Wired into `atmosphere_scene` (M/X toggles). Deferred: TAA/MetalFX temporal, SMAA, custom
@@ -580,7 +580,7 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
       + `presets::{baseline,performance,cinematic}`. G3: write-only `serialize`/`configHash`/`dump`
       (`graphics_config_io.h`; reader deferred). Tests `graphics.config_*` (4 cases); `atmosphere_scene`
       migrated to drive its toggles from one config. Suite 167/0 (was 163 + 4 config). Design note
-      `investigations/2026-07-05-graphics-config-system.md`. Deferred: kv READER (needs a tools/CLI),
+      `investigations/realtime-rendering/2026-07-05-graphics-config-system.md`. Deferred: kv READER (needs a tools/CLI),
       runtime froxel-grid resize, a pipeline-variant helper to remove the app's MSAA sample-count juggling.
 - [x] **Benchmark** — DONE (2026-07-04), `tst/graphics/benchmark/render_graph.cpp` (in the
       `benchmarks` runner; graphics bench now globbed + `engine::graphics` linked). Numbers (Apple,
@@ -607,7 +607,7 @@ aliasing / pass-culling in v1). Grass + ray tracing + full deferred deferred by 
 
 ## Physics
 
-Plan (all 8 decisions settled): [2026-07-03-physics-plan.md](../investigations/2026-07-03-physics-plan.md).
+Plan (all 8 decisions settled): [2026-07-03-physics-plan.md](../investigations/physics/2026-07-03-physics-plan.md).
 Multi-backend behind a **runtime-virtual** `PhysicsWorld`; shared collision/broadphase
 substrate; realtime (impulse) + implicit/**differentiable** backends; rotational dynamics.
 
@@ -630,7 +630,7 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       sphere doesn't tunnel); **kinematic bodies move** by scripted velocity (ignore gravity/
       impulses); **restitution works under CCD** (speculative branch targets the rebound velocity
       instead of braking the approach — see
-      [2026-07-03-physics-test-findings.md](../investigations/2026-07-03-physics-test-findings.md)).
+      [2026-07-03-physics-test-findings.md](../investigations/physics/2026-07-03-physics-test-findings.md)).
       Phase 2 + collision polish complete; tests live under `tst/physics/{unit,integration,
       benchmark,visual}/`. **Phase 3 DONE** (2026-07-04): reduced-coordinate (Phase E) +
       differentiable (Phase F) backends + the parallel-world ML harness (Phase D `VecEnv`).
@@ -646,7 +646,7 @@ substrate; realtime (impulse) + implicit/**differentiable** backends; rotational
       suffices for the humanoid for now. Heightfield collider + narrowphase; general concave
       triangle-mesh collider (decomposition or per-triangle+BVH+edge-filtering) is a separate
       larger item — note that **convex** meshes already work via `ConvexHull` (GJK/EPA).
-      Design + analysis: [2026-07-03-terrain-collision-deferred.md](../investigations/2026-07-03-terrain-collision-deferred.md).
+      Design + analysis: [2026-07-03-terrain-collision-deferred.md](../investigations/physics/2026-07-03-terrain-collision-deferred.md).
 
 ## Infra / quality
 
@@ -671,7 +671,7 @@ Parked decisions we agreed to defer. Answer before the work they gate.
       via `ThreadPool` first — Milestone 2 Phase D; multi-process/distributed is downstream/cloud.)
 - [~] **Articulation approach (Milestone 2): maximal-coordinate joint constraints vs
       reduced-coordinate (Featherstone/ABA).** DECIDED (2026-07-03):
-      [2026-07-03-articulation-approach.md](../investigations/2026-07-03-articulation-approach.md).
+      [2026-07-03-articulation-approach.md](../investigations/physics/2026-07-03-articulation-approach.md).
       **Constraints first** (Phase B — fast, reuses our solver, demonstrates the humanoid);
       **reduced-coordinate deferred but integral once we train** — it minimizes observation size
       (joint `q/qd` vs redundant body poses) → smaller policy inputs → higher throughput (a key

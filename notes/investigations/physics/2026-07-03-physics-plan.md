@@ -2,7 +2,7 @@
 
 Design for the physics layer, worked **backward from the three workloads (realtime / ML /
 render), the milestone ("ball rolling down a plane" → parallel → 100k), and determinism**.
-Mirrors the structure of [2026-07-02-rhi-interface-plan.md](2026-07-02-rhi-interface-plan.md)
+Mirrors the structure of [2026-07-02-rhi-interface-plan.md](../realtime-rendering/2026-07-02-rhi-interface-plan.md)
 but does **not** copy its dispatch choice — see §1.
 
 Status: **plan only, no physics code written yet.** Today `engine::physics` is a stub
