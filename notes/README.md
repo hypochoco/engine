@@ -54,7 +54,7 @@ Working notes for the engine project.
 
 ### `investigations/path-tracing/`
 
-- _(empty — ready for the first note when the path-tracer track begins)_
+- [`2026-07-06-renderer-head-swap-readiness.md`](investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md) — module dependency review: swapping the graphics head (realtime ↔ path tracer)
 
 ## Conventions
 
