@@ -60,6 +60,7 @@ engine::engine (INTERFACE)
 │                                  (Apple) Metal+QuartzCore | (else) Vulkan::Vulkan
 │                                     RHI (rhi/) + neutral scene contract (view/) + backend — the head-agnostic GPU base
 ├── engine::render      (STATIC) → engine::rhi, engine::core, glm    (realtime renderer head; render/ + geometry store)
+├── engine::pathtracer  (STATIC) → engine::core, glm                 (offline path-tracer head; CPU reference, step 1 — no RHI yet)
 ├── engine::scene       (STATIC) → engine::ecs + engine::rhi         (ECS↔render bridge; extract → neutral RenderView)
 ├── engine::physics     (STATIC) → engine::core   (shapes/collision/broadphase/solver, PhysicsWorld)
 └── engine::physics_ecs (STATIC) → engine::physics + engine::ecs    (RigidBody + step/sync systems)
@@ -110,6 +111,14 @@ shaders (`src/shaders/*.slang` → `.metallib`). This is what the tests and the 
 > consume its output. A path tracer will be `engine::pathtracer` over `engine::rhi`. Design:
 > [2026-07-06-renderer-head-swap-readiness.md](../investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md)
 > + [2026-07-06-head-swap-refactor-plan.md](../investigations/path-tracing/2026-07-06-head-swap-refactor-plan.md).
+>
+> **Update (2026-07-07):** building the path-tracer head refined this — `RenderView` (GPU handles +
+> batching, no emission) is really the *raster* head's contract, so the neutral layer sits one level
+> up as **core scene data**: `core::GeometryCatalog` (`MeshId → MeshData`) is now the renderer-agnostic
+> CPU geometry residency both heads (and a future BVH) source from. Each head has its own ECS bridge
+> (`engine::scene` → `RenderView` for raster; a future `engine::pathtracer_scene` → `pt::Scene`), and
+> `engine::pathtracer` stays **core-only**. See
+> [2026-07-07-pathtracer-dependency-model.md](../investigations/path-tracing/2026-07-07-pathtracer-dependency-model.md).
 
 ### Rendering framework (clustered forward+ render graph, 2026-07-04)
 

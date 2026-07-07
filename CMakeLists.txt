@@ -90,6 +90,7 @@ if(NOT ENGINE_TRAINING_ONLY)
         engine::ecs
         engine::rhi
         engine::render
+        engine::pathtracer
         engine::scene
         engine::physics
         engine::physics_ecs

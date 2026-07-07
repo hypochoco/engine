@@ -457,6 +457,40 @@ integration,benchmark,visual}` with `tst/graphics/path-tracer/` ready. Behavior-
 [head-swap-readiness](../investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md),
 [refactor-plan](../investigations/path-tracing/2026-07-06-head-swap-refactor-plan.md).
 
+**Path tracer — step 1 DONE (2026-07-06)** — a glm-ported CPU **reference** path tracer as a new
+`engine::pathtracer` module (CPU + glm + `engine::core` only; **no Eigen, no RHI yet**). Salvaged
+the integrator IP from the old `path-hypochoco` student tracer, dropping its Qt/Eigen/CS123/BVH
+infrastructure (assessment:
+[salvage note](../investigations/path-tracing/2026-07-06-path-tracer-salvage-assessment.md)).
+`pt::Scene` (world-space triangle soup + materials + emissive index + pinhole camera, fed from
+`core::MeshData`), `pt::render()` (area-light NEE + cosine-weighted indirect + Fresnel dielectric +
+mirror + Russian roulette), `pt::toneMap()` (Reinhard+gamma). **Bugs fixed** vs the original:
+correct area-measure direct-lighting estimator, uniform (√r1) triangle sampling, cosine-weighted
+hemisphere sampling, epsilon-offset ray origins, per-pixel deterministic RNG. **Brute-force
+intersection (BVH deferred** — engine has no ray BVH; physics has only broadphase). Pure primitives
+(intersection, sampling, Fresnel, basis) extracted to header `engine/pathtracer/sampling.h`
+(reusable for the GPU/BVH paths + unit-testable); `Scene::intersect`/`occluded` exposed. **Tests
+(10, module `pathtracer`)**: unit — `ray_triangle`, `scene_nearest_and_occlusion`, `fresnel_schlick`,
+`orthonormal_basis`, `cosine_hemisphere` (MC ∫cos²θ dω = 2π/3), `triangle_sampling` (mean→centroid);
+integration — `cornell_box`, `no_emitter_is_black`, `emitter_triangulation_invariance` (2 vs 4-tri
+light identical, rel=0.000 — guards the estimator fix), `mirror_reflects_light`. Suite 177/0. **Next**:
+adapt `pt::Scene` from a `render::RenderView` + wire output to an RHI texture (readback), then move
+the hot path to a Slang compute shader, then add a data-oriented BVH.
+
+**Path tracer — step 1.5 (geometry catalog + side-by-side) DONE (2026-07-07)** — dependency review
+([note](../investigations/path-tracing/2026-07-07-pathtracer-dependency-model.md)) settled: keep
+`engine::pathtracer` **core-only**; each head gets an ECS bridge (`pathtracer : pathtracer_scene ::
+physics : physics_ecs`; `render`'s bridge is the existing `engine::scene`). Refactor landed: a
+**`engine::core` `GeometryCatalog`** (`core::MeshId` → `MeshData`) — the neutral, renderer-agnostic
+CPU geometry residency both heads (and the future BVH) source from. Side-by-side comparison
+`pathtracer.raster_vs_pathtraced`: one sphere registered once in the catalog, rendered by the raster
+head (GeometryStore + Renderer, offscreen→readback) AND the path tracer (`pt::Scene` from the same
+catalog mesh) at the same camera; writes `raster_vs_pathtraced.png` + asserts the raster silhouette
+matches the PT intersector's geometry (IoU=1.000). Unit test `core.geometry_catalog`. Suite 179/0.
+**Deferred**: the `pathtracer_scene` ECS→`pt::Scene` bridge + ECS `RenderMesh`→`MeshId` rewire +
+`scene`→`render_scene` rename; a live windowed A/B (needs texture-blit plumbing). **Next**: the ECS
+bridge, then the Slang-compute GPU path, then a data-oriented BVH (built over the catalog).
+
 - [x] **RF1. RHI additions** — DONE (2026-07-04). `transient` texture hint → Metal
       `MTLStorageModeMemoryless` for render-target-only textures (renderer depth is now transient);
       `CommandList::resourceBarrier(span<ResourceTransition>)` + `ResourceState` enum (Vulkan real

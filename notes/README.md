@@ -40,6 +40,7 @@ Working notes for the engine project.
 - [`2026-07-04-diff-semiimplicit-testing.md`](investigations/physics/2026-07-04-diff-semiimplicit-testing.md) — differentiable semi-implicit contact testing round
 - [`2026-07-04-humanoid-rig-adoption.md`](investigations/physics/2026-07-04-humanoid-rig-adoption.md) — rig-agnostic model support + AMP humanoid plan
 - [`2026-07-04-physics-config-system.md`](investigations/physics/2026-07-04-physics-config-system.md) — centralized physics config system (P1–P3)
+- [`2026-07-06-cuda-port-review.md`](investigations/physics/2026-07-06-cuda-port-review.md) — what it would take to port the physics sim to CUDA (GPU) on the NVIDIA training box
 
 ### `investigations/realtime-rendering/`
 
@@ -55,6 +56,9 @@ Working notes for the engine project.
 ### `investigations/path-tracing/`
 
 - [`2026-07-06-renderer-head-swap-readiness.md`](investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md) — module dependency review: swapping the graphics head (realtime ↔ path tracer)
+- [`2026-07-06-head-swap-refactor-plan.md`](investigations/path-tracing/2026-07-06-head-swap-refactor-plan.md) — execution plan + locked decisions for the head-swap prep refactor
+- [`2026-07-06-path-tracer-salvage-assessment.md`](investigations/path-tracing/2026-07-06-path-tracer-salvage-assessment.md) — reuse assessment of the path-hypochoco student path tracer
+- [`2026-07-07-pathtracer-dependency-model.md`](investigations/path-tracing/2026-07-07-pathtracer-dependency-model.md) — dependency model + ECS→scene bridge design (keep pathtracer core-only)
 
 ## Conventions
 
