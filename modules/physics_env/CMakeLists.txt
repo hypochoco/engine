@@ -12,9 +12,19 @@ file(GLOB_RECURSE PHYSICS_ENV_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../src/physics_env/*.cpp"
 )
 
+# CUDA sources (CudaVecEnv) — only under ENGINE_CUDA (NVIDIA). Empty glob otherwise so the CPU/Mac
+# build is unchanged.
+set(PHYSICS_ENV_CUDA_SOURCE "")
+if(ENGINE_CUDA)
+    file(GLOB_RECURSE PHYSICS_ENV_CUDA_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../src/physics_env/*.cu"
+    )
+endif()
+
 add_library(engine_physics_env STATIC
     ${PHYSICS_ENV_HEADERS}
     ${PHYSICS_ENV_SOURCE}
+    ${PHYSICS_ENV_CUDA_SOURCE}
 )
 add_library(engine::physics_env ALIAS engine_physics_env)
 
@@ -31,3 +41,12 @@ target_link_libraries(engine_physics_env
         engine::physics
         engine::core
 )
+
+if(ENGINE_CUDA)
+    target_compile_definitions(engine_physics_env PUBLIC ENGINE_CUDA)
+    set_target_properties(engine_physics_env PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+    target_compile_options(engine_physics_env PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    target_link_libraries(engine_physics_env PUBLIC CUDA::cudart)
+endif()

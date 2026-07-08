@@ -20,6 +20,7 @@
 #include <cassert>
 #include <vector>
 
+#include "engine/physics/diff/hd.h"
 #include "engine/physics/diff/linalg.h"
 
 namespace engine::physics::diff {
@@ -102,6 +103,64 @@ struct DiffModel {
     ContactIntegration contactIntegration = ContactIntegration::Explicit;
 };
 
+// ---- uniform model access (Phase 2 CUDA port) --------------------------------------------------
+// The ABA below is templated on the MODEL type so ONE implementation runs on both CPU and GPU: the
+// host instantiates it with DiffModel, the device with FlatModel (flat_model.h). Both expose the
+// same field interface via the hd* accessors; the DiffModel overloads here are HOST-ONLY (they
+// dereference std::vector), the FlatModel overloads (in flat_model.h) are ENGINE_HD. `HDLink` is a
+// small model-independent POD carrying one link's constants (with jointDamping already resolved to
+// the per-joint override else the inherited global — matching flatten()), so the ABA body reads
+// `L.field` exactly as it did with the old `const DiffLink&`.
+// small model-independent view of one link's constants. Scalars are held by value; the big constants
+// (Ic/restRel/anchors/axes) are held by POINTER into the model, so copying an HDLink is a few
+// registers — no M3/V3 deep copy on the hot path. jointDamping is resolved (per-joint override else
+// the inherited global — matching flatten()). The pointers are valid for the lifetime of the model
+// argument (the ABA uses the HDLink immediately within the same call), on host and device alike.
+struct HDLink {
+    int parent = -1, dof = 0, qIndex = -1;
+    double mass = 1.0, jointDamping = 0.0, jointStiffness = 0.0, armature = 0.0;
+    const M3<double>* Ic = nullptr;
+    const M3<double>* restRel = nullptr;
+    const V3<double>* anchorP = nullptr;
+    const V3<double>* anchorC = nullptr;
+    const V3<double>* axes = nullptr;   // -> axes[0]; the axis for DOF d is axes[d]
+};
+
+// DiffModel accessors — HOST ONLY (dereference std::vector; never called on device).
+inline int  hdNumLinks(const DiffModel& m) { return static_cast<int>(m.links.size()); }
+inline int  hdNumDof(const DiffModel& m)   { return m.ndofJoints; }
+inline bool hdFloating(const DiffModel& m) { return m.floating; }
+inline bool hdContactGround(const DiffModel& m) { return m.contactGround; }
+inline bool hdContactSemiImplicit(const DiffModel& m) { return m.contactIntegration == ContactIntegration::SemiImplicit; }
+inline double hdGroundK(const DiffModel& m)        { return m.groundK; }
+inline double hdGroundC(const DiffModel& m)        { return m.groundC; }
+inline double hdGroundBeta(const DiffModel& m)     { return m.groundBeta; }
+inline double hdGroundDampBeta(const DiffModel& m) { return m.groundDampBeta; }
+inline double hdGroundMu(const DiffModel& m)       { return m.groundMu; }
+inline double hdFrictionVref(const DiffModel& m)   { return m.frictionVref; }
+// Contact spheres, normalized to flatten()'s rule: multi-point contactPoints if present, else the
+// single COM contactRadius shorthand (never both).
+inline int hdContactCount(const DiffModel& m, int i) {
+    const DiffLink& L = m.links[static_cast<size_t>(i)];
+    return !L.contactPoints.empty() ? static_cast<int>(L.contactPoints.size()) : (L.contactRadius > 0.0 ? 1 : 0);
+}
+inline V3<double> hdContactOffset(const DiffModel& m, int i, int k) {
+    const DiffLink& L = m.links[static_cast<size_t>(i)];
+    return !L.contactPoints.empty() ? L.contactPoints[static_cast<size_t>(k)].offset : V3<double>{ 0, 0, 0 };
+}
+inline double hdContactRadius(const DiffModel& m, int i, int k) {
+    const DiffLink& L = m.links[static_cast<size_t>(i)];
+    return !L.contactPoints.empty() ? L.contactPoints[static_cast<size_t>(k)].radius : L.contactRadius;
+}
+inline HDLink hdLink(const DiffModel& m, int i) {
+    const DiffLink& L = m.links[static_cast<size_t>(i)];
+    HDLink h; h.parent = L.parent; h.dof = L.dof; h.qIndex = L.qIndex; h.mass = L.mass;
+    h.jointDamping = (L.jointDamping >= 0.0) ? L.jointDamping : m.jointDamping;   // resolve inheritance
+    h.jointStiffness = L.jointStiffness; h.armature = L.armature;
+    h.Ic = &L.Ic; h.restRel = &L.restRel; h.anchorP = &L.anchorP; h.anchorC = &L.anchorC; h.axes = L.axes;
+    return h;
+}
+
 // Configuration + velocity. `linkRot[i]` is joint i's local rotation (rest-relative); identity for
 // base + fixed joints. `qd` is the flat joint velocity vector. Fixed-size + POD (no heap): the whole
 // per-env state is a trivially-copyable blob — on the GPU one such struct per thread (or a batched
@@ -139,10 +198,10 @@ template <class S> DiffState<S> liftState(const DiffState<double>& s) {
 inline M3<double> diagM3(double a, double b, double c) {
     M3<double> r; r.m[0][0] = a; r.m[1][1] = b; r.m[2][2] = c; return r;
 }
-template <class S> V3<S> zeroV3() { return { S(0), S(0), S(0) }; }
+template <class S> ENGINE_HD V3<S> zeroV3() { return { S(0), S(0), S(0) }; }
 
 // Motion subspace column for DOF `a`: S = [axis; −axis × anchorC] (child frame).
-template <class S> V6<S> jointScol(const V3<S>& axis, const V3<S>& anchorC) {
+template <class S> ENGINE_HD V6<S> jointScol(const V3<S>& axis, const V3<S>& anchorC) {
     return makeV6(axis, S(-1) * cross(axis, anchorC));
 }
 
@@ -152,7 +211,7 @@ template <class S> struct Accel { S qddot[kMaxDof]{}; V6<S> baseAccel{}; };
 // energy / observation readout). Defined here (not merely forward-declared) so the fixed-size
 // contact/kinematics helpers below can hold LinkWorld<S> arrays by value.
 template <class S> struct LinkWorld { V3<S> pos, linVel, angVel; M3<S> rot; };
-template <class S> void linkWorldInto(const DiffModel& md, const DiffState<S>& st, LinkWorld<S>* out);
+template <class M, class S> ENGINE_HD void linkWorldInto(const M& md, const DiffState<S>& st, LinkWorld<S>* out);
 template <class S> std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st);
 
 // Fixed-size per-link ground-contact spatial forces (WORLD frame) — the heap-free counterpart of a
@@ -167,8 +226,8 @@ template <class S> struct ContactForces { V6<S> f[kMaxLinks]{}; };
 // Coulomb Ft = −μ·Fspring·slip/√(|slip|²+ε²) where slip is the CONTACT-POINT tangential velocity
 // v_com + ω × ℓ, ℓ = (center−com) − r·n. Force acts at the contact point ⇒ it torques the link.
 // Returned as a spatial force [τ; f] in the WORLD frame; smooth everywhere ⇒ differentiable.
-template <class S>
-V6<S> groundContactWorld(const DiffModel& md, const V3<S>& com, const V3<S>& linVelWorld,
+template <class M, class S>
+ENGINE_HD V6<S> groundContactWorld(const M& md, const V3<S>& com, const V3<S>& linVelWorld,
                          const V3<S>& angVelWorld, const M3<S>& Rw, const V3<double>& localOffset, double radius) {
     using std::sqrt;
     const V3<S> off = Rw * lift<S>(localOffset);           // COM → sphere center (world)
@@ -176,52 +235,52 @@ V6<S> groundContactWorld(const DiffModel& md, const V3<S>& com, const V3<S>& lin
     const V3<S> lever = off + V3<S>{ S(0), S(-radius), S(0) };   // contact point − COM (world), n=+y
     const V3<S> cpVel = linVelWorld + cross(angVelWorld, lever);  // contact-point velocity
     const S vn = cpVel.y;                                  // normal velocity (n = +y)
-    const S b = S(md.groundBeta);
+    const S b = S(hdGroundBeta(md));
     const S sr = softplus(b * pen) / b;                    // smooth relu(pen) → spring compression
     const S gate = sigmoid(b * pen);                       // in-contact gate (penetration)
-    const S approach = sigmoid(S(-md.groundDampBeta) * vn); // ≈1 approaching (vn<0), ≈0 separating (vn>0)
-    const S Fspring = S(md.groundK) * sr;                  // elastic normal load (≥ 0)
-    const S Fn = Fspring - S(md.groundC) * vn * gate * approach;  // net normal force (≥ 0, non-adhesive)
-    const S eps = S(md.frictionVref);
+    const S approach = sigmoid(S(-hdGroundDampBeta(md)) * vn); // ≈1 approaching (vn<0), ≈0 separating (vn>0)
+    const S Fspring = S(hdGroundK(md)) * sr;               // elastic normal load (≥ 0)
+    const S Fn = Fspring - S(hdGroundC(md)) * vn * gate * approach;  // net normal force (≥ 0, non-adhesive)
+    const S eps = S(hdFrictionVref(md));
     const S vtMag = sqrt(cpVel.x * cpVel.x + cpVel.z * cpVel.z + eps * eps);
-    const S fscale = S(-md.groundMu) * Fspring * gate / vtMag;
+    const S fscale = S(-hdGroundMu(md)) * Fspring * gate / vtMag;
     const V3<S> Fworld{ fscale * cpVel.x, Fn, fscale * cpVel.z };
     const V3<S> tauWorld = cross(lever, Fworld);           // τ = lever × F
     return makeV6(tauWorld, Fworld);
 }
 
 // As above but returned as a spatial force [τ; f] in the LINK frame (back-compat convenience).
-template <class S>
-V6<S> groundContactSpatial(const DiffModel& md, const V3<S>& com, const V3<S>& linVelWorld,
+template <class M, class S>
+ENGINE_HD V6<S> groundContactSpatial(const M& md, const V3<S>& com, const V3<S>& linVelWorld,
                            const V3<S>& angVelWorld, const M3<S>& Rw, const V3<double>& localOffset, double radius) {
     const V6<S> w = groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, localOffset, radius);
     return makeV6(transpose(Rw) * ang(w), transpose(Rw) * lin(w));
 }
 
-// Sum of a link's ground contact spatial forces (WORLD frame) given its world kinematics. Mirrors the
-// contact block of diffForwardDynamics: prefer the multi-point `contactPoints`, else the `contactRadius`
-// COM-sphere shorthand (never both — avoids double-counting the COM contact).
-template <class S>
-V6<S> linkGroundContactWorld(const DiffModel& md, const DiffLink& L, const V3<S>& com,
+// Sum of a link's ground contact spatial forces (WORLD frame) given its world kinematics. Iterates
+// the link's normalized contact spheres [0, hdContactCount) — the same prefer-contactPoints-else-COM
+// rule as flatten()/the old linkGroundContactWorld.
+template <class M, class S>
+ENGINE_HD V6<S> linkGroundContactWorld(const M& md, int i, const V3<S>& com,
                              const V3<S>& linVelWorld, const V3<S>& angVelWorld, const M3<S>& Rw) {
     V6<S> f{};
-    if (!L.contactPoints.empty())
-        for (const ContactSphere& cs : L.contactPoints) f = f + groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, cs.offset, cs.radius);
-    else if (L.contactRadius > 0.0)
-        f = f + groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, V3<double>{ 0, 0, 0 }, L.contactRadius);
+    const int nc = hdContactCount(md, i);
+    for (int k = 0; k < nc; ++k)
+        f = f + groundContactWorld(md, com, linVelWorld, angVelWorld, Rw, hdContactOffset(md, i, k), hdContactRadius(md, i, k));
     return f;
 }
 
 // Per-link ground contact spatial forces (WORLD frame) for a whole state — used by the IMEX contact
 // integrator to evaluate the (stiff) contact force at the PREDICTED state. Zero for non-contact links.
-template <class S>
-ContactForces<S> computeContactForcesWorld(const DiffModel& md, const DiffState<S>& st) {
+template <class M, class S>
+ENGINE_HD ContactForces<S> computeContactForcesWorld(const M& md, const DiffState<S>& st) {
     ContactForces<S> out;
-    if (!md.contactGround) return out;
+    if (!hdContactGround(md)) return out;
     LinkWorld<S> lw[kMaxLinks];
-    linkWorldInto<S>(md, st, lw);
-    for (size_t i = 0; i < md.links.size(); ++i)
-        out.f[i] = linkGroundContactWorld(md, md.links[i], lw[i].pos, lw[i].linVel, lw[i].angVel, lw[i].rot);
+    linkWorldInto(md, st, lw);
+    const int n = hdNumLinks(md);
+    for (int i = 0; i < n; ++i)
+        out.f[i] = linkGroundContactWorld(md, i, lw[i].pos, lw[i].linVel, lw[i].angVel, lw[i].rot);
     return out;
 }
 
@@ -229,12 +288,14 @@ ContactForces<S> computeContactForcesWorld(const DiffModel& md, const DiffState<
 // `extContactWorld` is provided (IMEX contact integrator), the per-link ground contact forces are
 // taken from it (evaluated at the predicted state, WORLD frame) instead of the current state — a
 // plain pointer to a [numLinks) array (e.g. ContactForces::f), heap-free.
-template <class S>
-Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
-                             const std::vector<S>& tau, const V3<double>& gravity,
+template <class M, class S>
+ENGINE_HD Accel<S> diffForwardDynamics(const M& md, const DiffState<S>& st,
+                             const S* tau, const V3<double>& gravity,
                              const V6<S>* extContactWorld = nullptr) {
-    const int n = static_cast<int>(md.links.size());
-    assert(n <= kMaxLinks && md.ndofJoints <= kMaxDof);   // fixed-size working set (heap-free)
+    const int n = hdNumLinks(md);
+    assert(n <= kMaxLinks && hdNumDof(md) <= kMaxDof);    // fixed-size working set (heap-free)
+    const bool floating = hdFloating(md);
+    const bool contactGround = hdContactGround(md);
     M6<S> Xup[kMaxLinks]{}, IA[kMaxLinks]{};
     V6<S> v[kMaxLinks]{}, c[kMaxLinks]{}, pA[kMaxLinks]{}, a[kMaxLinks]{};
     M3<S> Rw[kMaxLinks]{};
@@ -245,37 +306,37 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
     const V3<S> g = lift<S>(gravity);
 
     for (int i = 0; i < n; ++i) {                                   // Pass 1: base → tips
-        const DiffLink& L = md.links[static_cast<size_t>(i)];
+        const HDLink L = hdLink(md, i);
         if (L.parent < 0) {
             Rw[i] = st.baseRot; pos[i] = st.basePos;
-            v[i] = md.floating ? st.baseTwist : V6<S>{};
+            v[i] = floating ? st.baseTwist : V6<S>{};
             c[i] = V6<S>{};
         } else {
-            const M3<S> R_cp = lift<S>(L.restRel) * st.linkRot[static_cast<size_t>(i)];
-            const V3<S> p_cp = lift<S>(L.anchorP) - R_cp * lift<S>(L.anchorC);
+            const M3<S> R_cp = lift<S>(*L.restRel) * st.linkRot[static_cast<size_t>(i)];
+            const V3<S> p_cp = lift<S>(*L.anchorP) - R_cp * lift<S>(*L.anchorC);
             Xup[i] = plux(transpose(R_cp), p_cp);
             Rw[i] = Rw[L.parent] * R_cp;
             pos[i] = pos[L.parent] + Rw[L.parent] * p_cp;
             V6<S> vJ{};
             for (int d = 0; d < L.dof; ++d) {
-                Scol[i][d] = jointScol(lift<S>(L.axes[d]), lift<S>(L.anchorC));
+                Scol[i][d] = jointScol(lift<S>(L.axes[d]), lift<S>(*L.anchorC));
                 vJ = vJ + scaled(Scol[i][d], st.qd[static_cast<size_t>(L.qIndex + d)]);
             }
             v[i] = Xup[i] * v[L.parent] + vJ;
             c[i] = (L.dof > 0) ? crm(v[i]) * vJ : V6<S>{};
         }
-        IA[i] = spatialInertia(S(L.mass), lift<S>(L.Ic));
+        IA[i] = spatialInertia(S(L.mass), lift<S>(*L.Ic));
         const V6<S> crfIv = transpose(crm(v[i])) * (IA[i] * v[i]);
         const V6<S> fgrav = makeV6(zeroV3<S>(), transpose(Rw[i]) * (S(L.mass) * g));
         pA[i] = scaled(crfIv, S(-1)) + scaled(fgrav, S(-1));
-        if (md.contactGround) {                                       // compliant ground contact
+        if (contactGround) {                                          // compliant ground contact
             V6<S> fWorld{};
             if (extContactWorld) {
                 fWorld = extContactWorld[i];  // IMEX: contact force @ predicted state
-            } else if (L.contactRadius > 0.0 || !L.contactPoints.empty()) {
+            } else if (hdContactCount(md, i) > 0) {
                 const V3<S> linVelWorld = Rw[i] * lin(v[i]);
                 const V3<S> angVelWorld = Rw[i] * ang(v[i]);
-                fWorld = linkGroundContactWorld(md, L, pos[i], linVelWorld, angVelWorld, Rw[i]);
+                fWorld = linkGroundContactWorld(md, i, pos[i], linVelWorld, angVelWorld, Rw[i]);
             }
             const V6<S> fLink = makeV6(transpose(Rw[i]) * ang(fWorld), transpose(Rw[i]) * lin(fWorld));
             pA[i] = pA[i] + scaled(fLink, S(-1));
@@ -283,13 +344,13 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
     }
 
     for (int i = n - 1; i >= 0; --i) {                              // Pass 2: tips → base
-        const DiffLink& L = md.links[static_cast<size_t>(i)];
+        const HDLink L = hdLink(md, i);
         if (L.parent < 0) continue;
         M6<S> Ia = IA[i]; V6<S> pa = pA[i];
         const int dof = L.dof;
         if (dof > 0) {
             S D[9];
-            const double bEff = (L.jointDamping >= 0.0) ? L.jointDamping : md.jointDamping;   // per-joint damping or inherited global
+            const double bEff = L.jointDamping;   // resolved by hdLink (per-joint override or global)
             V3<S> rotvec = zeroV3<S>();
             if (L.jointStiffness != 0.0) rotvec = vee(st.linkRot[static_cast<size_t>(i)]);   // sinθ·axis: smooth, zero at rest (passive spring)
             for (int aa = 0; aa < dof; ++aa) {
@@ -313,9 +374,9 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
 
     Accel<S> res{};   // qddot[] zero-initialized; DOFs not written below stay zero
     for (int i = 0; i < n; ++i) {                                   // Pass 3: base → tips
-        const DiffLink& L = md.links[static_cast<size_t>(i)];
+        const HDLink L = hdLink(md, i);
         if (L.parent < 0) {
-            if (md.floating) { a[i] = solveM6(IA[i], scaled(pA[i], S(-1))); res.baseAccel = a[i]; }
+            if (floating) { a[i] = solveM6(IA[i], scaled(pA[i], S(-1))); res.baseAccel = a[i]; }
             else a[i] = V6<S>{};
             continue;
         }
@@ -330,25 +391,35 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
     return res;
 }
 
-// Apply an acceleration to the velocities (joint qd + floating base twist).
+// Host convenience: existing callers pass tau as a std::vector; forward to the pointer core above.
 template <class S>
-void diffApplyAccel(const DiffModel& md, DiffState<S>& st, const Accel<S>& acc, double h) {
-    for (int k = 0; k < md.ndofJoints; ++k) st.qd[static_cast<size_t>(k)] = st.qd[static_cast<size_t>(k)] + acc.qddot[static_cast<size_t>(k)] * S(h);
-    if (md.floating) for (int k = 0; k < 6; ++k) st.baseTwist.d[k] = st.baseTwist.d[k] + acc.baseAccel.d[k] * S(h);
+Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
+                             const std::vector<S>& tau, const V3<double>& gravity,
+                             const V6<S>* extContactWorld = nullptr) {
+    return diffForwardDynamics<DiffModel, S>(md, st, tau.data(), gravity, extContactWorld);
+}
+
+// Apply an acceleration to the velocities (joint qd + floating base twist).
+template <class M, class S>
+ENGINE_HD void diffApplyAccel(const M& md, DiffState<S>& st, const Accel<S>& acc, double h) {
+    const int nd = hdNumDof(md);
+    for (int k = 0; k < nd; ++k) st.qd[static_cast<size_t>(k)] = st.qd[static_cast<size_t>(k)] + acc.qddot[static_cast<size_t>(k)] * S(h);
+    if (hdFloating(md)) for (int k = 0; k < 6; ++k) st.baseTwist.d[k] = st.baseTwist.d[k] + acc.baseAccel.d[k] * S(h);
 }
 
 // Advance the configuration (joint rotations + base pose) on the manifold using the CURRENT
 // velocities (SO(3) exp map) — the position half of a semi-implicit Euler step.
-template <class S>
-void diffIntegrateConfig(const DiffModel& md, DiffState<S>& st, double h) {
-    for (int i = 0; i < static_cast<int>(md.links.size()); ++i) {
-        const DiffLink& L = md.links[static_cast<size_t>(i)];
+template <class M, class S>
+ENGINE_HD void diffIntegrateConfig(const M& md, DiffState<S>& st, double h) {
+    const int n = hdNumLinks(md);
+    for (int i = 0; i < n; ++i) {
+        const HDLink L = hdLink(md, i);
         if (L.dof <= 0) continue;
         V3<S> wc = zeroV3<S>();
         for (int d = 0; d < L.dof; ++d) wc = wc + st.qd[static_cast<size_t>(L.qIndex + d)] * lift<S>(L.axes[d]);
         st.linkRot[static_cast<size_t>(i)] = st.linkRot[static_cast<size_t>(i)] * expSO3(S(h) * wc);
     }
-    if (md.floating) {
+    if (hdFloating(md)) {
         const V3<S> wWorld = st.baseRot * ang(st.baseTwist);
         const V3<S> vWorld = st.baseRot * lin(st.baseTwist);
         st.basePos = st.basePos + S(h) * vWorld;
@@ -362,10 +433,10 @@ void diffIntegrateConfig(const DiffModel& md, DiffState<S>& st, double h) {
 // smooth dynamics at the current state + contact at the predicted state. So the contact term is
 // treated implicitly (stable at higher k) while the smooth articulated dynamics stay explicit/
 // symplectic (no numerical damping of the whole system — that was the pre-IMEX behavior).
-template <class S>
-void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& tau,
+template <class M, class S>
+ENGINE_HD void diffSubstep(const M& md, DiffState<S>& st, const S* tau,
                  const V3<double>& gravity, double h) {
-    if (md.contactIntegration == ContactIntegration::SemiImplicit && md.contactGround) {
+    if (hdContactSemiImplicit(md) && hdContactGround(md)) {
         DiffState<S> trial = st;                                             // predictor: explicit trial step
         diffApplyAccel(md, trial, diffForwardDynamics(md, st, tau, gravity), h);
         diffIntegrateConfig(md, trial, h);
@@ -380,23 +451,31 @@ void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& ta
     }
 }
 
+// Host convenience: existing callers pass tau as a std::vector; forward to the pointer core above.
+template <class S>
+void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& tau,
+                 const V3<double>& gravity, double h) {
+    diffSubstep<DiffModel, S>(md, st, tau.data(), gravity, h);
+}
+
 // Per-link world kinematics into a caller-provided [numLinks) array — heap-free, so the IMEX
 // substep (via computeContactForcesWorld) allocates nothing. See the LinkWorld def near the top.
-template <class S>
-void linkWorldInto(const DiffModel& md, const DiffState<S>& st, LinkWorld<S>* out) {
-    const int n = static_cast<int>(md.links.size());
+template <class M, class S>
+ENGINE_HD void linkWorldInto(const M& md, const DiffState<S>& st, LinkWorld<S>* out) {
+    const int n = hdNumLinks(md);
     assert(n <= kMaxLinks);
+    const bool floating = hdFloating(md);
     M3<S> Rw[kMaxLinks]{}; V3<S> pos[kMaxLinks]{}; V6<S> v[kMaxLinks]{};
     for (int i = 0; i < n; ++i) {
-        const DiffLink& L = md.links[static_cast<size_t>(i)];
-        if (L.parent < 0) { Rw[i] = st.baseRot; pos[i] = st.basePos; v[i] = md.floating ? st.baseTwist : V6<S>{}; }
+        const HDLink L = hdLink(md, i);
+        if (L.parent < 0) { Rw[i] = st.baseRot; pos[i] = st.basePos; v[i] = floating ? st.baseTwist : V6<S>{}; }
         else {
-            const M3<S> R_cp = lift<S>(L.restRel) * st.linkRot[static_cast<size_t>(i)];
-            const V3<S> p_cp = lift<S>(L.anchorP) - R_cp * lift<S>(L.anchorC);
+            const M3<S> R_cp = lift<S>(*L.restRel) * st.linkRot[static_cast<size_t>(i)];
+            const V3<S> p_cp = lift<S>(*L.anchorP) - R_cp * lift<S>(*L.anchorC);
             Rw[i] = Rw[L.parent] * R_cp;
             pos[i] = pos[L.parent] + Rw[L.parent] * p_cp;
             V6<S> vJ{};
-            for (int d = 0; d < L.dof; ++d) vJ = vJ + scaled(jointScol(lift<S>(L.axes[d]), lift<S>(L.anchorC)), st.qd[static_cast<size_t>(L.qIndex + d)]);
+            for (int d = 0; d < L.dof; ++d) vJ = vJ + scaled(jointScol(lift<S>(L.axes[d]), lift<S>(*L.anchorC)), st.qd[static_cast<size_t>(L.qIndex + d)]);
             v[i] = plux(transpose(R_cp), p_cp) * v[L.parent] + vJ;
         }
         out[i] = { pos[i], Rw[i] * lin(v[i]), Rw[i] * ang(v[i]), Rw[i] };
@@ -404,11 +483,11 @@ void linkWorldInto(const DiffModel& md, const DiffState<S>& st, LinkWorld<S>* ou
 }
 
 // Convenience std::vector wrapper for host-side readout (rendering / energy / observation). The hot
-// path uses linkWorldInto directly.
+// path uses linkWorldInto directly. HOST-ONLY (std::vector).
 template <class S>
 std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st) {
     std::vector<LinkWorld<S>> out(md.links.size());
-    linkWorldInto<S>(md, st, out.data());
+    linkWorldInto<DiffModel, S>(md, st, out.data());
     return out;
 }
 

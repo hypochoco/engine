@@ -43,6 +43,10 @@ Working notes for the engine project.
 - [`2026-07-06-cuda-port-review.md`](investigations/physics/2026-07-06-cuda-port-review.md) — what it would take to port the physics sim to CUDA (GPU) on the NVIDIA training box
 - [`2026-07-08-cuda-port-blockers-fixed-size-flat-model.md`](investigations/physics/2026-07-08-cuda-port-blockers-fixed-size-flat-model.md) — measured CPU baseline + resolving CUDA blockers 2 & 3 (heap-free fixed-size ABA, flat SoA `FlatModel`)
 - [`2026-07-08-cuda-port-handoff.md`](investigations/physics/2026-07-08-cuda-port-handoff.md) — **CUDA port handoff / TODO** (start here to pick up the port: benchmark first, then ordered features left to implement)
+- [`2026-07-08-cuda-port-implementation-progress.md`](investigations/physics/2026-07-08-cuda-port-implementation-progress.md) — the implementer's phase-by-phase log of the returned port (Phases 0–5: build gating, device-callable ABA, batched kernel, `CudaVecEnv`, parity)
+- [`2026-07-08-cuda-port-code-review.md`](investigations/physics/2026-07-08-cuda-port-code-review.md) — **independent post-implementation review**: design assessment + the contact-model/backend mismatch + integration gaps
+- [`2026-07-08-cuda-engine-next-steps.md`](investigations/physics/2026-07-08-cuda-engine-next-steps.md) — engine-side improvements (shared `ENGINE_HD` actuator/obs, CPU `DiffVecEnv`, `CudaVecEnv` feature parity, full-env parity tests)
+- [`2026-07-08-cuda-sim1-integration-next-steps.md`](investigations/physics/2026-07-08-cuda-sim1-integration-next-steps.md) — sim-1 integration (deferred): bind the env, PyTorch-GPU + zero-copy, on-GPU glue, the dynamics-switch/retrain
 
 ### `investigations/realtime-rendering/`
 

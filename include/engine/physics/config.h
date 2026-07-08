@@ -40,6 +40,9 @@ struct SolverConfig {
 enum class Backend {
     Realtime,   // maximal-coordinate sequential-impulse solver (contacts + joint constraints)
     Reduced,    // reduced-coordinate Featherstone/ABA articulation (Phase E)
+    Cuda,       // batched reduced + smoothed-contact ABA on the GPU (NVIDIA only, requires ENGINE_CUDA).
+                // Selected via the CudaVecEnv path — NOT createPhysicsWorld() (it is not a PhysicsWorld).
+                // The device kernel runs the SAME templated diff ABA as the CPU Reduced/diff path.
 };
 
 // How an RL action vector is interpreted (see physics_env). Torque = raw joint torques;

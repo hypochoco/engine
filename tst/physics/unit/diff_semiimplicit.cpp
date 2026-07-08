@@ -57,7 +57,7 @@ TST_CASE(physics, unit, diff_ground_force_non_adhesive) {
     const V3<double> com{ 0, r - pen, 0 };                      // COM contact sphere (offset 0)
     const M3<double> Rw = identity3<double>();
     auto Fn = [&](double vy) {
-        return lin(groundContactSpatial<double>(md, com, V3<double>{ 0, vy, 0 }, V3<double>{ 0, 0, 0 },
+        return lin(groundContactSpatial(md, com, V3<double>{ 0, vy, 0 }, V3<double>{ 0, 0, 0 },
                                                 Rw, V3<double>{ 0, 0, 0 }, r)).y;
     };
     const double Fn_rest = Fn(0.0);          // at rest: pure spring → repulsive

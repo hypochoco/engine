@@ -120,4 +120,30 @@ inline FlatModel flatten(const DiffModel& md) {
 // The whole point of the flat form: it must be a byte-blob we can memcpy to the GPU.
 static_assert(std::is_trivially_copyable_v<FlatModel>, "FlatModel must be uploadable as a POD blob");
 
+// ---- uniform model access (device side) --------------------------------------------------------
+// ENGINE_HD counterparts of the host DiffModel accessors in articulated.h — same interface, so the
+// model-generic ABA (diffSubstep<M,S>, diffForwardDynamics<M,S>, ...) runs on the GPU with FlatModel.
+// FlatModel already pre-resolved jointDamping and normalized the contact spheres, so these are direct
+// field reads (no inheritance/branching) — exactly the SIMT-friendly shape.
+ENGINE_HD inline int  hdNumLinks(const FlatModel& m) { return m.numLinks; }
+ENGINE_HD inline int  hdNumDof(const FlatModel& m)   { return m.numDof; }
+ENGINE_HD inline bool hdFloating(const FlatModel& m) { return m.floating != 0; }
+ENGINE_HD inline bool hdContactGround(const FlatModel& m) { return m.contactGround != 0; }
+ENGINE_HD inline bool hdContactSemiImplicit(const FlatModel& m) { return m.contactIntegration != 0; }
+ENGINE_HD inline double hdGroundK(const FlatModel& m)        { return m.groundK; }
+ENGINE_HD inline double hdGroundC(const FlatModel& m)        { return m.groundC; }
+ENGINE_HD inline double hdGroundBeta(const FlatModel& m)     { return m.groundBeta; }
+ENGINE_HD inline double hdGroundDampBeta(const FlatModel& m) { return m.groundDampBeta; }
+ENGINE_HD inline double hdGroundMu(const FlatModel& m)       { return m.groundMu; }
+ENGINE_HD inline double hdFrictionVref(const FlatModel& m)   { return m.frictionVref; }
+ENGINE_HD inline int hdContactCount(const FlatModel& m, int i) { return m.contactCount[i]; }
+ENGINE_HD inline V3<double> hdContactOffset(const FlatModel& m, int i, int k) { return m.contactSphereOffset[m.contactOffset[i] + k]; }
+ENGINE_HD inline double hdContactRadius(const FlatModel& m, int i, int k) { return m.contactSphereRadius[m.contactOffset[i] + k]; }
+ENGINE_HD inline HDLink hdLink(const FlatModel& m, int i) {
+    HDLink h; h.parent = m.parent[i]; h.dof = m.dof[i]; h.qIndex = m.qIndex[i]; h.mass = m.mass[i];
+    h.jointDamping = m.jointDamping[i]; h.jointStiffness = m.jointStiffness[i]; h.armature = m.armature[i];
+    h.Ic = &m.Ic[i]; h.restRel = &m.restRel[i]; h.anchorP = &m.anchorP[i]; h.anchorC = &m.anchorC[i]; h.axes = m.axes[i];
+    return h;
+}
+
 } // namespace engine::physics::diff

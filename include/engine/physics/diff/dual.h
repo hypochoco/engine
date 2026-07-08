@@ -14,11 +14,19 @@
 //
 //  Everything is double-precision: gradient/finite-difference agreement needs more than float.
 //
+//  Annotated ENGINE_HD (host+device under nvcc; no-op on host — see hd.h) so the SAME scalar can run
+//  on device. The forward RL kernel instantiates the ABA with `float` (Dual is not used there), but
+//  the scalar `sigmoid`/`softplus` below ARE on the float contact path, so they must be device-callable;
+//  the Dual overloads are annotated too for future on-device gradients (needs --expt-relaxed-constexpr
+//  for std::array on device).
+//
 
 #pragma once
 
 #include <array>
 #include <cmath>
+
+#include "engine/physics/diff/hd.h"
 
 namespace engine::physics::diff {
 
@@ -27,28 +35,28 @@ struct Dual {
     double v = 0;                 // value
     std::array<double, N> d{};    // partials ∂/∂(seedᵢ)
 
-    Dual() = default;
-    Dual(double value) : v(value) { d.fill(0.0); }                     // NOLINT: implicit constant
-    Dual(double value, const std::array<double, N>& grad) : v(value), d(grad) {}
+    ENGINE_HD Dual() = default;
+    ENGINE_HD Dual(double value) : v(value) { d.fill(0.0); }            // NOLINT: implicit constant
+    ENGINE_HD Dual(double value, const std::array<double, N>& grad) : v(value), d(grad) {}
 
     // A variable seeded as the i-th independent input (∂self/∂seedᵢ = 1).
-    static Dual seed(double value, int i) { Dual r(value); r.d[static_cast<size_t>(i)] = 1.0; return r; }
+    ENGINE_HD static Dual seed(double value, int i) { Dual r(value); r.d[static_cast<size_t>(i)] = 1.0; return r; }
 };
 
 // ---- arithmetic (chain rule) ----
-template <int N> Dual<N> operator-(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> operator-(const Dual<N>& a) {
     Dual<N> r; r.v = -a.v; for (int i = 0; i < N; ++i) r.d[i] = -a.d[i]; return r;
 }
-template <int N> Dual<N> operator+(const Dual<N>& a, const Dual<N>& b) {
+template <int N> ENGINE_HD Dual<N> operator+(const Dual<N>& a, const Dual<N>& b) {
     Dual<N> r; r.v = a.v + b.v; for (int i = 0; i < N; ++i) r.d[i] = a.d[i] + b.d[i]; return r;
 }
-template <int N> Dual<N> operator-(const Dual<N>& a, const Dual<N>& b) {
+template <int N> ENGINE_HD Dual<N> operator-(const Dual<N>& a, const Dual<N>& b) {
     Dual<N> r; r.v = a.v - b.v; for (int i = 0; i < N; ++i) r.d[i] = a.d[i] - b.d[i]; return r;
 }
-template <int N> Dual<N> operator*(const Dual<N>& a, const Dual<N>& b) {
+template <int N> ENGINE_HD Dual<N> operator*(const Dual<N>& a, const Dual<N>& b) {
     Dual<N> r; r.v = a.v * b.v; for (int i = 0; i < N; ++i) r.d[i] = a.d[i] * b.v + a.v * b.d[i]; return r;
 }
-template <int N> Dual<N> operator/(const Dual<N>& a, const Dual<N>& b) {
+template <int N> ENGINE_HD Dual<N> operator/(const Dual<N>& a, const Dual<N>& b) {
     Dual<N> r; r.v = a.v / b.v;
     const double inv = 1.0 / b.v, inv2 = inv * inv;
     for (int i = 0; i < N; ++i) r.d[i] = (a.d[i] * b.v - a.v * b.d[i]) * inv2;
@@ -57,38 +65,38 @@ template <int N> Dual<N> operator/(const Dual<N>& a, const Dual<N>& b) {
 // Mixed Dual/scalar ops route through the implicit constant constructor, so `2.0 * x`,
 // `x / h`, `x + 1.0` etc. all just work with zero-derivative constants.
 
-template <int N> Dual<N>& operator+=(Dual<N>& a, const Dual<N>& b) { a = a + b; return a; }
-template <int N> Dual<N>& operator-=(Dual<N>& a, const Dual<N>& b) { a = a - b; return a; }
-template <int N> Dual<N>& operator*=(Dual<N>& a, const Dual<N>& b) { a = a * b; return a; }
-template <int N> Dual<N>& operator/=(Dual<N>& a, const Dual<N>& b) { a = a / b; return a; }
+template <int N> ENGINE_HD Dual<N>& operator+=(Dual<N>& a, const Dual<N>& b) { a = a + b; return a; }
+template <int N> ENGINE_HD Dual<N>& operator-=(Dual<N>& a, const Dual<N>& b) { a = a - b; return a; }
+template <int N> ENGINE_HD Dual<N>& operator*=(Dual<N>& a, const Dual<N>& b) { a = a * b; return a; }
+template <int N> ENGINE_HD Dual<N>& operator/=(Dual<N>& a, const Dual<N>& b) { a = a / b; return a; }
 
 // ---- comparisons (on the value; for branchy generic code — guards, sign tests, clamps) ----
-template <int N> bool operator<(const Dual<N>& a, const Dual<N>& b) { return a.v < b.v; }
-template <int N> bool operator>(const Dual<N>& a, const Dual<N>& b) { return a.v > b.v; }
-template <int N> bool operator<=(const Dual<N>& a, const Dual<N>& b) { return a.v <= b.v; }
-template <int N> bool operator>=(const Dual<N>& a, const Dual<N>& b) { return a.v >= b.v; }
+template <int N> ENGINE_HD bool operator<(const Dual<N>& a, const Dual<N>& b) { return a.v < b.v; }
+template <int N> ENGINE_HD bool operator>(const Dual<N>& a, const Dual<N>& b) { return a.v > b.v; }
+template <int N> ENGINE_HD bool operator<=(const Dual<N>& a, const Dual<N>& b) { return a.v <= b.v; }
+template <int N> ENGINE_HD bool operator>=(const Dual<N>& a, const Dual<N>& b) { return a.v >= b.v; }
 
 // ---- transcendental / math (ADL-found; pair with `using std::sin;` in generic code) ----
-template <int N> Dual<N> sin(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> sin(const Dual<N>& a) {
     Dual<N> r; r.v = std::sin(a.v); const double c = std::cos(a.v);
     for (int i = 0; i < N; ++i) r.d[i] = c * a.d[i]; return r;
 }
-template <int N> Dual<N> cos(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> cos(const Dual<N>& a) {
     Dual<N> r; r.v = std::cos(a.v); const double s = -std::sin(a.v);
     for (int i = 0; i < N; ++i) r.d[i] = s * a.d[i]; return r;
 }
-template <int N> Dual<N> sqrt(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> sqrt(const Dual<N>& a) {
     Dual<N> r; r.v = std::sqrt(a.v); const double g = (a.v > 0.0) ? 0.5 / r.v : 0.0;
     for (int i = 0; i < N; ++i) r.d[i] = g * a.d[i]; return r;
 }
-template <int N> Dual<N> exp(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> exp(const Dual<N>& a) {
     Dual<N> r; r.v = std::exp(a.v); for (int i = 0; i < N; ++i) r.d[i] = r.v * a.d[i]; return r;
 }
-template <int N> Dual<N> abs(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> abs(const Dual<N>& a) {
     Dual<N> r; r.v = std::fabs(a.v); const double s = (a.v < 0.0) ? -1.0 : 1.0;
     for (int i = 0; i < N; ++i) r.d[i] = s * a.d[i]; return r;
 }
-template <int N> Dual<N> atan2(const Dual<N>& y, const Dual<N>& x) {
+template <int N> ENGINE_HD Dual<N> atan2(const Dual<N>& y, const Dual<N>& x) {
     Dual<N> r; r.v = std::atan2(y.v, x.v);
     const double den = x.v * x.v + y.v * y.v, inv = (den > 0.0) ? 1.0 / den : 0.0;
     for (int i = 0; i < N; ++i) r.d[i] = (x.v * y.d[i] - y.v * x.d[i]) * inv;   // d atan2 = (x dy − y dx)/(x²+y²)
@@ -96,14 +104,14 @@ template <int N> Dual<N> atan2(const Dual<N>& y, const Dual<N>& x) {
 }
 
 // ---- smooth activations (differentiable contact): logistic sigmoid + softplus ----------------
-inline double sigmoid(double x) { return 1.0 / (1.0 + std::exp(-x)); }
-inline double softplus(double x) { return x > 0.0 ? x + std::log1p(std::exp(-x)) : std::log1p(std::exp(x)); }   // numerically stable
+ENGINE_HD inline double sigmoid(double x) { return 1.0 / (1.0 + std::exp(-x)); }
+ENGINE_HD inline double softplus(double x) { return x > 0.0 ? x + std::log1p(std::exp(-x)) : std::log1p(std::exp(x)); }   // numerically stable
 
-template <int N> Dual<N> sigmoid(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> sigmoid(const Dual<N>& a) {
     Dual<N> r; const double s = sigmoid(a.v); r.v = s; const double g = s * (1.0 - s);
     for (int i = 0; i < N; ++i) r.d[i] = g * a.d[i]; return r;                  // σ' = σ(1−σ)
 }
-template <int N> Dual<N> softplus(const Dual<N>& a) {
+template <int N> ENGINE_HD Dual<N> softplus(const Dual<N>& a) {
     Dual<N> r; r.v = softplus(a.v); const double s = sigmoid(a.v);
     for (int i = 0; i < N; ++i) r.d[i] = s * a.d[i]; return r;                  // softplus' = σ
 }

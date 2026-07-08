@@ -25,6 +25,29 @@ add_compile_definitions(GLM_FORCE_DEPTH_ZERO_TO_ONE)
 # binding links clean on a headless Linux box with no GPU/display SDK. Full dev build stays the default.
 option(ENGINE_TRAINING_ONLY "Build only the headless training surface (core+physics+physics_env)" OFF)
 
+# Optional CUDA physics backend (batched reduced+smoothed-contact ABA, one-env-per-thread). NVIDIA
+# only; never built on Apple (no CUDA on macOS). Additive + default OFF, so the CPU backends and the
+# Mac/Metal build are entirely unaffected. Enable on a Linux/NVIDIA box with -DENGINE_CUDA=ON
+# (point CMake at the toolkit via -DCMAKE_CUDA_COMPILER=/path/to/nvcc or -DCUDAToolkit_ROOT=...).
+option(ENGINE_CUDA "Build the CUDA physics backend (NVIDIA only; gated if(NOT APPLE))" OFF)
+if(ENGINE_CUDA)
+    if(APPLE)
+        message(FATAL_ERROR "ENGINE_CUDA=ON is unsupported on Apple (CUDA does not run on macOS). "
+                            "Use the CPU/Metal build; the CUDA backend targets Linux/NVIDIA only.")
+    endif()
+    # Default to sm_86 (A10G) BEFORE enable_language(CUDA) — otherwise CMake seeds a default (52).
+    # Override for other GPUs with -DCMAKE_CUDA_ARCHITECTURES=<arch>.
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 86)
+    endif()
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 20)            # nvcc 12.4 device C++; host TUs keep CXX_STANDARD 23
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    find_package(CUDAToolkit REQUIRED)
+    message(STATUS "ENGINE_CUDA=ON — CUDA physics backend enabled "
+                   "(arch ${CMAKE_CUDA_ARCHITECTURES}, toolkit ${CUDAToolkit_VERSION}).")
+endif()
+
 # external dependencies (always needed by core/physics)
 find_package(glm REQUIRED)
 find_package(Threads REQUIRED)
