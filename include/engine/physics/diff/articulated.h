@@ -17,11 +17,23 @@
 #pragma once
 
 #include <array>
+#include <cassert>
 #include <vector>
 
 #include "engine/physics/diff/linalg.h"
 
 namespace engine::physics::diff {
+
+// Compile-time capacities for the fixed-size (heap-free, device-portable) hot path. The batched
+// GPU kernel needs the per-substep working set to live in stack/registers, not the heap, so
+// diffForwardDynamics + Accel are sized by these caps rather than allocating per call. Sized to fit
+// the built-in rigs with headroom: makeHumanoid (14 links / 21 DOF), makeAMPHumanoid (15 / 28).
+// A model exceeding these trips an assert (see diffForwardDynamics) — bump the caps for bigger rigs.
+// Kept snug (not generously over-sized): the per-substep working set is O(kMaxLinks) spatial
+// matrices, so on the GPU these become per-thread local memory — tight caps lower register/local
+// pressure, and on the CPU they avoid needlessly zero-initializing unused links each call.
+inline constexpr int kMaxLinks = 16;   // makeHumanoid 14, makeAMPHumanoid 15
+inline constexpr int kMaxDof   = 32;   // makeHumanoid 21, makeAMPHumanoid 28
 
 // A ground-contact sphere fixed in a link's COM frame (Feature 2, multi-point contact): center at
 // `offset` from the COM, radius `radius`. `radius==0` ⇒ a point contact (e.g. a box corner).
@@ -91,30 +103,36 @@ struct DiffModel {
 };
 
 // Configuration + velocity. `linkRot[i]` is joint i's local rotation (rest-relative); identity for
-// base + fixed joints. `qd` is the flat joint velocity vector (size ndofJoints).
+// base + fixed joints. `qd` is the flat joint velocity vector. Fixed-size + POD (no heap): the whole
+// per-env state is a trivially-copyable blob — on the GPU one such struct per thread (or a batched
+// SoA), and the SemiImplicit trial-state copy becomes a plain memcpy. Only [0,numLinks)/[0,numDof)
+// are meaningful; makeState/liftState set the dims and initialize linkRot to identity.
 template <class S> struct DiffState {
     V3<S> basePos{};
     M3<S> baseRot = identity3<S>();
     V6<S> baseTwist{};                      // [ω; v] in the base/body frame (floating base)
-    std::vector<M3<S>> linkRot;             // per link (size = #links)
-    std::vector<S> qd;                      // per joint DOF
+    int   numLinks = 0;                     // == DiffModel::links.size()
+    int   numDof   = 0;                     // == DiffModel::ndofJoints
+    M3<S> linkRot[kMaxLinks]{};             // per link (set to identity by makeState/liftState)
+    S     qd[kMaxDof]{};                    // per joint DOF
 };
 
 template <class S> DiffState<S> makeState(const DiffModel& md) {
     DiffState<S> s;
-    s.linkRot.assign(md.links.size(), identity3<S>());
-    s.qd.assign(static_cast<size_t>(md.ndofJoints), S(0));
+    s.numLinks = static_cast<int>(md.links.size());
+    s.numDof   = md.ndofJoints;
+    assert(s.numLinks <= kMaxLinks && s.numDof <= kMaxDof);
+    for (int i = 0; i < s.numLinks; ++i) s.linkRot[i] = identity3<S>();   // qd[] already zero-initialized
     return s;
 }
 
 // Lift a double configuration into scalar type S (constants; e.g. to seed a differentiable rollout).
 template <class S> DiffState<S> liftState(const DiffState<double>& s) {
     DiffState<S> r;
+    r.numLinks = s.numLinks; r.numDof = s.numDof;
     r.basePos = lift<S>(s.basePos); r.baseRot = lift<S>(s.baseRot); r.baseTwist = liftV6<S>(s.baseTwist);
-    r.linkRot.resize(s.linkRot.size());
-    for (size_t i = 0; i < s.linkRot.size(); ++i) r.linkRot[i] = lift<S>(s.linkRot[i]);
-    r.qd.resize(s.qd.size());
-    for (size_t i = 0; i < s.qd.size(); ++i) r.qd[i] = S(s.qd[i]);
+    for (int i = 0; i < s.numLinks; ++i) r.linkRot[i] = lift<S>(s.linkRot[i]);
+    for (int i = 0; i < s.numDof; ++i) r.qd[i] = S(s.qd[i]);
     return r;
 }
 
@@ -128,12 +146,18 @@ template <class S> V6<S> jointScol(const V3<S>& axis, const V3<S>& anchorC) {
     return makeV6(axis, S(-1) * cross(axis, anchorC));
 }
 
-template <class S> struct Accel { std::vector<S> qddot; V6<S> baseAccel; };
+template <class S> struct Accel { S qddot[kMaxDof]{}; V6<S> baseAccel{}; };
 
-// Forward declarations (defined below) so the IMEX contact integrator can read predicted-state
-// world kinematics.
-template <class S> struct LinkWorld;
+// Per-link world COM position + world orientation + world linear/angular velocity (rendering /
+// energy / observation readout). Defined here (not merely forward-declared) so the fixed-size
+// contact/kinematics helpers below can hold LinkWorld<S> arrays by value.
+template <class S> struct LinkWorld { V3<S> pos, linVel, angVel; M3<S> rot; };
+template <class S> void linkWorldInto(const DiffModel& md, const DiffState<S>& st, LinkWorld<S>* out);
 template <class S> std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st);
+
+// Fixed-size per-link ground-contact spatial forces (WORLD frame) — the heap-free counterpart of a
+// std::vector<V6<S>>, so the IMEX substep allocates nothing. Only [0,numLinks) is meaningful.
+template <class S> struct ContactForces { V6<S> f[kMaxLinks]{}; };
 
 // Smoothed compliant ground contact (plane y=0, normal +y) for a sphere of `radius` fixed at link-
 // local `localOffset` from the COM (Feature 2). Sphere center = com + Rw·offset; contact point =
@@ -191,30 +215,33 @@ V6<S> linkGroundContactWorld(const DiffModel& md, const DiffLink& L, const V3<S>
 // Per-link ground contact spatial forces (WORLD frame) for a whole state — used by the IMEX contact
 // integrator to evaluate the (stiff) contact force at the PREDICTED state. Zero for non-contact links.
 template <class S>
-std::vector<V6<S>> computeContactForcesWorld(const DiffModel& md, const DiffState<S>& st) {
-    const auto lw = linkWorld<S>(md, st);
-    std::vector<V6<S>> out(md.links.size());
+ContactForces<S> computeContactForcesWorld(const DiffModel& md, const DiffState<S>& st) {
+    ContactForces<S> out;
     if (!md.contactGround) return out;
+    LinkWorld<S> lw[kMaxLinks];
+    linkWorldInto<S>(md, st, lw);
     for (size_t i = 0; i < md.links.size(); ++i)
-        out[i] = linkGroundContactWorld(md, md.links[i], lw[i].pos, lw[i].linVel, lw[i].angVel, lw[i].rot);
+        out.f[i] = linkGroundContactWorld(md, md.links[i], lw[i].pos, lw[i].linVel, lw[i].angVel, lw[i].rot);
     return out;
 }
 
 // Generalized accelerations via ABA. Mirrors featherstone_world.cpp::computeAccelerations. If
 // `extContactWorld` is provided (IMEX contact integrator), the per-link ground contact forces are
-// taken from it (evaluated at the predicted state, WORLD frame) instead of the current state.
+// taken from it (evaluated at the predicted state, WORLD frame) instead of the current state — a
+// plain pointer to a [numLinks) array (e.g. ContactForces::f), heap-free.
 template <class S>
 Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
                              const std::vector<S>& tau, const V3<double>& gravity,
-                             const std::vector<V6<S>>* extContactWorld = nullptr) {
+                             const V6<S>* extContactWorld = nullptr) {
     const int n = static_cast<int>(md.links.size());
-    std::vector<M6<S>> Xup(n), IA(n);
-    std::vector<V6<S>> v(n), c(n), pA(n), a(n);
-    std::vector<M3<S>> Rw(n);
-    std::vector<V3<S>> pos(n);
-    std::vector<std::array<V6<S>, 3>> Scol(n), U(n);
-    std::vector<std::array<S, 9>> Dinv(n);
-    std::vector<std::array<S, 3>> uv(n);
+    assert(n <= kMaxLinks && md.ndofJoints <= kMaxDof);   // fixed-size working set (heap-free)
+    M6<S> Xup[kMaxLinks]{}, IA[kMaxLinks]{};
+    V6<S> v[kMaxLinks]{}, c[kMaxLinks]{}, pA[kMaxLinks]{}, a[kMaxLinks]{};
+    M3<S> Rw[kMaxLinks]{};
+    V3<S> pos[kMaxLinks]{};
+    std::array<V6<S>, 3> Scol[kMaxLinks]{}, U[kMaxLinks]{};
+    std::array<S, 9> Dinv[kMaxLinks]{};
+    std::array<S, 3> uv[kMaxLinks]{};
     const V3<S> g = lift<S>(gravity);
 
     for (int i = 0; i < n; ++i) {                                   // Pass 1: base → tips
@@ -244,7 +271,7 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
         if (md.contactGround) {                                       // compliant ground contact
             V6<S> fWorld{};
             if (extContactWorld) {
-                fWorld = (*extContactWorld)[static_cast<size_t>(i)];  // IMEX: contact force @ predicted state
+                fWorld = extContactWorld[i];  // IMEX: contact force @ predicted state
             } else if (L.contactRadius > 0.0 || !L.contactPoints.empty()) {
                 const V3<S> linVelWorld = Rw[i] * lin(v[i]);
                 const V3<S> angVelWorld = Rw[i] * ang(v[i]);
@@ -284,7 +311,7 @@ Accel<S> diffForwardDynamics(const DiffModel& md, const DiffState<S>& st,
         pA[L.parent] = pA[L.parent] + XT * pa;
     }
 
-    Accel<S> res; res.qddot.assign(static_cast<size_t>(md.ndofJoints), S(0)); res.baseAccel = V6<S>{};
+    Accel<S> res{};   // qddot[] zero-initialized; DOFs not written below stay zero
     for (int i = 0; i < n; ++i) {                                   // Pass 3: base → tips
         const DiffLink& L = md.links[static_cast<size_t>(i)];
         if (L.parent < 0) {
@@ -342,8 +369,8 @@ void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& ta
         DiffState<S> trial = st;                                             // predictor: explicit trial step
         diffApplyAccel(md, trial, diffForwardDynamics(md, st, tau, gravity), h);
         diffIntegrateConfig(md, trial, h);
-        const std::vector<V6<S>> fc = computeContactForcesWorld(md, trial);  // stiff contact @ predicted state
-        const Accel<S> acc = diffForwardDynamics(md, st, tau, gravity, &fc); // smooth @ st, contact @ predicted (IMEX)
+        const ContactForces<S> fc = computeContactForcesWorld(md, trial);    // stiff contact @ predicted state
+        const Accel<S> acc = diffForwardDynamics(md, st, tau, gravity, fc.f); // smooth @ st, contact @ predicted (IMEX)
         diffApplyAccel(md, st, acc, h);
         diffIntegrateConfig(md, st, h);
     } else {
@@ -353,15 +380,13 @@ void diffSubstep(const DiffModel& md, DiffState<S>& st, const std::vector<S>& ta
     }
 }
 
-// Per-link world COM position + world orientation + world linear/angular velocity (rendering /
-// energy / observation readout).
-template <class S> struct LinkWorld { V3<S> pos, linVel, angVel; M3<S> rot; };
-
+// Per-link world kinematics into a caller-provided [numLinks) array — heap-free, so the IMEX
+// substep (via computeContactForcesWorld) allocates nothing. See the LinkWorld def near the top.
 template <class S>
-std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st) {
+void linkWorldInto(const DiffModel& md, const DiffState<S>& st, LinkWorld<S>* out) {
     const int n = static_cast<int>(md.links.size());
-    std::vector<M3<S>> Rw(n); std::vector<V3<S>> pos(n); std::vector<V6<S>> v(n);
-    std::vector<LinkWorld<S>> out(static_cast<size_t>(n));
+    assert(n <= kMaxLinks);
+    M3<S> Rw[kMaxLinks]{}; V3<S> pos[kMaxLinks]{}; V6<S> v[kMaxLinks]{};
     for (int i = 0; i < n; ++i) {
         const DiffLink& L = md.links[static_cast<size_t>(i)];
         if (L.parent < 0) { Rw[i] = st.baseRot; pos[i] = st.basePos; v[i] = md.floating ? st.baseTwist : V6<S>{}; }
@@ -374,8 +399,16 @@ std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st)
             for (int d = 0; d < L.dof; ++d) vJ = vJ + scaled(jointScol(lift<S>(L.axes[d]), lift<S>(L.anchorC)), st.qd[static_cast<size_t>(L.qIndex + d)]);
             v[i] = plux(transpose(R_cp), p_cp) * v[L.parent] + vJ;
         }
-        out[static_cast<size_t>(i)] = { pos[i], Rw[i] * lin(v[i]), Rw[i] * ang(v[i]), Rw[i] };
+        out[i] = { pos[i], Rw[i] * lin(v[i]), Rw[i] * ang(v[i]), Rw[i] };
     }
+}
+
+// Convenience std::vector wrapper for host-side readout (rendering / energy / observation). The hot
+// path uses linkWorldInto directly.
+template <class S>
+std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st) {
+    std::vector<LinkWorld<S>> out(md.links.size());
+    linkWorldInto<S>(md, st, out.data());
     return out;
 }
 

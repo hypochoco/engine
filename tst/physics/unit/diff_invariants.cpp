@@ -81,7 +81,7 @@ TST_CASE(physics, unit, diff_humanoid_deterministic) {
     };
     const DiffState<double> a = run(), b = run();
     bool identical = (a.basePos.x == b.basePos.x && a.basePos.y == b.basePos.y && a.basePos.z == b.basePos.z);
-    for (size_t i = 0; i < a.qd.size(); ++i) identical = identical && (a.qd[i] == b.qd[i]);
+    for (int i = 0; i < a.numDof; ++i) identical = identical && (a.qd[i] == b.qd[i]);
     for (int j = 0; j < 6; ++j) identical = identical && (a.baseTwist.d[j] == b.baseTwist.d[j]);
     std::printf("diff_deterministic: identical=%d finalPelvisY=%.6f\n", identical, a.basePos.y);
     TST_REQUIRE(identical);

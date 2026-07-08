@@ -224,6 +224,33 @@ single piece of the milestone, slip-able so it doesn't gate RL-readiness. Decisi
       `resolve` sparse override layering + `configs.h` named presets; write-only `serialize`/`configHash`/
       `dump`+`configVersion` (`config_io.h`) for run history. Value-type, no global singleton. Next steps ↓.
 
+### GPU / CUDA readiness (end goal: CUDA **alongside** CPU — CPU+Metal on Mac, CPU+CUDA on Linux/NVIDIA)
+**Picking this up? Start here:** [2026-07-08-cuda-port-handoff.md](../investigations/physics/2026-07-08-cuda-port-handoff.md)
+(ordered work plan: benchmark first, then the features left to implement).
+Review of what a CUDA port needs: [2026-07-06-cuda-port-review.md](../investigations/physics/2026-07-06-cuda-port-review.md)
+(target = AWS A10G `sm_86`; port the **reduced + smoothed-contact ABA, one-env-per-thread batched**;
+reuse the scalar-generic `diff/` math; keep the maximal solver + general GPU collision out of scope).
+- [x] **Baseline measured + blockers 2 & 3 resolved** (2026-07-08), CPU-only device-prep, all diff tests green.
+      Note: [2026-07-08-cuda-port-blockers-fixed-size-flat-model.md](../investigations/physics/2026-07-08-cuda-port-blockers-fixed-size-flat-model.md).
+      Baseline (M3 Pro): diff forward substep 0.0026 ms/385k/s. **Blocker 2** — `diffForwardDynamics` +
+      `Accel` fixed-size-ified (`kMaxLinks=16`/`kMaxDof=32` stack arrays, ~12 per-call `std::vector`s gone,
+      no caller ripple): heap-free hot path, substep → 0.0023 ms/431k/s (+12%), gradient at parity.
+      **Blocker 3** — new `diff/flat_model.h`: POD trivially-copyable SoA `FlatModel` + `flatten(DiffModel)`
+      (baked once, contact reps normalized, joint damping pre-resolved; 9232 B); fidelity-tested on
+      humanoid+AMP (`physics.unit.diff_flat_model`). Suite 180/0.
+- [x] **Per-env state fixed-size DONE** (2026-07-08) — `DiffState<S>` now fixed-size POD (`M3 linkRot[kMaxLinks]`,
+      `S qd[kMaxDof]` + `numLinks/numDof`), trivially-copyable; the IMEX path is heap-free too
+      (`computeContactForcesWorld` → fixed `ContactForces`, `linkWorldInto` writes a caller array,
+      `extContactWorld` a plain pointer, the trial-state copy is now a memcpy). **The entire `diffSubstep`
+      (Explicit + IMEX) allocates nothing.** `linkWorld` keeps a std::vector wrapper for host readout only.
+      Suite 180/0; substep ~0.0025 ms (parity), gradient parity.
+- [ ] **Batched one-env-per-thread CUDA kernel** consuming `FlatModel` + fixed-size `DiffState`; `Backend::Cuda`
+      in `config.h`; `enable_language(CUDA)` + `-DENGINE_CUDA=ON` gated `if(NOT APPLE)`; float forward /
+      double grad-check; tolerance-based CPU↔GPU parity tests (run on the Linux box). Precondition for the
+      payoff: the PyTorch-CPU→GPU switch (obs/actions stay in VRAM).
+- [ ] **Alignment**: RL env defaults to `Backend::Realtime` (maximal) but the port targets reduced/diff —
+      confirm humanoid RL runs the reduced + smoothed-contact dynamics so CPU and CUDA are the *same* physics.
+
 ### Config + downstream / training bring-up (next)
 - [ ] **Config: wire `dump()` into the training/VecEnv loop** — log each run's resolved config + hash
       with its results (the actual reproducibility payoff). Gated on the training loop existing.
@@ -473,9 +500,8 @@ intersection (BVH deferred** — engine has no ray BVH; physics has only broadph
 (10, module `pathtracer`)**: unit — `ray_triangle`, `scene_nearest_and_occlusion`, `fresnel_schlick`,
 `orthonormal_basis`, `cosine_hemisphere` (MC ∫cos²θ dω = 2π/3), `triangle_sampling` (mean→centroid);
 integration — `cornell_box`, `no_emitter_is_black`, `emitter_triangulation_invariance` (2 vs 4-tri
-light identical, rel=0.000 — guards the estimator fix), `mirror_reflects_light`. Suite 177/0. **Next**:
-adapt `pt::Scene` from a `render::RenderView` + wire output to an RHI texture (readback), then move
-the hot path to a Slang compute shader, then add a data-oriented BVH.
+light identical, rel=0.000 — guards the estimator fix), `mirror_reflects_light`. Suite 177/0.
+(Forward plan refined by the dependency review — see step 1.5 + the roadmap below.)
 
 **Path tracer — step 1.5 (geometry catalog + side-by-side) DONE (2026-07-07)** — dependency review
 ([note](../investigations/path-tracing/2026-07-07-pathtracer-dependency-model.md)) settled: keep
@@ -490,6 +516,28 @@ matches the PT intersector's geometry (IoU=1.000). Unit test `core.geometry_cata
 **Deferred**: the `pathtracer_scene` ECS→`pt::Scene` bridge + ECS `RenderMesh`→`MeshId` rewire +
 `scene`→`render_scene` rename; a live windowed A/B (needs texture-blit plumbing). **Next**: the ECS
 bridge, then the Slang-compute GPU path, then a data-oriented BVH (built over the catalog).
+
+**Path tracer — roadmap (paused 2026-07-08; resume here).** Status: **CPU reference tracer is
+correct, tested (11 pathtracer + 1 core catalog tests), and demoable** side-by-side vs the raster
+head. `engine::pathtracer` is core-only; geometry is neutral in `core::GeometryCatalog`. Remaining
+work, in recommended order:
+  1. **`engine::pathtracer_scene` ECS bridge** (`ecs + pathtracer + core`) — extract an ECS world into
+     a `pt::Scene`, mirroring `engine::scene`→`RenderView`. Requires rewiring ECS `RenderMesh` to hold
+     a `core::MeshId` (from the catalog) instead of a `render::MeshHandle`, and having `scene::extract`
+     resolve `MeshId`→GPU. Completes the head-swap symmetry (path-trace the *authoritative* ECS scene).
+  2. **Material extension** — add `emission` (+ a BSDF `type`/flags) to the shared material so PT gets
+     lights/specular from the same material both heads read (kept one shared model for now; subclass
+     into realtime/PT materials later if they diverge).
+  3. **GPU compute path** — port the integrator to a Slang compute shader over the RHI (geometry in
+     GPU buffers, per-pixel RNG, an accumulation buffer; megakernel first). The real perf lift;
+     regression-test GPU output against the CPU reference on the same scene.
+  4. **Data-oriented BVH** over the `GeometryCatalog` (possibly sharing the physics `aabb` primitive) —
+     once brute-force intersection is the bottleneck. CPU first (validate), then GPU-traversable.
+  5. **Live windowed A/B demo** — needs texture-upload + a blit/textured-quad pass to composite the
+     realtime view and the (uploaded) path-traced texture into one window.
+Design notes: [salvage](../investigations/path-tracing/2026-07-06-path-tracer-salvage-assessment.md),
+[dependency model](../investigations/path-tracing/2026-07-07-pathtracer-dependency-model.md),
+[head-swap readiness](../investigations/path-tracing/2026-07-06-renderer-head-swap-readiness.md).
 
 - [x] **RF1. RHI additions** — DONE (2026-07-04). `transient` texture hint → Metal
       `MTLStorageModeMemoryless` for render-target-only textures (renderer depth is now transient);

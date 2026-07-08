@@ -41,6 +41,8 @@ Working notes for the engine project.
 - [`2026-07-04-humanoid-rig-adoption.md`](investigations/physics/2026-07-04-humanoid-rig-adoption.md) — rig-agnostic model support + AMP humanoid plan
 - [`2026-07-04-physics-config-system.md`](investigations/physics/2026-07-04-physics-config-system.md) — centralized physics config system (P1–P3)
 - [`2026-07-06-cuda-port-review.md`](investigations/physics/2026-07-06-cuda-port-review.md) — what it would take to port the physics sim to CUDA (GPU) on the NVIDIA training box
+- [`2026-07-08-cuda-port-blockers-fixed-size-flat-model.md`](investigations/physics/2026-07-08-cuda-port-blockers-fixed-size-flat-model.md) — measured CPU baseline + resolving CUDA blockers 2 & 3 (heap-free fixed-size ABA, flat SoA `FlatModel`)
+- [`2026-07-08-cuda-port-handoff.md`](investigations/physics/2026-07-08-cuda-port-handoff.md) — **CUDA port handoff / TODO** (start here to pick up the port: benchmark first, then ordered features left to implement)
 
 ### `investigations/realtime-rendering/`
 

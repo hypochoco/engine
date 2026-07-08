@@ -54,8 +54,7 @@ inline StepJacobian stepJacobian(const DiffModel& md, const DiffState<double>& s
 
     for (int k = 0; k < L.nInput; ++k) {
         // --- build the state/action with input direction k seeded (derivative 1) ---
-        DiffState<D> st;
-        st.linkRot.resize(nlinks); st.qd.resize(md.ndofJoints);
+        DiffState<D> st = makeState<D>(md);   // sets dims + identity linkRot; overwritten below
         const D one = D::seed(0.0, 0);                    // value 0, derivative 1 (perturbation gen.)
 
         // base rotation (left perturbation: R = expSO3(δ)·R0)
