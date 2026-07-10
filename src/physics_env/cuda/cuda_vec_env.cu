@@ -58,6 +58,10 @@ __global__ void resetMaskedKernel(diff::DiffState<float>* states, const diff::Di
 
 CudaVecEnv::CudaVecEnv(size_t numEnvs, const EnvConfig& config) : numEnvs_(numEnvs) {
     diff::DiffModel md = diff::articulationToDiffModel(config.articulation, diff::DiffContact::All);
+    md.linearDamping  = static_cast<double>(config.sim.linearDamping);   // match the reduced backend's damping
+    md.angularDamping = static_cast<double>(config.sim.angularDamping);
+    md.contactIntegration = config.sim.contactSemiImplicit ? diff::ContactIntegration::SemiImplicit
+                                                           : diff::ContactIntegration::Explicit;
     model_ = std::make_unique<diff::FlatModel>(diff::flatten(md));
     numLinks_ = model_->numLinks;
     numDof_   = model_->numDof;
@@ -141,8 +145,15 @@ void CudaVecEnv::resetMasked(std::span<const uint8_t> mask, uint64_t /*seed*/) {
 
 void CudaVecEnv::step() {
     uploadActions();
-    applyActionsToTau();
-    bf_->step(substeps_, h_, diff::V3<double>{ gx_, gy_, gz_ });
+    // Recompute the PD torque from the CURRENT device state every substep (mirrors the CPU DiffVecEnv
+    // and the reduced backend). Holding tau fixed across substeps leaves a stale −kd·q̇ term that
+    // destabilizes stiff PD-hold on compliant contact. (Perf: this is 2·substeps kernel launches; a
+    // future optimization is to fuse actionToTau into the substep kernel — see batched_forward.cu.)
+    const diff::V3<double> g{ gx_, gy_, gz_ };
+    for (int s = 0; s < substeps_; ++s) {
+        applyActionsToTau();
+        bf_->step(1, h_, g);
+    }
     packObs();
     bf_->synchronize();
 }

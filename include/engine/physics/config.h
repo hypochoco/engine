@@ -72,6 +72,12 @@ struct SimConfig {
     Real kp = Real(150);                    // PD position gain (PDTarget mode)
     Real kd = Real(15);                     // PD velocity gain (PDTarget mode)
 
+    // --- diff-ABA backend contact integrator (realtime/reduced ignore this) ---
+    // true ⇒ IMEX/SemiImplicit: the stiff ground contact is evaluated at the predicted end-of-substep
+    // state (stable under penetration) while the smooth dynamics stay explicit/symplectic. Default true
+    // because the explicit penalty injects energy at penetrating poses (the humanoid rest-pose blow-up).
+    bool contactSemiImplicit = true;
+
     // --- solver internals ---
     SolverConfig solver{};
 };

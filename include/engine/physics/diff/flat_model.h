@@ -56,6 +56,10 @@ struct FlatModel {
     double jointDamping[kMaxLinks]{};
     double jointStiffness[kMaxLinks]{};
     double armature[kMaxLinks]{};
+    // per-joint limits (revolute): enableLimit as int for a clean POD
+    int    enableLimit[kMaxLinks]{};
+    double lowerLimit[kMaxLinks]{};
+    double upperLimit[kMaxLinks]{};
 
     // --- ground-contact geometry: spheres flattened, per-link [offset, offset+count) ---
     int        contactGround = 0;
@@ -68,6 +72,8 @@ struct FlatModel {
     // --- smoothed ground-plane params (copied verbatim from DiffModel) ---
     double groundK = 0, groundC = 0, groundBeta = 0, groundDampBeta = 0, groundMu = 0, frictionVref = 0;
     int    contactIntegration = 0;   // 0 = Explicit, 1 = SemiImplicit
+    // --- global velocity damping + joint-limit penalty gains (copied verbatim from DiffModel) ---
+    double linearDamping = 0, angularDamping = 0, jointLimitStiffness = 0, jointLimitDamping = 0, jointLimitMaxTorque = 0;
 };
 
 // Bake a host DiffModel into the flat device-upload form. Normalizes the contact representation and
@@ -89,6 +95,9 @@ inline FlatModel flatten(const DiffModel& md) {
         f.jointDamping[i]   = (L.jointDamping >= 0.0) ? L.jointDamping : md.jointDamping;   // resolve inheritance
         f.jointStiffness[i] = L.jointStiffness;
         f.armature[i]       = L.armature;
+        f.enableLimit[i]    = L.enableLimit ? 1 : 0;
+        f.lowerLimit[i]     = L.lowerLimit;
+        f.upperLimit[i]     = L.upperLimit;
 
         // Contact spheres: multi-point `contactPoints` if present, else the COM `contactRadius`
         // shorthand — the same union rule linkGroundContactWorld applies (never both).
@@ -114,6 +123,11 @@ inline FlatModel flatten(const DiffModel& md) {
     f.groundMu        = md.groundMu;
     f.frictionVref    = md.frictionVref;
     f.contactIntegration = (md.contactIntegration == ContactIntegration::SemiImplicit) ? 1 : 0;
+    f.linearDamping      = md.linearDamping;
+    f.angularDamping     = md.angularDamping;
+    f.jointLimitStiffness = md.jointLimitStiffness;
+    f.jointLimitDamping   = md.jointLimitDamping;
+        f.jointLimitMaxTorque = md.jointLimitMaxTorque;
     return f;
 }
 
@@ -136,12 +150,18 @@ ENGINE_HD inline double hdGroundBeta(const FlatModel& m)     { return m.groundBe
 ENGINE_HD inline double hdGroundDampBeta(const FlatModel& m) { return m.groundDampBeta; }
 ENGINE_HD inline double hdGroundMu(const FlatModel& m)       { return m.groundMu; }
 ENGINE_HD inline double hdFrictionVref(const FlatModel& m)   { return m.frictionVref; }
+ENGINE_HD inline double hdLinearDamping(const FlatModel& m)  { return m.linearDamping; }
+ENGINE_HD inline double hdAngularDamping(const FlatModel& m) { return m.angularDamping; }
+ENGINE_HD inline double hdJointLimitK(const FlatModel& m)    { return m.jointLimitStiffness; }
+ENGINE_HD inline double hdJointLimitD(const FlatModel& m)    { return m.jointLimitDamping; }
+ENGINE_HD inline double hdJointLimitMaxTorque(const FlatModel& m) { return m.jointLimitMaxTorque; }
 ENGINE_HD inline int hdContactCount(const FlatModel& m, int i) { return m.contactCount[i]; }
 ENGINE_HD inline V3<double> hdContactOffset(const FlatModel& m, int i, int k) { return m.contactSphereOffset[m.contactOffset[i] + k]; }
 ENGINE_HD inline double hdContactRadius(const FlatModel& m, int i, int k) { return m.contactSphereRadius[m.contactOffset[i] + k]; }
 ENGINE_HD inline HDLink hdLink(const FlatModel& m, int i) {
     HDLink h; h.parent = m.parent[i]; h.dof = m.dof[i]; h.qIndex = m.qIndex[i]; h.mass = m.mass[i];
     h.jointDamping = m.jointDamping[i]; h.jointStiffness = m.jointStiffness[i]; h.armature = m.armature[i];
+    h.enableLimit = m.enableLimit[i] != 0; h.lowerLimit = m.lowerLimit[i]; h.upperLimit = m.upperLimit[i];
     h.Ic = &m.Ic[i]; h.restRel = &m.restRel[i]; h.anchorP = &m.anchorP[i]; h.anchorC = &m.anchorC[i]; h.axes = m.axes[i];
     return h;
 }

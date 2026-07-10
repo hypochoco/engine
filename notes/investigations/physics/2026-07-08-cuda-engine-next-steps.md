@@ -108,3 +108,36 @@ generalized-state reconstruction — needed for tracking/getup; do with the sim-
 signature is fixed); seeded per-env domain-randomization init (both envs currently do deterministic
 authored init, matching CPU `VecEnv` without a hook); the **E4 device** parity test (`CudaVecEnv` vs
 `DiffVecEnv<float>`, Linux only); E5 SoA layout + `CudaVecEnv` config fidelity.
+
+
+## E6 — (optional) `CudaVecEnv` step-without-host-download for the zero-copy path
+
+Dated (2026-07-08), from the walk-scoping discussion. **Optional perf micro-opt; not required for a
+correct GPU walk pipeline.**
+
+**Context.** For the sim-1 walk integration (deferred sim-1 note, staged D-b), the payoff comes from
+keeping obs/actions on-device and wrapping `deviceObservations()/deviceActions()` as torch-CUDA
+tensors. Zero-copy already works today with **no engine change** — the consumer just reads `dObs_`
+directly. The only inefficiency: `CudaVecEnv::step()` unconditionally runs `packObs()` which *also*
+`cudaMemcpy`s the obs batch D→H into the host mirror (`obs_`) every control step. On the zero-copy
+path that host download is pure waste (the host mirror is never read).
+
+**Change (small, engine-side, keep CPU/GPU shared-logic intact).** Split the host sync out of `step()`:
+- Keep `packObs()` writing the device buffer `dObs_` (the obs kernel), but make the **D→H mirror copy**
+  a separate step, e.g. a `syncObservationsToHost()` the host-span `observations()` path calls, or a
+  `bool downloadObs = true` parameter / a `stepDevice()` that skips it. Same for `uploadActions()` vs
+  a device-actions-already-resident fast path (actions written straight into `dActions_` by the torch
+  tensor alias).
+- Net effect: the zero-copy `step()` does upload-actions(skip)/kernels/pack-obs(device only) with **no
+  PCIe traffic per step**; the span-based contract (`actions()/observations()`) still works by doing
+  the copies lazily on access.
+
+**Why it's optional.** Without it the pipeline is correct and still much faster than CPU; you just pay
+one redundant `N*obsDim` D→H copy (+ H→D actions) per control step. Measure first (the sim-1 S0/D-b
+timing): if the per-step host copy is a negligible fraction of the step wall-time at the target env
+count, skip this. If profiling shows it matters, it's a localized change to `cuda_vec_env.{h,cu}` that
+does not touch the shared `diffSubstep`/`env_ops` core.
+
+**Verification bar (if done):** `phys_tests` green (CPU unaffected — this is CUDA-only code); the
+existing `cuda_vec_env` benchmark unchanged in the download path; add a device-only step timing to show
+the saved copy. Keep it behind the same `ENGINE_CUDA` guard.

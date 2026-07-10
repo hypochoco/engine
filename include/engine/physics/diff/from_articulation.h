@@ -93,7 +93,10 @@ inline DiffModel articulationToDiffModel(const physics::ArticulationDef& def, Di
         const glm::mat3 Rwp = glm::mat3_cast(def.bodies[s.bodyA].orientation);
         const glm::mat3 Rwc = glm::mat3_cast(def.bodies[s.bodyB].orientation);
         L.restRel = glmToM3(glm::transpose(Rwp) * Rwc);
-        if (L.dof == 1) { const glm::vec3 ax = glm::normalize(s.localAxisA); L.axes[0] = { ax.x, ax.y, ax.z }; }
+        if (L.dof == 1) {
+            const glm::vec3 ax = glm::normalize(s.localAxisA); L.axes[0] = { ax.x, ax.y, ax.z };
+            if (s.enableLimit) { L.enableLimit = true; L.lowerLimit = s.lowerLimit; L.upperLimit = s.upperLimit; }   // mirror reduced backend limits
+        }
         else if (L.dof == 3) { L.axes[0] = { 1, 0, 0 }; L.axes[1] = { 0, 1, 0 }; L.axes[2] = { 0, 0, 1 }; }
     }
     md.ndofJoints = q;

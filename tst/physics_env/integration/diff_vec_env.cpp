@@ -87,7 +87,8 @@ TST_CASE(physics_env, integration, diff_vec_env) {
     // --- reset_masked resets only flagged envs ---
     DiffVecEnv m(2, humanoidCfg(physics::ActionMode::PDTarget));
     m.reset(0);
-    for (float& v : m.actions()) v = 0.0f;     // hold (finite); envs drift up off the authored 0.99 init
+    for (float& v : m.actions()) v = 0.5f;     // drive the joints so env1 evolves away from init (PD-hold
+                                               // now holds ~0.99, so use a non-trivial action for the reset test)
     for (int i = 0; i < 20; ++i) m.step();
     const std::vector<float> before(m.observations().begin(), m.observations().end());
     TST_REQUIRE(std::fabs(before[m.obsDim() + 1] - 0.99f) > 0.02f);   // env1 has moved from init (non-trivial reset test)

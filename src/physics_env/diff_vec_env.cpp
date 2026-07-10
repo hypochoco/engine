@@ -17,6 +17,10 @@ DiffVecEnv::DiffVecEnv(size_t numEnvs, const EnvConfig& config, engine::core::Th
 
     // Build the differentiable model (shape-aware ground contact on every body, matching CudaVecEnv).
     model_    = diff::articulationToDiffModel(config.articulation, diff::DiffContact::All);
+    model_.linearDamping  = static_cast<double>(sim.linearDamping);    // match the reduced backend's damping
+    model_.angularDamping = static_cast<double>(sim.angularDamping);
+    model_.contactIntegration = sim.contactSemiImplicit ? diff::ContactIntegration::SemiImplicit
+                                                        : diff::ContactIntegration::Explicit;
     numLinks_ = static_cast<int>(model_.links.size());
     numDof_   = model_.ndofJoints;
     actDim_   = static_cast<size_t>(numDof_);
@@ -69,8 +73,13 @@ void DiffVecEnv::step() {
     forEachEnv([&](size_t i) {
         float tau[diff::kMaxDof] = {};                       // per-env scratch (thread-local on the pool)
         const float* action = actions_.data() + i * actDim_;
-        diff::actionToTau(model_, states_[i], action, tau, actionMode_, kp_, kd_, maxTorque_);
-        for (int s = 0; s < substeps_; ++s) diff::diffSubstep(model_, states_[i], tau, gravity_, h_);
+        // Recompute the PD torque from the CURRENT state every substep (as the reduced backend does):
+        // a PD torque held fixed across substeps has a stale −kd·q̇ term that fails to damp velocity
+        // growing within the control step, which destabilizes stiff PD-hold on compliant contact.
+        for (int s = 0; s < substeps_; ++s) {
+            diff::actionToTau(model_, states_[i], action, tau, actionMode_, kp_, kd_, maxTorque_);
+            diff::diffSubstep(model_, states_[i], tau, gravity_, h_);
+        }
         packObs(i);
     });
 }

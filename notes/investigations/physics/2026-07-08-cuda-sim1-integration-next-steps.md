@@ -66,3 +66,47 @@ rollout.
 S0 (measure) → engine E1–E4 (done separately) → S1 (bind) → S2 (on-device obs/actions + GPU policy) →
 S3 (on-GPU glue) → S4 (validate/bench) → S5 (docs). S2 and S3 must land together with S1 for a real win;
 binding alone (with the host round-trip) gives little.
+
+
+## Applied (2026-07-08) — walk-scoped integration landed (C + D-a); D-b documented as next
+
+Scoped to **training the 21-DOF humanoid on `walk`** (getup/track/RSI/per-body-state deferred). With
+that scope the engine-side prerequisites (per-body world state, RSI) drop out — walk needs only the
+flat obs + proprio, which `DiffVecEnv`/`CudaVecEnv` already produce. **No engine changes were needed**
+(one pre-existing `PyDiffEnv::qd` compat fix aside).
+
+**Landed (sim-1 only):**
+- **C1 — binding.** `csrc/engine_py.cpp`: `DiffVecEnv` (CPU) + `CudaVecEnv` (guarded `ENGINE_CUDA`)
+  bound via one shared registrar (`num_envs/act_dim/obs_dim/ndof/nbody`, `reset/reset_masked/step`,
+  zero-copy `actions()/observations()`, `proprio()` via the same `sim1::obs` source on the flat obs).
+  `engine_py.HAS_CUDA` flag.
+- **C2 — build.** Top `CMakeLists.txt` `SIM1_CUDA` option → sets `ENGINE_CUDA=ON` (+ nvcc hint) before
+  the engine subdir; the engine's PUBLIC `ENGINE_CUDA` define reaches the binding TU. Build:
+  `CMAKE_PREFIX_PATH=.deps pip install -e . --no-build-isolation -Ccmake.define.SIM1_CUDA=ON`.
+- **C3 — factory.** `sim1/envs/engine_vecenv.py`: `env.kind ∈ {engine, diff-cpu, cuda}`; flat-only
+  backends raise `NotImplementedError` on `body_*`/`compose_body`/`set_articulation_state`;
+  `make_vecenv` warns if diff/cuda `substeps<32`. `config.py` comment updated.
+- **D-a — GPU training (host obs).** `env.kind=cuda --device cuda` trains walk end-to-end with **no new
+  glue** (obs come back as host numpy; policy on GPU).
+
+**Measured (A10G, walk, substeps=48, PD-target):**
+| backend | N | end-to-end sps | note |
+|---|---|---|---|
+| `diff-cpu` | 4096 | 12.0k | same physics as cuda |
+| `cuda` | 4096 | 103k | 8.6× diff-cpu |
+| `cuda` | 16384 | 165k | ~14× |
+| `cuda` | 65536 | 172k | |
+| `engine` (reduced/PGS) | 4096 | 22.5k | *different* physics (return scale differs) |
+
+Behavior parity `diff-cpu`↔`cuda` (same seed: best_return 85.7 vs 85.1, trajectories track).
+**Stability:** the diff ABA + smoothed contact under stiff PD (kp=150) needs **substeps≥32** (48
+recommended); below that it NaNs immediately. Only 1–3 one-off guard-handled overflow events per run.
+
+**D-b — the next optimization (opt-in, NOT done).** End-to-end (~165k) trails the raw kernel (~276k
+env-steps/s) by ~40% because obs/actions round-trip host mirrors and reward/termination/obs-compose
+run in NumPy on the host. D-b: zero-copy torch-CUDA tensors over `CudaVecEnv.deviceObservations()/
+deviceActions()` + port walk's glue (proprio compose, `HeadingSpeedCommand`, reward terms,
+`fall_termination`, `TaskEnv` auto-reset + NaN guard) to torch-on-CUDA. Risk: the torch reimpl must
+match the C++ obs/reward exactly; device-tensor lifetime/aliasing care. Pairs with the optional engine
+E6 (no-host-download `step()`). Do it as its own pass. **Deferred with getup/track:** per-body world
+state + RSI on the diff envs (engine E-next-steps), on-GPU domain-randomization reset.

@@ -66,6 +66,12 @@ struct DiffLink {
     double jointDamping   = -1.0;   // viscous τ = −b·q̇; <0 ⇒ inherit DiffModel::jointDamping
     double jointStiffness = 0.0;    // passive spring τ = −k·q pulling the joint toward its rest pose
     double armature       = 0.0;    // rotor/reflected inertia added to the joint-space inertia diagonal
+    // Revolute (dof==1) angle limit [lower,upper] in radians — mirrors the reduced backend's JointSpec
+    // limits. Enforced as a SMOOTH one-sided spring+damper past the limit (differentiable), not a hard
+    // constraint (see diffForwardDynamics). Default off ⇒ existing models unchanged.
+    bool   enableLimit = false;
+    double lowerLimit  = 0.0;
+    double upperLimit  = 0.0;
     void addContactSphere(V3<double> offset, double radius) { contactPoints.push_back({ offset, radius }); }
 };
 struct DiffModel {
@@ -96,6 +102,19 @@ struct DiffModel {
     // production backend so the diff sim and the RL sim agree. Default 0 (no damping). This — NOT the
     // integrator — is the intended way to add whole-system damping for realism / settling free DOFs.
     double jointDamping = 0.0;
+    // Global velocity damping mirroring the reduced backend (featherstone_world.cpp): a multiplicative
+    // per-substep decay v *= (1 − c·h) on joint velocities (angular) and the floating base twist
+    // (angular/linear). Distinct from the physical viscous jointDamping above; this matches the
+    // production SimConfig.linear/angularDamping so the diff and reduced backends damp the same way.
+    // Defaults 0 (off ⇒ existing models unchanged).
+    double linearDamping  = 0.0;
+    double angularDamping = 0.0;
+    // Smooth joint-limit penalty gains, shared by all limited joints (see DiffLink::enableLimit): the
+    // one-sided spring stiffness and damping applied past a joint's [lower,upper]. Chosen to hold a
+    // maxTorque≈150 joint within ~0.1 rad of its limit at substeps ≥ 32.
+    double jointLimitStiffness = 4000.0;
+    double jointLimitDamping   = 40.0;
+    double jointLimitMaxTorque = 300.0;   // clamp on |limit penalty torque| — robust vs fast impacts
     // Contact-force time integration (Feature 4, now IMEX). Explicit: forces at start-of-substep.
     // SemiImplicit: IMEX — the stiff CONTACT force is evaluated at the PREDICTED end-of-substep state
     // (implicit ⇒ stable at higher k), while the smooth articulated dynamics stay explicit/symplectic
@@ -119,6 +138,8 @@ struct DiffModel {
 struct HDLink {
     int parent = -1, dof = 0, qIndex = -1;
     double mass = 1.0, jointDamping = 0.0, jointStiffness = 0.0, armature = 0.0;
+    bool   enableLimit = false;
+    double lowerLimit = 0.0, upperLimit = 0.0;
     const M3<double>* Ic = nullptr;
     const M3<double>* restRel = nullptr;
     const V3<double>* anchorP = nullptr;
@@ -132,12 +153,16 @@ inline int  hdNumDof(const DiffModel& m)   { return m.ndofJoints; }
 inline bool hdFloating(const DiffModel& m) { return m.floating; }
 inline bool hdContactGround(const DiffModel& m) { return m.contactGround; }
 inline bool hdContactSemiImplicit(const DiffModel& m) { return m.contactIntegration == ContactIntegration::SemiImplicit; }
-inline double hdGroundK(const DiffModel& m)        { return m.groundK; }
-inline double hdGroundC(const DiffModel& m)        { return m.groundC; }
+inline double hdGroundK(const DiffModel& m)        { return m.groundK; }inline double hdGroundC(const DiffModel& m)        { return m.groundC; }
 inline double hdGroundBeta(const DiffModel& m)     { return m.groundBeta; }
 inline double hdGroundDampBeta(const DiffModel& m) { return m.groundDampBeta; }
 inline double hdGroundMu(const DiffModel& m)       { return m.groundMu; }
 inline double hdFrictionVref(const DiffModel& m)   { return m.frictionVref; }
+inline double hdLinearDamping(const DiffModel& m)  { return m.linearDamping; }
+inline double hdAngularDamping(const DiffModel& m) { return m.angularDamping; }
+inline double hdJointLimitK(const DiffModel& m)    { return m.jointLimitStiffness; }
+inline double hdJointLimitD(const DiffModel& m)    { return m.jointLimitDamping; }
+inline double hdJointLimitMaxTorque(const DiffModel& m) { return m.jointLimitMaxTorque; }
 // Contact spheres, normalized to flatten()'s rule: multi-point contactPoints if present, else the
 // single COM contactRadius shorthand (never both).
 inline int hdContactCount(const DiffModel& m, int i) {
@@ -157,6 +182,7 @@ inline HDLink hdLink(const DiffModel& m, int i) {
     HDLink h; h.parent = L.parent; h.dof = L.dof; h.qIndex = L.qIndex; h.mass = L.mass;
     h.jointDamping = (L.jointDamping >= 0.0) ? L.jointDamping : m.jointDamping;   // resolve inheritance
     h.jointStiffness = L.jointStiffness; h.armature = L.armature;
+    h.enableLimit = L.enableLimit; h.lowerLimit = L.lowerLimit; h.upperLimit = L.upperLimit;
     h.Ic = &L.Ic; h.restRel = &L.restRel; h.anchorP = &L.anchorP; h.anchorC = &L.anchorC; h.axes = L.axes;
     return h;
 }
@@ -353,10 +379,31 @@ ENGINE_HD Accel<S> diffForwardDynamics(const M& md, const DiffState<S>& st,
             const double bEff = L.jointDamping;   // resolved by hdLink (per-joint override or global)
             V3<S> rotvec = zeroV3<S>();
             if (L.jointStiffness != 0.0) rotvec = vee(st.linkRot[static_cast<size_t>(i)]);   // sinθ·axis: smooth, zero at rest (passive spring)
+            // Smooth one-sided joint limit (revolute only): spring+damper past [lower,upper], zero
+            // inside. Signed hinge angle θ = atan2(<vee(R),axis>, (trR−1)/2) — differentiable (Dual
+            // atan2), valid to ±π. Matches the reduced backend's limits without a hard constraint.
+            S limitTorque = S(0);
+            if (L.enableLimit && dof == 1) {
+                using std::atan2;
+                const M3<S>& R = st.linkRot[static_cast<size_t>(i)];
+                const S theta = atan2(dot(vee(R), lift<S>(L.axes[0])),
+                                      S(0.5) * (R.m[0][0] + R.m[1][1] + R.m[2][2] - S(1)));
+                const S kLim = S(hdJointLimitK(md)), dLim = S(hdJointLimitD(md));
+                const S qd0  = st.qd[static_cast<size_t>(L.qIndex)];
+                const S over  = theta - S(L.upperLimit);   // > 0 past the upper limit
+                const S under = S(L.lowerLimit) - theta;   // > 0 past the lower limit
+                if (over  > S(0)) limitTorque = limitTorque - kLim * over  - dLim * qd0;
+                if (under > S(0)) limitTorque = limitTorque + kLim * under - dLim * qd0;
+                // Bound the penalty: a joint slamming a limit at high speed must not produce an
+                // unbounded torque (the −dLim·q̇ term) that blows up the explicit step.
+                const S mLim = S(hdJointLimitMaxTorque(md));
+                limitTorque = limitTorque > mLim ? mLim : (limitTorque < -mLim ? -mLim : limitTorque);
+            }
             for (int aa = 0; aa < dof; ++aa) {
                 U[i][aa] = IA[i] * Scol[i][aa];
                 S gen = tau[static_cast<size_t>(L.qIndex + aa)] - S(bEff) * st.qd[static_cast<size_t>(L.qIndex + aa)];
                 if (L.jointStiffness != 0.0) gen = gen - S(L.jointStiffness) * dot(rotvec, lift<S>(L.axes[aa]));   // −k·q toward rest
+                if (aa == 0) gen = gen + limitTorque;                                              // joint-limit penalty (dof==1)
                 uv[i][aa] = gen - dot(Scol[i][aa], pA[i]);
             }
             for (int aa = 0; aa < dof; ++aa) for (int bb = 0; bb < dof; ++bb) D[aa * dof + bb] = dot(Scol[i][aa], U[i][bb]);
@@ -407,6 +454,23 @@ ENGINE_HD void diffApplyAccel(const M& md, DiffState<S>& st, const Accel<S>& acc
     if (hdFloating(md)) for (int k = 0; k < 6; ++k) st.baseTwist.d[k] = st.baseTwist.d[k] + acc.baseAccel.d[k] * S(h);
 }
 
+// Global velocity damping mirroring the reduced backend (featherstone_world.cpp): a multiplicative
+// per-substep decay v *= max(0, 1 − c·h) on joint velocities (all rotational ⇒ angular) and, for a
+// floating base, its angular/linear twist. c·h ≪ 1 in practice; the clamp guards large c·h. The
+// factor is a model constant (double, not differentiated) ⇒ this stays a smooth linear scaling of S.
+template <class M, class S>
+ENGINE_HD void diffApplyDamping(const M& md, DiffState<S>& st, double h) {
+    const double ad = hdAngularDamping(md), ld = hdLinearDamping(md);
+    if (ad <= 0.0 && ld <= 0.0) return;
+    const double fa = (ad > 0.0) ? (1.0 - ad * h > 0.0 ? 1.0 - ad * h : 0.0) : 1.0;   // angular decay
+    const double fl = (ld > 0.0) ? (1.0 - ld * h > 0.0 ? 1.0 - ld * h : 0.0) : 1.0;   // linear decay
+    if (ad > 0.0) { const int nd = hdNumDof(md); for (int k = 0; k < nd; ++k) st.qd[static_cast<size_t>(k)] = st.qd[static_cast<size_t>(k)] * S(fa); }
+    if (hdFloating(md)) {
+        for (int k = 0; k < 3; ++k) st.baseTwist.d[k] = st.baseTwist.d[k] * S(fa);   // angular [ω]
+        for (int k = 3; k < 6; ++k) st.baseTwist.d[k] = st.baseTwist.d[k] * S(fl);   // linear  [v]
+    }
+}
+
 // Advance the configuration (joint rotations + base pose) on the manifold using the CURRENT
 // velocities (SO(3) exp map) — the position half of a semi-implicit Euler step.
 template <class M, class S>
@@ -443,10 +507,12 @@ ENGINE_HD void diffSubstep(const M& md, DiffState<S>& st, const S* tau,
         const ContactForces<S> fc = computeContactForcesWorld(md, trial);    // stiff contact @ predicted state
         const Accel<S> acc = diffForwardDynamics(md, st, tau, gravity, fc.f); // smooth @ st, contact @ predicted (IMEX)
         diffApplyAccel(md, st, acc, h);
+        diffApplyDamping(md, st, h);
         diffIntegrateConfig(md, st, h);
     } else {
         const Accel<S> acc = diffForwardDynamics(md, st, tau, gravity);
         diffApplyAccel(md, st, acc, h);
+        diffApplyDamping(md, st, h);
         diffIntegrateConfig(md, st, h);
     }
 }
