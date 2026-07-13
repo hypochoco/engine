@@ -52,6 +52,10 @@ public:
     const diff::DiffState<float>& state(size_t i) const { return states_[i]; }
     diff::DiffState<float>&       state(size_t i)       { return states_[i]; }
 
+    // Live perturbation hook (visualizer): retarget gravity (e.g. tilt to nudge balance).
+    void setGravity(diff::V3<double> g) { gravity_ = g; }
+    diff::V3<double> gravity() const { return gravity_; }
+
 private:
     void packObs(size_t i);
     template <class F> void forEachEnv(F&& f);
