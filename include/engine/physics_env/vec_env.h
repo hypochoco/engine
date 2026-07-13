@@ -18,30 +18,31 @@
 #include <vector>
 
 #include "engine/physics_env/environment.h"
+#include "engine/physics_env/vec_env_base.h"
 
 namespace engine::core { class ThreadPool; }
 
 namespace engine::physics_env {
 
-class VecEnv {
+class VecEnv : public IVecEnv {
 public:
     // `pool == nullptr` steps serially (still valid; used for the determinism reference).
     VecEnv(size_t numEnvs, const EnvConfig& config, engine::core::ThreadPool* pool = nullptr);
 
-    size_t numEnvs() const { return envs_.size(); }
-    size_t actDim()  const { return actDim_; }
-    size_t obsDim()  const { return obsDim_; }
+    size_t numEnvs() const override { return envs_.size(); }
+    size_t actDim()  const override { return actDim_; }
+    size_t obsDim()  const override { return obsDim_; }
 
     // Contiguous SoA batches. Row i of actions is [i*actDim, (i+1)*actDim).
-    std::span<float>        actions()            { return actions_; }
-    std::span<const float>  observations() const { return obs_; }
+    std::span<float>        actions()            override { return actions_; }
+    std::span<const float>  observations() const override { return obs_; }
 
     // Reset every env (env i uses seed + i for reproducibility) and refresh observations.
-    void reset(uint64_t seed);
+    void reset(uint64_t seed) override;
     // Reset only envs whose mask byte is non-zero (episode boundaries) + refresh their obs.
-    void resetMasked(std::span<const uint8_t> mask, uint64_t seed);
+    void resetMasked(std::span<const uint8_t> mask, uint64_t seed) override;
     // Apply actions() → step all envs (parallel across the pool) → refresh observations().
-    void step();
+    void step() override;
 
     Environment&       env(size_t i)       { return *envs_[i]; }
     const Environment& env(size_t i) const { return *envs_[i]; }

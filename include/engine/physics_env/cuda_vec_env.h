@@ -29,33 +29,34 @@
 
 #include "engine/physics/cuda/batched_forward.h"
 #include "engine/physics_env/environment.h"
+#include "engine/physics_env/vec_env_base.h"
 
 namespace engine::physics_env {
 
 namespace diff = ::engine::physics::diff;
 namespace cuda = ::engine::physics::cuda;
 
-class CudaVecEnv {
+class CudaVecEnv : public IVecEnv {
 public:
     CudaVecEnv(size_t numEnvs, const EnvConfig& config);
-    ~CudaVecEnv();
+    ~CudaVecEnv() override;
     CudaVecEnv(const CudaVecEnv&) = delete;
     CudaVecEnv& operator=(const CudaVecEnv&) = delete;
 
-    size_t numEnvs() const { return numEnvs_; }
-    size_t actDim()  const { return actDim_; }
-    size_t obsDim()  const { return obsDim_; }
+    size_t numEnvs() const override { return numEnvs_; }
+    size_t actDim()  const override { return actDim_; }
+    size_t obsDim()  const override { return obsDim_; }
 
-    std::span<float>       actions()            { return actions_; }        // host mirror [N*actDim]
-    std::span<const float> observations() const { return obs_; }            // host mirror [N*obsDim]
+    std::span<float>       actions()            override { return actions_; }        // host mirror [N*actDim]
+    std::span<const float> observations() const override { return obs_; }            // host mirror [N*obsDim]
 
     // Device pointers (VRAM) for a zero-copy GPU-policy path.
     float*       deviceActions()            { return dActions_; }
     const float* deviceObservations() const { return dObs_; }
 
-    void reset(uint64_t seed = 0);                       // reset all envs, refresh obs
-    void resetMasked(std::span<const uint8_t> mask, uint64_t seed = 0);  // reset only flagged envs
-    void step();                                         // actions() -> tau -> substeps -> pack obs
+    void reset(uint64_t seed = 0) override;                       // reset all envs, refresh obs
+    void resetMasked(std::span<const uint8_t> mask, uint64_t seed = 0) override;  // reset only flagged envs
+    void step() override;                                         // actions() -> tau -> substeps -> pack obs
 
 private:
     void uploadActions();

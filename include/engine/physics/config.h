@@ -40,6 +40,9 @@ struct SolverConfig {
 enum class Backend {
     Realtime,   // maximal-coordinate sequential-impulse solver (contacts + joint constraints)
     Reduced,    // reduced-coordinate Featherstone/ABA articulation (Phase E)
+    Diff,       // CPU differentiable ABA + smoothed compliant contact (physics_env::DiffVecEnv).
+                // NOT a PhysicsWorld — a VecEnv selector; runs the SAME templated diff ABA as Cuda, so
+                // CPU (Diff) and GPU (Cuda) are the same physics (parity-testable).
     Cuda,       // batched reduced + smoothed-contact ABA on the GPU (NVIDIA only, requires ENGINE_CUDA).
                 // Selected via the CudaVecEnv path — NOT createPhysicsWorld() (it is not a PhysicsWorld).
                 // The device kernel runs the SAME templated diff ABA as the CPU Reduced/diff path.

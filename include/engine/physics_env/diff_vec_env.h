@@ -25,6 +25,7 @@
 
 #include "engine/physics/diff/articulated.h"
 #include "engine/physics_env/environment.h"   // EnvConfig
+#include "engine/physics_env/vec_env_base.h"
 
 namespace engine::core { class ThreadPool; }
 
@@ -32,21 +33,21 @@ namespace engine::physics_env {
 
 namespace diff = ::engine::physics::diff;
 
-class DiffVecEnv {
+class DiffVecEnv : public IVecEnv {
 public:
     // `pool == nullptr` steps serially (the determinism reference; still valid).
     DiffVecEnv(size_t numEnvs, const EnvConfig& config, engine::core::ThreadPool* pool = nullptr);
 
-    size_t numEnvs() const { return states_.size(); }
-    size_t actDim()  const { return actDim_; }
-    size_t obsDim()  const { return obsDim_; }
+    size_t numEnvs() const override { return states_.size(); }
+    size_t actDim()  const override { return actDim_; }
+    size_t obsDim()  const override { return obsDim_; }
 
-    std::span<float>       actions()            { return actions_; }         // [N*actDim]
-    std::span<const float> observations() const { return obs_; }             // [N*obsDim]
+    std::span<float>       actions()            override { return actions_; }         // [N*actDim]
+    std::span<const float> observations() const override { return obs_; }             // [N*obsDim]
 
-    void reset(uint64_t seed);                                   // all envs → authored init, refresh obs
-    void resetMasked(std::span<const uint8_t> mask, uint64_t seed);  // reset only flagged envs
-    void step();                                                 // actions → tau → substeps → obs
+    void reset(uint64_t seed) override;                                   // all envs → authored init, refresh obs
+    void resetMasked(std::span<const uint8_t> mask, uint64_t seed) override;  // reset only flagged envs
+    void step() override;                                                 // actions → tau → substeps → obs
 
     // Escape hatch (tests / RSI): the per-env diff state.
     const diff::DiffState<float>& state(size_t i) const { return states_[i]; }
