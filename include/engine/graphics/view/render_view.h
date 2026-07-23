@@ -106,6 +106,12 @@ struct RenderView {
     float     clearColor[4] = {0.08f, 0.10f, 0.14f, 1.0f};
     DirectionalLight light{};                 // world directional (sun) + ambient for this view
 
+    // Opaque per-view app data, uploaded verbatim into the shader Globals (read as globals.appData).
+    // The engine never interprets it — game shaders (foliage/water/custom variants) decide its
+    // meaning (e.g. x = elapsed time; yzw = wind direction/strength). Keeps domain effects like
+    // vegetation wind in game shaders, not the engine ("the game decides what it passes").
+    glm::vec4 appData{0.0f};
+
     std::span<const RenderItem>   items;      // pre-sorted by mesh → material
     std::span<const InstanceData> instances;  // indexed by RenderItem instance ranges
     std::span<const MaterialGPU>  materials;  // indexed by InstanceData::materialIndex

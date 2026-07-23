@@ -45,6 +45,7 @@ struct GlobalUniforms {
     glm::vec4 fogColor{0.0f};     // rgb = base extinction tint (scene-referred)
     glm::vec4 fogInscatter{0.0f}; // rgb = sun in-scatter color (scene-referred)
     glm::vec4 fogParams{0.0f};    // x = density; y = heightFalloff; z = baseY; w = inscatter exponent
+    glm::vec4 appData{0.0f};      // opaque per-view app data (render::RenderView::appData); engine-agnostic
 };
 
 // CPU mirror of shadow.slang's ShadowGlobals.
@@ -359,6 +360,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         g.fogColor     = glm::vec4(fog.color, 0.0f);
         g.fogInscatter = glm::vec4(fog.inscatterColor, 0.0f);
         g.fogParams    = glm::vec4(fog.density, fog.heightFalloff, fog.baseHeight, fog.inscatterExponent);
+        g.appData      = view.appData;   // opaque; interpreted only by game shaders
 
         // Sub-allocate this view's upload data from the frame ring (distinct regions per view).
         const FrameRingAllocator::Alloc cam = I.ring.upload(&g, 1);

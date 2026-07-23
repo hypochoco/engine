@@ -28,6 +28,8 @@ struct Globals {
     float4   fogColor;     // rgb = base extinction tint (scene-referred / HDR)
     float4   fogInscatter; // rgb = sun in-scatter color (scene-referred)
     float4   fogParams;    // x = density; y = heightFalloff; z = baseY; w = inscatter exponent
+    float4   appData;      // opaque per-view app data (render::RenderView::appData). Engine-agnostic:
+                           // game shaders (foliage/water/etc.) define its meaning; stock mesh ignores it.
 };
 ConstantBuffer<Globals> globals;
 

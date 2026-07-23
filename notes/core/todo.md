@@ -143,6 +143,13 @@ deferred.
       `graphics.backface_cull` test (front drawn, back culled, `cull=None` draws both). Suite 195/0. Now
       `CullMode::None` on foliage genuinely draws both sides. Full write-up:
       [2026-07-23-backface-culling-winding.md](../investigations/realtime-rendering/2026-07-23-backface-culling-winding.md).
+- [x] **Per-view app-data channel — DONE (2026-07-23).** `render::RenderView::appData` (a `glm::vec4`)
+      is uploaded verbatim into the shader `Globals` (`globals.appData`); the engine never interprets it.
+      This is the general mechanism a game shader uses to receive its own per-frame inputs (e.g. wind:
+      x = elapsed time, yzw = direction/strength) without the engine knowing about wind — "the game
+      decides what it passes." Test `graphics.app_data` (probe shader outputs `globals.appData.rgb`;
+      uploaded (0.2,0.4,0.6) → pixel 51/102/153), built via `engine_compile_shaders` from a tst-local
+      shader (also dogfoods the consumer shader-compile path). Suite 196/0.
 - [ ] (game, deferred with Phase 0) grass-blade + leaf **content/meshes + the wind shader** (a foliage
       `.slang` that `#include`s `engine_mesh.slang`, adds height-weighted sway, built via the factory as a
       cull-none/cutout variant and routed per-item), instanced grass over the ground, leaves on the tree,
