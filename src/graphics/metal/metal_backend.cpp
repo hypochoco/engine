@@ -171,6 +171,8 @@ struct Device::Impl {
                          NS::SharedPtr<MTL::ComputePipelineState> computeState;
                          bool isCompute = false;
                          MTL::PrimitiveType topology = MTL::PrimitiveTypeTriangle;
+                         MTL::CullMode cull = MTL::CullModeNone;
+                         MTL::Winding  winding = MTL::WindingClockwise;   // framebuffer-space front winding
                          uint32_t generation = 0; bool alive = false; };
     struct RenderTargetSlot { uint32_t textureIndex = 0; uint32_t generation = 0; bool alive = false; };
     struct SamplerSlot { NS::SharedPtr<MTL::SamplerState> sampler; uint32_t generation = 0; bool alive = false; };
@@ -188,7 +190,14 @@ struct Device::Impl {
         pool.emplace_back();
         return static_cast<uint32_t>(pool.size() - 1);
     }
-    std::vector<uint32_t> freeBuffers, freeTextures, freeShaders, freePipelines, freeRenderTargets, freeSamplers;
+    std::vector<uint32_t> freeBuffers, freeShaders, freePipelines, freeRenderTargets, freeSamplers;
+    std::vector<uint32_t> freeTextures;
+
+    // Global bindless texture table: slot → texture pool index (0xFFFFFFFF = empty). Materials
+    // store a slot; CommandList::bindBindlessTextures binds each alive slot's texture to the
+    // fragment stage. Kept sparse-friendly with a free list; sized on demand up to kMax.
+    std::vector<uint32_t> bindlessSlots;      // slot -> texture pool index (or ~0u)
+    std::vector<uint32_t> freeBindlessSlots;
 };
 
 // -----------------------------------------------------------------------------
@@ -506,6 +515,14 @@ PipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) 
     I.pipelines[idx].state     = NS::TransferPtr(state);
     I.pipelines[idx].depthState = depthState;
     I.pipelines[idx].topology  = toMTLPrimitive(desc.topology);
+    I.pipelines[idx].cull      = (desc.raster.cull == CullMode::Back)  ? MTL::CullModeBack
+                               : (desc.raster.cull == CullMode::Front) ? MTL::CullModeFront
+                                                                       : MTL::CullModeNone;
+    // The engine's convention is "front = counter-clockwise around the outward normal" (world space;
+    // all primitives + loaded meshes follow it). The Metal winding maps 1:1. See
+    // notes/investigations/realtime-rendering/2026-07-23-backface-culling-winding.md.
+    I.pipelines[idx].winding   = (desc.raster.frontFace == FrontFace::CounterClockwise)
+                               ? MTL::WindingCounterClockwise : MTL::WindingClockwise;
     I.pipelines[idx].alive     = true;
     return PipelineHandle{ idx, I.pipelines[idx].generation };
 }
@@ -578,8 +595,41 @@ void Device::destroy(PipelineHandle h) {
     impl_->freePipelines.push_back(h.index);
 }
 
-uint32_t Device::registerBindlessTexture(TextureHandle) { return 0; }  // TODO(bindless)
-void     Device::unregisterBindlessTexture(uint32_t)    {}
+uint32_t Device::registerBindlessTexture(TextureHandle h) {
+    Impl& I = *impl_;
+    if (!h.valid() || h.index >= I.textures.size() || !I.textures[h.index].alive) return 0xFFFF'FFFFu;
+    uint32_t slot;
+    if (!I.freeBindlessSlots.empty()) {
+        slot = I.freeBindlessSlots.back();
+        I.freeBindlessSlots.pop_back();
+    } else {
+        if (I.bindlessSlots.size() >= kMaxBindlessTextures) return 0xFFFF'FFFFu;
+        slot = static_cast<uint32_t>(I.bindlessSlots.size());
+        I.bindlessSlots.push_back(0xFFFF'FFFFu);
+    }
+    I.bindlessSlots[slot] = h.index;
+    return slot;
+}
+
+void Device::unregisterBindlessTexture(uint32_t index) {
+    Impl& I = *impl_;
+    if (index >= I.bindlessSlots.size() || I.bindlessSlots[index] == 0xFFFF'FFFFu) return;
+    I.bindlessSlots[index] = 0xFFFF'FFFFu;
+    I.freeBindlessSlots.push_back(index);
+}
+
+void Device::generateMipmaps(TextureHandle h) {
+    Impl& I = *impl_;
+    if (!h.valid() || h.index >= I.textures.size() || !I.textures[h.index].alive) return;
+    MTL::Texture* tex = I.textures[h.index].texture.get();
+    if (!tex || tex->mipmapLevelCount() <= 1) return;
+    MTL::CommandBuffer* cmd = I.queue->commandBuffer();          // autoreleased
+    MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();   // autoreleased
+    blit->generateMipmaps(tex);
+    blit->endEncoding();
+    cmd->commit();
+    cmd->waitUntilCompleted();
+}
 
 // -----------------------------------------------------------------------------
 // Frame lifecycle
@@ -711,6 +761,8 @@ void CommandList::bindPipeline(PipelineHandle h) {
     }
     impl_->encoder->setRenderPipelineState(slot.state.get());
     if (slot.depthState) impl_->encoder->setDepthStencilState(slot.depthState.get());
+    impl_->encoder->setCullMode(slot.cull);
+    impl_->encoder->setFrontFacingWinding(slot.winding);
     impl_->topology = slot.topology;
 }
 
@@ -751,6 +803,19 @@ void CommandList::bindResources(const ResourceBindings& bindings) {
     }
 }
 void CommandList::setPushConstants(std::span<const std::byte>) { /* TODO */ }
+
+void CommandList::bindBindlessTextures(uint32_t baseSlot) {
+    // Bind every alive bindless-table entry to the fragment stage at baseSlot + slot. Only valid
+    // inside a rendering scope (material sampling is a fragment-stage concern).
+    if (!impl_->encoder) return;
+    Device::Impl* dev = impl_->dev;
+    for (uint32_t slot = 0; slot < dev->bindlessSlots.size(); ++slot) {
+        const uint32_t texIndex = dev->bindlessSlots[slot];
+        if (texIndex == 0xFFFF'FFFFu || texIndex >= dev->textures.size()) continue;
+        if (!dev->textures[texIndex].alive) continue;
+        impl_->encoder->setFragmentTexture(dev->textures[texIndex].texture.get(), baseSlot + slot);
+    }
+}
 
 void CommandList::setViewport(float x, float y, float width, float height,
                               float minDepth, float maxDepth) {

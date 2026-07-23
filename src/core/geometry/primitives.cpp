@@ -99,7 +99,9 @@ MeshData makeSphere(float radius, uint32_t rings, uint32_t sectors) {
             const uint32_t i1 = i0 + 1;
             const uint32_t i2 = i0 + vertsPerRow;
             const uint32_t i3 = i2 + 1;
-            m.indices.insert(m.indices.end(), { i0, i2, i1, i1, i2, i3 });
+            // CCW around the outward (radial) normal — matches quad/plane/box. The (phi,theta)
+            // parameterization has ∂phi×∂theta pointing inward, so we wind i0→i1→i2 (not i0→i2→i1).
+            m.indices.insert(m.indices.end(), { i0, i1, i2, i1, i3, i2 });
         }
     }
     return m;
@@ -109,11 +111,13 @@ MeshData makeBox(glm::vec3 h) {
     MeshData m;
     // Six faces, each with its own outward normal (flat shading) → 24 vertices, 36 indices.
     struct Face { glm::vec3 n, u, v; };   // normal + the two in-plane axes (half-extent scaled)
+    // Per-face (normal, u, v) with (u, v, n) right-handed so cross(u,v) == n ⇒ every face is wound
+    // counter-clockwise around its outward normal (the engine convention; required for back-face cull).
     const Face faces[6] = {
         { { 1, 0, 0}, {0, 0, -1}, {0, 1, 0} },   // +X
         { {-1, 0, 0}, {0, 0,  1}, {0, 1, 0} },   // -X
-        { { 0, 1, 0}, {1, 0,  0}, {0, 0, 1} },   // +Y
-        { { 0,-1, 0}, {1, 0,  0}, {0, 0,-1} },   // -Y
+        { { 0, 1, 0}, {0, 0,  1}, {1, 0, 0} },   // +Y
+        { { 0,-1, 0}, {0, 0, -1}, {1, 0, 0} },   // -Y
         { { 0, 0, 1}, {1, 0,  0}, {0, 1, 0} },   // +Z
         { { 0, 0,-1}, {-1,0,  0}, {0, 1, 0} },   // -Z
     };
@@ -174,7 +178,9 @@ MeshData makeCapsule(float radius, float halfHeight, uint32_t rings, uint32_t se
             const uint32_t i1 = i0 + 1;
             const uint32_t i2 = i0 + vertsPerRow;
             const uint32_t i3 = i2 + 1;
-            m.indices.insert(m.indices.end(), { i0, i2, i1, i1, i2, i3 });
+            // CCW around the outward (radial) normal — matches quad/plane/box. The (phi,theta)
+            // parameterization has ∂phi×∂theta pointing inward, so we wind i0→i1→i2 (not i0→i2→i1).
+            m.indices.insert(m.indices.end(), { i0, i1, i2, i1, i3, i2 });
         }
     }
     return m;

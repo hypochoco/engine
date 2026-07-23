@@ -218,6 +218,32 @@ void Renderer::setResources(const RenderResources& resources) { impl_->resources
 
 void Renderer::setMeshPipeline(rhi::PipelineHandle meshPipeline) { impl_->resources_.mesh = meshPipeline; }
 
+rhi::PipelineHandle Renderer::createMeshPipeline(const MeshPipelineVariant& v,
+                                                 rhi::Format targetColorFormat) const {
+    const Impl& I = *impl_;
+    // Match the forward pass's color attachment: RGBA16F when HDR, RGBA8 when FXAA writes an LDR
+    // intermediate, else the app's presentation format. (See Renderer::render's output chain.)
+    rhi::Format colorFmt = targetColorFormat;
+    if (I.config_.hdr)              colorFmt = rhi::Format::RGBA16Float;
+    else if (I.config_.aa.fxaa)     colorFmt = rhi::Format::RGBA8Unorm;
+    const uint32_t samples = I.config_.aa.msaaSamples > 1 ? I.config_.aa.msaaSamples : 1;
+
+    rhi::GraphicsPipelineDesc pd;
+    pd.vertex       = v.vertex;
+    pd.fragment     = v.fragment;
+    pd.vertexLayout = coreVertexLayout();
+    pd.topology     = rhi::Topology::TriangleList;
+    pd.raster       = { .polygonMode = rhi::PolygonMode::Fill, .cull = v.cull,
+                        .frontFace = rhi::FrontFace::CounterClockwise };
+    pd.depth        = { .test = true, .write = v.depthWrite, .op = v.depthCompare };
+    pd.blend        = v.blend;
+    pd.sampleCount  = samples;
+    pd.colorFormats = std::span<const rhi::Format>(&colorFmt, 1);
+    pd.depthFormat  = rhi::Format::Depth32Float;
+    pd.debugName    = v.debugName;
+    return I.device->createGraphicsPipeline(pd);
+}
+
 void Renderer::setClusterBinning(rhi::PipelineHandle binningPipeline) {
     impl_->resources_.clusterBinning = binningPipeline;
     impl_->config_.cluster.enabled   = binningPipeline.valid();
@@ -460,6 +486,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
 
         rhi::TextureHandle shadowTex = I.shadowTex;
         rhi::SamplerHandle shadowSamp = I.resources_.shadowSampler;
+        rhi::SamplerHandle matSampler = I.resources_.materialSampler;
         std::vector<rhi::TextureHandle> forwardReads;
         if (shadows) forwardReads.push_back(shadowTex);
 
@@ -487,7 +514,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         graph.addRasterPass(
             "forward", color, depth, view.width, view.height, forwardReads,
             [geom, vtx, idx, items, cam, inst, mat, lights, clustered, cparamsA, gridA, idxA,
-             shadows, shadowTex, shadowSamp, skyOn, skyPipe, skyA, meshPipe](rhi::CommandList& cl) {
+             shadows, shadowTex, shadowSamp, matSampler, skyOn, skyPipe, skyA, meshPipe](rhi::CommandList& cl) {
                 std::array<rhi::BufferBinding, 7> binds{};
                 uint32_t n = 0;
                 binds[n++] = { .binding = 0, .buffer = cam.buffer, .offset = cam.offset };
@@ -502,17 +529,25 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                 rhi::ResourceBindings rb;
                 rb.buffers = std::span<const rhi::BufferBinding>(binds.data(), n);
                 rhi::TextureBinding tb{ .binding = 0, .texture = shadowTex };
-                rhi::SamplerBinding sb{ .binding = 0, .sampler = shadowSamp };
+                std::array<rhi::SamplerBinding, 2> sampBinds{};
+                uint32_t ns = 0;
                 if (shadows) {
                     rb.textures = std::span<const rhi::TextureBinding>(&tb, 1);
-                    rb.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
+                    sampBinds[ns++] = { .binding = 0, .sampler = shadowSamp };
                 }
+                // Material sampler at slot 1 drives the bindless material textures (albedo/normal).
+                if (matSampler.valid()) sampBinds[ns++] = { .binding = 1, .sampler = matSampler };
+                if (ns) rb.samplers = std::span<const rhi::SamplerBinding>(sampBinds.data(), ns);
 
                 cl.bindResources(rb);
+                // Bindless material textures occupy fragment texture slots [1..N] (slot 0 = shadow map).
+                if (matSampler.valid()) cl.bindBindlessTextures(1);
                 cl.bindVertexBuffer(vtx, 0);
                 cl.bindIndexBuffer(idx, rhi::IndexType::Uint32);
-                cl.bindPipeline(meshPipe);   // one opaque scene pipeline for all items (single-pipeline scene)
+                // Per-item pipeline: an item may override the default mesh pipeline with a variant
+                // (foliage/terrain/etc.); resources stay bound across pipeline switches on the encoder.
                 for (const auto& item : items) {
+                    cl.bindPipeline(item.pipeline.valid() ? item.pipeline : meshPipe);
                     const auto range = geom->range(item.mesh);
                     cl.drawIndexed(range.indexCount, item.instanceCount,
                                    range.firstIndex, range.vertexOffset, item.firstInstance);

@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Reusable CMake helpers (e.g. EngineShaders for slangc compilation), for the engine + consumers.
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 # Default to an OPTIMIZED build when the user doesn't specify one. Without this a plain
 # `cmake -S . -B build` yields an unoptimized (no -O, no NDEBUG) build — physics is ~20-50x
 # slower there, which makes the interactive visuals run in slow motion. Single-config generators

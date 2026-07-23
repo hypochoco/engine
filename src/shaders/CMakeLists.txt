@@ -1,22 +1,16 @@
 # shaders
 #
-# Compiles single-source .slang shaders with slangc to the active backend's format:
-# a Metal library (.metallib) on Apple, SPIR-V (.spv) elsewhere. Outputs land in
-# ${CMAKE_BINARY_DIR}/shaders; consumers get that path via the ENGINE_SHADER_DIR define.
+# Compiles the engine's Slang shaders via the reusable engine_compile_shaders() helper
+# (cmake/EngineShaders.cmake) to the active backend's format (.metallib on Apple, .spv elsewhere).
+# Consumers reuse the SAME helper to build their own shader variants against the shared contract in
+# engine_mesh.slang (exposed via ENGINE_SHADER_INCLUDE_DIR).
 
-find_program(SLANGC
-    NAMES slangc
-    HINTS "${CMAKE_SOURCE_DIR}/external/slang/bin"
-)
-if(NOT SLANGC)
-    message(FATAL_ERROR
-        "slangc not found. Run src/tools/get_slang.sh to download the Slang toolchain into external/slang/.")
-endif()
+set(ENGINE_SLANG_DIR "${CMAKE_SOURCE_DIR}/external/slang" CACHE PATH "Vendored Slang toolchain")
+include(EngineShaders)
 
 set(SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-file(MAKE_DIRECTORY "${SHADER_OUT_DIR}")
 
-# List of shader sources (add new .slang files here).
+# Shader sources WITH entry points (engine_mesh.slang is an include-only contract, not listed here).
 set(SHADER_SOURCES
     triangle.slang
     mesh.slang
@@ -27,29 +21,16 @@ set(SHADER_SOURCES
     sky.slang
     fxaa.slang
 )
+list(TRANSFORM SHADER_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 
-set(SHADER_OUTPUTS)
-foreach(src ${SHADER_SOURCES})
-    get_filename_component(name "${src}" NAME_WE)
-    set(in "${CMAKE_CURRENT_SOURCE_DIR}/${src}")
-    if(APPLE)
-        set(out "${SHADER_OUT_DIR}/${name}.metallib")
-        set(target_flag "metallib")
-    else()
-        set(out "${SHADER_OUT_DIR}/${name}.spv")
-        set(target_flag "spirv")
-    endif()
-    add_custom_command(
-        OUTPUT "${out}"
-        COMMAND "${SLANGC}" "${in}" -target ${target_flag} -matrix-layout-column-major -o "${out}"
-        MAIN_DEPENDENCY "${in}"
-        COMMENT "slangc ${src} -> ${name} (${target_flag})"
-        VERBATIM
-    )
-    list(APPEND SHADER_OUTPUTS "${out}")
-endforeach()
+engine_compile_shaders(
+    TARGET       shaders
+    OUT_DIR      "${SHADER_OUT_DIR}"
+    SOURCES      ${SHADER_SOURCES}
+    INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS      "${CMAKE_CURRENT_SOURCE_DIR}/engine_mesh.slang"
+)
 
-add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
-
-# Expose the output directory to consumers.
+# Expose the compiled-output dir and the shader INCLUDE dir (the shared Slang contract) to consumers.
 set(ENGINE_SHADER_DIR "${SHADER_OUT_DIR}" CACHE INTERNAL "Compiled shader output directory")
+set(ENGINE_SHADER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "Engine shader include dir (engine_mesh.slang)")

@@ -70,4 +70,36 @@ void extractViews(ecs::World& world, const ExtractedScene& scene,
         });
 }
 
+void cullToFrustum(const core::Frustum& frustum, const ExtractedScene& in,
+                   std::span<const core::Aabb> localBoundsPerItem, ExtractedScene& out) {
+    out.instances.clear();
+    out.items.clear();
+
+    // No bounds provided ⇒ don't cull (straight copy), so callers can enable culling per view.
+    if (localBoundsPerItem.size() != in.items.size()) {
+        out.instances = in.instances;
+        out.items     = in.items;
+        return;
+    }
+
+    for (std::size_t i = 0; i < in.items.size(); ++i) {
+        const render::RenderItem& item = in.items[i];
+        const core::Aabb& local = localBoundsPerItem[i];
+
+        const uint32_t first = static_cast<uint32_t>(out.instances.size());
+        for (uint32_t k = 0; k < item.instanceCount; ++k) {
+            const render::InstanceData& inst = in.instances[item.firstInstance + k];
+            if (frustum.intersects(local.transformed(inst.model)))
+                out.instances.push_back(inst);
+        }
+        const uint32_t kept = static_cast<uint32_t>(out.instances.size()) - first;
+        if (kept == 0) continue;   // whole batch culled → drop the item
+
+        render::RenderItem culled = item;
+        culled.firstInstance = first;
+        culled.instanceCount = kept;
+        out.items.push_back(culled);
+    }
+}
+
 } // namespace engine::scene

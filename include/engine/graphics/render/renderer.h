@@ -21,6 +21,22 @@ namespace engine::render {
 
 class GeometryStore;
 
+// A variant of the forward mesh pipeline. The Renderer fills in everything tied to its pass
+// contract (vertex layout, HDR/MSAA-aware color format, depth format, sample count, bindings); the
+// caller supplies only its shaders + a few intent knobs. This is how a game builds an opaque,
+// foliage (CullMode::None), or otherwise-customized pipeline WITHOUT touching backend (Metal/Vulkan)
+// code or reverse-engineering the pass's formats — it authors a Slang shader (see
+// shaders/engine_mesh.slang) and hands the compiled blob here.
+struct MeshPipelineVariant {
+    rhi::ShaderHandle vertex;
+    rhi::ShaderHandle fragment;
+    rhi::CullMode     cull        = rhi::CullMode::Back;      // None for double-sided foliage
+    rhi::BlendPreset  blend       = rhi::BlendPreset::Opaque;
+    bool              depthWrite  = true;
+    rhi::CompareOp    depthCompare = rhi::CompareOp::Less;    // e.g. Always for overlays/decals
+    const char*       debugName   = nullptr;
+};
+
 class Renderer {
 public:
     Renderer(rhi::Device&, GeometryStore&);
@@ -48,6 +64,16 @@ public:
     // Set the opaque scene (mesh) pipeline the forward pass binds for every RenderItem. Convenience
     // wrapper over RenderResources.mesh (the app builds the pipeline; the engine builds none).
     void setMeshPipeline(rhi::PipelineHandle meshPipeline);
+
+    // Build a forward-pass-compatible mesh pipeline from app-supplied shaders + a few knobs. The
+    // engine fills in the vertex layout, the HDR/MSAA-aware color format (from the current config;
+    // pass the presentation `targetColorFormat` used when neither HDR nor FXAA is active), the depth
+    // format, sample count, and binding layout — so a game builds opaque/foliage/variant pipelines
+    // without knowing the pass's internal formats or writing any backend code. NOTE: because the
+    // color format + sample count are derived from the CURRENT config, set the config (HDR/MSAA/FXAA)
+    // before creating pipelines, and rebuild them if those change.
+    rhi::PipelineHandle createMeshPipeline(const MeshPipelineVariant&,
+                                           rhi::Format targetColorFormat = rhi::Format::RGBA8Unorm) const;
 
     // --- Feature setters (thin wrappers over the config/resources above; kept for convenience) --
     // Enable clustered forward+ lighting. Pass a compute pipeline built from cluster.metallib

@@ -118,6 +118,13 @@ public:
     void bindVertexBuffer(BufferHandle, uint32_t slot = 0);
     void bindIndexBuffer(BufferHandle, IndexType);
     void bindResources(const ResourceBindings&);
+
+    // Binds the Device's global bindless texture table to the fragment stage: table entry `i` is
+    // bound at texture slot `baseSlot + i`. Call inside a rendering scope after bindResources (which
+    // may bind explicit textures at low slots, e.g. a shadow map at 0). Shaders declare a matching
+    // fixed-size texture array (see Device::kMaxBindlessTextures) starting at `baseSlot`.
+    void bindBindlessTextures(uint32_t baseSlot);
+
     void setPushConstants(std::span<const std::byte>);
 
     void setViewport(float x, float y, float width, float height,

@@ -27,6 +27,121 @@ Not commitments — a backlog to reason about.
       `Renderer` (graphics refactor item 7), and carry the same headless path through the Vulkan
       port. (The parked legacy Vulkan `Graphics` still assumes a window + swapchain end to end.)
 
+## Active milestone: "a small, performant outdoor arena scene" (game-on-engine)
+
+See goals.md + full plan: [2026-07-23-outdoor-arena-milestone.md](../investigations/realtime-rendering/2026-07-23-outdoor-arena-milestone.md).
+A small outdoor arena — **grassy ground with dirt patches + small rocks, local atmosphere, a tree
+with leaves + grass waving in the wind** — built as a **separate game repo** that takes this engine
+as a dependency. First real game-on-engine (exercises the engine↔app split). Must be **performant**:
+it's an arena for (later) fighting characters, so the static scene leaves a big budget for animated
+characters. The **app supplies content + shaders** (grass/wind/ground-blend, pipeline builds); the
+**engine supplies the missing mechanisms** below. Characters, non-flat terrain, networking are
+deferred.
+
+**Phase 0 — Game repo scaffold + baseline lit scene** (no new engine features):
+- [ ] New repo (engine as git submodule + `add_subdirectory`); windowed loop, camera entity + fly
+      controller, lit ground plane + boxes, existing sky/shadows/fog/MSAA from app-built pipelines
+      (lift `tst/graphics/visual/atmosphere_scene`). Establishes the perf baseline.
+
+**Phase 1 — Asset + texture foundation (engine: `core` + `rhi`):** ✅ DONE (2026-07-23)
+- [x] **`core::io::readFile` + `core::image`** (`Image` + `loadImage`/`loadImageFromMemory` via stb_image).
+      `include/engine/core/{io/io.h,image/image.h}` + `src/core/{io,image}`. stb impl compiled in
+      `image.cpp` only; gated `ENGINE_ASSET_LOADERS` (training-only → invalid-Image stubs). Test
+      `core.image_io_roundtrip` (self-contained TGA round trip).
+- [x] **`core::geometry::loadObj`** (tinyobj → `ModelData`, faces grouped by material, corner-dedup)
+      + **`computeTangents`** (per-vertex, Gram-Schmidt, ±1 handedness, degenerate-UV → w=0).
+      `include/engine/core/geometry/obj_loader.h` + `src/core/geometry/obj_loader.cpp`
+      (`namespace engine::geometry`). Test `core.obj_loader_quad`.
+- [x] **RHI bindless texture table — implemented in the Metal backend** (`Device::registerBindlessTexture`/
+      `unregisterBindlessTexture`, real slot table; `kMaxBindlessTextures=64`) + **`Device::generateMipmaps`**
+      (blit) + **`CommandList::bindBindlessTextures(baseSlot)`**. Bounded texture-array bindless (Slang packs
+      `materialTextures[64]` at fragment texture slots 1..64; shadow map stays at 0; material sampler at
+      sampler slot 1) — no argument buffers/residency needed, fully controllable. Explicit single-texture
+      binding kept for post passes.
+- [x] **Tangent attribute on `core::Vertex`** (`glm::vec4 tangent`, w=handedness) + `render::coreVertexLayout()`
+      attr loc 4 + `mesh.slang` VSInput. Vertex-layout change verified parity-preserving (all graphics pixel
+      tests green).
+- [x] End-to-end proof `graphics.bindless_textured`: albedo bindless sampling (exact texel), tangent-space
+      normal mapping (flat R=181 → tilted R=213), mipmap generation (minified checkerboard → gray 128), all
+      through the real `mesh.slang` + `Renderer` (opt-in via `RenderResources.materialSampler` +
+      `MaterialGPU.baseColorTexture`/`normalTexture`, `-1` defaults keep parity). Benchmark
+      `graphics.bindless_textures` (upload+mipgen throughput; textured draw ≈ untextured, negligible overhead).
+      Full suite 188/0; training-only build still compiles (gated loaders).
+
+**Phase 2 — Material upgrade + ground & props:**
+- [x] Extended `core::Material` + `render::MaterialGPU` (metallic-roughness workflow) — DONE (2026-07-23):
+      albedo + normal + **metallic/roughness (+ MR texture, glTF G/B pack)** + **emissive (factor + texture)**
+      + **occlusion texture** + **alpha-cutout flag (`MaterialFlagAlphaCutout`) + `alphaCutoff`**. `mesh.slang`
+      samples all of them, does alpha-cutout `discard`, applies AO to ambient, and adds a **gated Cook-Torrance
+      GGX sun specular** (energy-conserving diffuse ×(1−metallic)). All gated so a default material stays pure
+      Lambert ⇒ existing pixel tests byte-identical. GPU layout reflection-checked (80B scalar pack). `loadObj`
+      fills baseColor/emissive/metallic/roughness/alpha from the .mtl. Test `graphics.material_features`
+      (emissive-unlit, glossy peak > Lambert, cutout on/off). Suite 189/0; training-only core still builds.
+- [ ] (game, deferred with Phase 0) Subdivided ground mesh with a **grass↔dirt blend** shader (mask/vertex-weight);
+      scattered **rock** props (instanced loaded meshes); a **tree** mesh.
+
+**Phase 3 — Vegetation support (engine mechanisms; wind MODEL is game-side)** ✅ DONE (2026-07-23)
+> Design correction (2026-07-23): a *specific wind model* is content, not engine — it contradicts
+> "the app supplies shaders." So the engine provides the general *mechanisms* to build/route a game's
+> foliage shader; the wind look lives in a game shader. (An earlier pass had baked wind into the stock
+> `mesh.slang`; that was reverted.)
+- [x] **General material features** (kept, content-agnostic): **alpha cutout** (`MaterialFlagAlphaCutout`
+      + `alphaCutoff`, discard) + **two-sided lighting** (`MaterialFlagDoubleSided` → flip the normal to
+      face the viewer on back faces via `SV_IsFrontFace`). Test `graphics.two_sided_lighting` (back face
+      0→765 lit).
+- [x] **Pipeline factory** `Renderer::createMeshPipeline(MeshPipelineVariant, targetColorFormat)` — the
+      engine owns the forward-pass contract (vertex layout, HDR/FXAA/MSAA-aware color format, depth format,
+      sample count, bindings); the app passes only its **compiled Slang shader blob** + intent knobs
+      (`cull`/`blend`/`depthWrite`/`depthCompare`). So a game builds opaque/foliage/overlay variants with
+      **no backend (Metal/Vulkan) code and no reverse-engineering** the pass formats.
+- [x] **Per-item pipeline selection** — `RenderItem.pipeline` (invalid ⇒ default `RenderResources.mesh`);
+      forward pass binds per item so opaque + foliage/terrain variants coexist in one view. Test
+      `graphics.pipeline_variants` (far item: default pipe ⇒ depth-occluded green; overlay variant ⇒ red).
+- [x] **Shared Slang include** `shaders/engine_mesh.slang` — the binding/vertex contract (Globals/Instance/
+      Material/PointLight/VSInput/VSOutput/bindless table) + `standardVertex()` + `shadeSurface()` helpers;
+      `mesh.slang` is now a thin include+entry-points shader. Exposed via `ENGINE_SHADER_INCLUDE_DIR` so a
+      game foliage shader `#include`s it and reuses the contract (adds only its wind vertex math).
+- [x] **Reusable CMake shader helper** `cmake/EngineShaders.cmake` `engine_compile_shaders(TARGET/OUT_DIR/
+      SOURCES/INCLUDE_DIRS/DEPENDS)` — slangc → metallib/spv with backend selection + include-dependency
+      tracking; the engine's `src/shaders` uses it and consumers include the module. Suite 191/0; training-only builds.
+- [x] **Honor `RasterState.cull` in the backend — DONE (2026-07-23).** The Metal backend now applies
+      `setCullMode` + `setFrontFacingWinding`. Root cause of the earlier breakage: the primitives were
+      inconsistently wound (`makeSphere`/`makeCapsule` CW-outward; `makeBox` `±Y` faces CW-outward) —
+      fixed so ALL geometry is **CCW-outward** (the engine convention), after which the winding maps 1:1
+      (`FrontFace::CounterClockwise` → `MTL::WindingCounterClockwise`, no Y-flip). `createMeshPipeline`
+      defaults to `cull=Back`; fullscreen passes were already front-wound. Full parity held + dedicated
+      `graphics.backface_cull` test (front drawn, back culled, `cull=None` draws both). Suite 195/0. Now
+      `CullMode::None` on foliage genuinely draws both sides. Full write-up:
+      [2026-07-23-backface-culling-winding.md](../investigations/realtime-rendering/2026-07-23-backface-culling-winding.md).
+- [ ] (game, deferred with Phase 0) grass-blade + leaf **content/meshes + the wind shader** (a foliage
+      `.slang` that `#include`s `engine_mesh.slang`, adds height-weighted sway, built via the factory as a
+      cull-none/cutout variant and routed per-item), instanced grass over the ground, leaves on the tree,
+      and **distance fade / density LOD** + grass instance-count benchmark.
+
+**Phase 4 — Atmosphere polish + performance pass:**
+- [ ] Tune sky/height-fog/aerial-perspective for the local look; (stretch) sun shafts / bounded local
+      fog volume.
+- [x] **Frustum culling** — DONE (2026-07-23). Core math `engine/core/math/bounds.h` (`core::Aabb` with
+      `transformed(mat4)`; `core::Frustum::fromViewProj` Gribb-Hartmann for 0..1 clip z + AABB/sphere p-vertex
+      tests) + `core::computeBounds(MeshData)` (`geometry/bounds.h`). `scene::cullToFrustum(frustum, in, span<Aabb>
+      localBoundsPerItem, out)` compacts an ExtractedScene to instances whose world AABB (local box ×
+      InstanceData.model) intersects the frustum; `scene::viewFrustum(view)` helper. Opt-in + lossless
+      (empty bounds ⇒ passthrough); `extract()` unchanged (parity). Tests: `core.aabb_transform`,
+      `core.frustum_cull`, `graphics.frustum_cull` (1/5 kept + full-vs-culled 0 pixel diffs). Benchmark
+      `graphics.frustum_cull` ≈ 58–60 M instances/s (single-threaded, O(N)). End-to-end WITHOUT vs WITH
+      culling scales with per-object GPU cost: trivial 12-tri boxes 1.1–1.9× (cull-bound, savings ≈ cull
+      cost) but heavy ~2.3K-tri meshes **30–34×** (20k spheres 30 ms → 1 ms) — a big win for real meshes;
+      the naive linear cull only bottlenecks at huge counts of trivial geometry (→ parallelize/coarse-cull
+      later). Suite 194/0. (BVH / hierarchical cull is the later scaling step.)
+- [ ] (only if needed) CSM if the single directional shadow map can't cover the arena.
+- [ ] **(follow-up, perf) parallelize / coarse-cull `cullToFrustum`** — the current cull is single-threaded
+      O(N); it becomes the bottleneck only at huge counts of trivial geometry (see the benchmark). Options:
+      `ThreadPool::parallelFor` over instances, and/or a coarse grid/BVH so not every instance is tested.
+      Deferred (not needed for the arena's instance counts).
+
+**Phase 5 — (later, out of scope) characters:** skinned mesh + animation, a character controller,
+hook the physics humanoid/fighters into the arena.
+
 ## Driving milestone: "a ball rolling down a plane"
 
 See goals.md. Long-term vertical slice: sphere rolling down an inclined plane, plus the

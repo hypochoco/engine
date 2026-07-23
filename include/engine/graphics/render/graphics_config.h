@@ -107,6 +107,7 @@ struct RenderResources {
     rhi::SamplerHandle  tonemapSampler;
     rhi::SamplerHandle  shadowSampler;   // Nearest (PCF taps offset in-shader)
     rhi::SamplerHandle  fxaaSampler;     // linear clamp
+    rhi::SamplerHandle  materialSampler; // bindless material textures (sampler slot 1); enables textured materials
 };
 
 // ---- Override layering (G2) ------------------------------------------------------------------
