@@ -152,7 +152,18 @@ struct Device::Impl {
     dispatch_semaphore_t frameSem = nullptr;
     uint64_t             frameCounter = 0;
 
-    ~Impl() { if (frameSem) dispatch_release(frameSem); }
+    // Block until every in-flight frame's completion handler has signaled the throttle semaphore,
+    // restoring it to its initial count. Windowed frames signal asynchronously, so this is needed
+    // both as waitIdle() and before releasing the semaphore — libdispatch TRAPS if a semaphore is
+    // released while its value is below the value it was created with ("still in use").
+    void drainFramesInFlight() {
+        if (!frameSem) return;
+        const uint32_t fif = std::max(config.framesInFlight, 1u);
+        for (uint32_t i = 0; i < fif; ++i) dispatch_semaphore_wait(frameSem, DISPATCH_TIME_FOREVER);
+        for (uint32_t i = 0; i < fif; ++i) dispatch_semaphore_signal(frameSem);
+    }
+
+    ~Impl() { if (frameSem) { drainFramesInFlight(); dispatch_release(frameSem); } }
 
     // Windowed swapchain (CAMetalLayer); unused in headless mode.
     CA::MetalLayer* layer      = nullptr;   // retained by the .mm shim
@@ -689,7 +700,11 @@ void Device::endFrame(FrameContext&& f) {
     if (f.impl_->pool) { f.impl_->pool->release(); f.impl_->pool = nullptr; }
 }
 
-void Device::waitIdle() { /* per-frame waitUntilCompleted covers the headless path for now */ }
+void Device::waitIdle() {
+    // Block until all in-flight frames complete (headless already blocks per-frame; windowed frames
+    // signal asynchronously). Drains + restores the frames-in-flight semaphore.
+    if (impl_) impl_->drainFramesInFlight();
+}
 
 uint32_t Device::framesInFlight() const { return std::max(impl_->config.framesInFlight, 1u); }
 

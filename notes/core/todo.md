@@ -42,21 +42,36 @@ deferred.
 - [~] New repo (engine as git submodule + `add_subdirectory`); windowed loop, camera entity + fly
       controller, lit ground plane + boxes, existing sky/shadows/fog/MSAA from app-built pipelines
       (lift `tst/graphics/visual/atmosphere_scene`). Establishes the perf baseline.
-      **STARTED (2026-07-23): `~/Projects/sim-2`** — git repo + engine submodule (`external/engine`,
-      nested submodules recursive-init'd, slang fetched via `get_slang.sh`); `CMakeLists.txt`
-      (`add_subdirectory(external/engine)` + link `engine::engine`); `src/main.cpp` = windowed GLFW
-      loop, `Device::createWindowed`, ECS ground plane + boxes (colored), camera entity + `FlyController`
-      + `GlfwInput`, directional sun + **procedural sky**, back-face-culled mesh pipeline via
-      `Renderer::createMeshPipeline`. Builds + links (`sim2`, 746 KB); building the `sim2` target alone
-      skips the engine's own tests. Not run (windowed). Next: textured ground/props + shadows/fog/MSAA.
-  - **Engine consumption findings (fix in the engine):**
-    - 🔴 **`src/shaders/CMakeLists.txt` sets `ENGINE_SLANG_DIR` from `CMAKE_SOURCE_DIR`** — that's the
-      *consumer's* root when the engine is `add_subdirectory`'d, so `slangc` isn't found. Fix: anchor to
-      the engine's own dir (`CMAKE_CURRENT_SOURCE_DIR/../../external/slang`). (sim-2 works around it by
-      pre-setting `ENGINE_SLANG_DIR` before `add_subdirectory`.)
-    - 🟠 **No `ENGINE_BUILD_TESTS` option** — `add_subdirectory(external/engine)` configures the engine's
-      tests/benchmarks/visuals. Add an option (default ON) so consumers can skip them. (Mitigated for now
-      by building only the `sim2` target.)
+      **IN PROGRESS (2026-07-23): `~/Projects/sim-2`** (game repo; its own notes in `sim-2/notes/`).
+      Engine submodule (`external/engine`, recursive submodules + slang via `get_slang.sh`);
+      `add_subdirectory(external/engine)` + link `engine::engine`. Built so far:
+      - Windowed GLFW loop + `Device::createWindowed`; camera entity + `FlyController` + `GlfwInput`;
+        render loop via `scene::extract`/`extractViews`. Mesh pipeline via `Renderer::createMeshPipeline`
+        (back-face culled); procedural **sky + sun + height fog** (atmosphere).
+      - **Placeholder arena** (`src/arena.{h,cpp}`): named material palette (single source of surface
+        colors) + deterministic scatter — subdivided grassy ground, ~6 dirt patches, ~16 rocks, a tree
+        (trunk + canopy), ~500 grass tufts. All engine primitives; structured so real assets slot in.
+      - **Simple procedural texture maker** (`src/procgen.{h,cpp}`): tileable value-noise albedo →
+        engine bindless path (`createTexture` + `generateMipmaps` + `registerBindlessTexture`); wired
+        onto grass/dirt/rock/bark palette slots (`baseColorTexture`).
+      - **RAN** (windowed) — renders the arena; "rough but a good start". `sim2` ≈ 763 KB; building the
+        `sim2` target alone skips the engine's tests.
+      Next (sim-2 roadmap): UV tiling for ground detail; grass **foliage/wind shader** (author in sim-2 via
+      `EngineShaders.cmake` + `engine_mesh.slang`, cutout + `CullMode::None` variant, per-item pipeline);
+      normal/ORM textures; shadows + MSAA; frustum culling in the loop; characters later.
+  - **Engine consumption findings — FIXED (2026-07-23):**
+    - ✅ (`f00a22f`) `src/shaders/CMakeLists.txt` now anchors `ENGINE_SLANG_DIR` to the engine's own dir
+      (`CMAKE_CURRENT_SOURCE_DIR/../../external/slang`) instead of `CMAKE_SOURCE_DIR` (which was the
+      consumer's root). sim-2's workaround removed.
+    - ✅ (`f00a22f`) Added `ENGINE_BUILD_TESTS` option (defaults to `PROJECT_IS_TOP_LEVEL`) so consumers
+      skip the engine's tests/benchmarks/visuals automatically; the engine's own build still builds them.
+    - ✅ **Windowed teardown `SIGTRAP`** — `Device::Impl::~Impl` released the frames-in-flight
+      `dispatch_semaphore` while windowed frames were still in flight (completion handlers signal it
+      asynchronously) and `waitIdle()` was a no-op ⇒ libdispatch trapped on close. Fixed:
+      `drainFramesInFlight()` (acquire fif + restore) drains before release, and `waitIdle()` now drains.
+      Found by running sim-2 and closing the window. (Suite 195/0; headless teardown unaffected.)
+
+**Phase 1 — Asset + texture foundation (engine: `core` + `rhi`):** ✅ DONE (2026-07-23)
 
 **Phase 1 — Asset + texture foundation (engine: `core` + `rhi`):** ✅ DONE (2026-07-23)
 - [x] **`core::io::readFile` + `core::image`** (`Image` + `loadImage`/`loadImageFromMemory` via stb_image).
