@@ -5,7 +5,10 @@
 # Consumers reuse the SAME helper to build their own shader variants against the shared contract in
 # engine_mesh.slang (exposed via ENGINE_SHADER_INCLUDE_DIR).
 
-set(ENGINE_SLANG_DIR "${CMAKE_SOURCE_DIR}/external/slang" CACHE PATH "Vendored Slang toolchain")
+# Anchor to the ENGINE's own directory (src/shaders → engine root/external/slang), NOT
+# CMAKE_SOURCE_DIR — the latter is the CONSUMER's root when the engine is add_subdirectory'd, which
+# would look for slang in the wrong place.
+set(ENGINE_SLANG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../external/slang" CACHE PATH "Vendored Slang toolchain")
 include(EngineShaders)
 
 set(SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")

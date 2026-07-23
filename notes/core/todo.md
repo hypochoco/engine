@@ -39,9 +39,24 @@ characters. The **app supplies content + shaders** (grass/wind/ground-blend, pip
 deferred.
 
 **Phase 0 — Game repo scaffold + baseline lit scene** (no new engine features):
-- [ ] New repo (engine as git submodule + `add_subdirectory`); windowed loop, camera entity + fly
+- [~] New repo (engine as git submodule + `add_subdirectory`); windowed loop, camera entity + fly
       controller, lit ground plane + boxes, existing sky/shadows/fog/MSAA from app-built pipelines
       (lift `tst/graphics/visual/atmosphere_scene`). Establishes the perf baseline.
+      **STARTED (2026-07-23): `~/Projects/sim-2`** — git repo + engine submodule (`external/engine`,
+      nested submodules recursive-init'd, slang fetched via `get_slang.sh`); `CMakeLists.txt`
+      (`add_subdirectory(external/engine)` + link `engine::engine`); `src/main.cpp` = windowed GLFW
+      loop, `Device::createWindowed`, ECS ground plane + boxes (colored), camera entity + `FlyController`
+      + `GlfwInput`, directional sun + **procedural sky**, back-face-culled mesh pipeline via
+      `Renderer::createMeshPipeline`. Builds + links (`sim2`, 746 KB); building the `sim2` target alone
+      skips the engine's own tests. Not run (windowed). Next: textured ground/props + shadows/fog/MSAA.
+  - **Engine consumption findings (fix in the engine):**
+    - 🔴 **`src/shaders/CMakeLists.txt` sets `ENGINE_SLANG_DIR` from `CMAKE_SOURCE_DIR`** — that's the
+      *consumer's* root when the engine is `add_subdirectory`'d, so `slangc` isn't found. Fix: anchor to
+      the engine's own dir (`CMAKE_CURRENT_SOURCE_DIR/../../external/slang`). (sim-2 works around it by
+      pre-setting `ENGINE_SLANG_DIR` before `add_subdirectory`.)
+    - 🟠 **No `ENGINE_BUILD_TESTS` option** — `add_subdirectory(external/engine)` configures the engine's
+      tests/benchmarks/visuals. Add an option (default ON) so consumers can skip them. (Mitigated for now
+      by building only the `sim2` target.)
 
 **Phase 1 — Asset + texture foundation (engine: `core` + `rhi`):** ✅ DONE (2026-07-23)
 - [x] **`core::io::readFile` + `core::image`** (`Image` + `loadImage`/`loadImageFromMemory` via stb_image).

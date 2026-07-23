@@ -33,6 +33,11 @@ option(ENGINE_TRAINING_ONLY "Build only the headless training surface (core+phys
 # Mac/Metal build are entirely unaffected. Enable on a Linux/NVIDIA box with -DENGINE_CUDA=ON
 # (point CMake at the toolkit via -DCMAKE_CUDA_COMPILER=/path/to/nvcc or -DCUDAToolkit_ROOT=...).
 option(ENGINE_CUDA "Build the CUDA physics backend (NVIDIA only; gated if(NOT APPLE))" OFF)
+
+# Build the engine's own tests/benchmarks/visuals. Defaults ON when the engine is the top-level
+# project (its own dev build) and OFF when it's consumed via add_subdirectory (a game/tool doesn't
+# want the engine's test suite in its build). Consumers can force it on with -DENGINE_BUILD_TESTS=ON.
+option(ENGINE_BUILD_TESTS "Build the engine's tests/benchmarks/visuals" ${PROJECT_IS_TOP_LEVEL})
 if(ENGINE_CUDA)
     if(APPLE)
         message(FATAL_ERROR "ENGINE_CUDA=ON is unsupported on Apple (CUDA does not run on macOS). "
@@ -87,12 +92,14 @@ endif()
 add_subdirectory(modules)
 
 if(NOT ENGINE_TRAINING_ONLY)
-    # shaders (compiled via slangc)
+    # shaders (compiled via slangc) — needed at runtime by consumers, so always built here.
     add_subdirectory(src/shaders)
 
-    # tests
-    enable_testing()
-    add_subdirectory(tst)
+    # tests (engine's own; skipped by default when the engine is consumed as a subdirectory)
+    if(ENGINE_BUILD_TESTS)
+        enable_testing()
+        add_subdirectory(tst)
+    endif()
 endif()
 
 # Graphics-free aggregate for headless training / the Python binding — always available.
