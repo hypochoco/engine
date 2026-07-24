@@ -31,7 +31,7 @@ struct Globals {
     float4   appData;      // opaque per-view app data (render::RenderView::appData). Engine-agnostic:
                            // game shaders (foliage/water/etc.) define its meaning; stock mesh ignores it.
 };
-ConstantBuffer<Globals> globals;
+[[vk::binding(0)]] ConstantBuffer<Globals> globals;
 
 // Material feature flags (must match render::MaterialFlags). General, content-agnostic surface
 // properties — domain effects like vegetation wind belong in game shaders, not the engine.
@@ -45,7 +45,7 @@ struct Instance {
     uint     materialIndex;
     uint3    _pad;
 };
-StructuredBuffer<Instance> instances;
+[[vk::binding(1)]] StructuredBuffer<Instance> instances;
 
 // ---- Buffer 2: materials (metallic-roughness) ----------------------------------------------------
 struct Material {
@@ -62,7 +62,7 @@ struct Material {
     int    occlusionTexture;   // ambient occlusion (R channel)
     int3   _pad;
 };
-StructuredBuffer<Material> materials;
+[[vk::binding(2)]] StructuredBuffer<Material> materials;
 
 // ---- Buffer 3: punctual point lights -------------------------------------------------------------
 struct PointLight {
@@ -71,7 +71,7 @@ struct PointLight {
     float3 color;
     float  intensity;
 };
-StructuredBuffer<PointLight> pointLights;
+[[vk::binding(3)]] StructuredBuffer<PointLight> pointLights;
 
 // ---- Buffers 4-6: clustered forward+ (optional; used when globals.params.y > 0.5) ----------------
 struct ClusterParams {
@@ -81,15 +81,18 @@ struct ClusterParams {
     uint4    gridDim;   // x=CX y=CY z=CZ w=maxLightsPerCluster
     uint4    misc;      // x=lightCount
 };
-ConstantBuffer<ClusterParams> cparams;       // buffer 4
-StructuredBuffer<uint>        lightGrid;      // buffer 5 : per-cluster count
-StructuredBuffer<uint>        lightIndices;   // buffer 6 : per-cluster light index list
+[[vk::binding(4)]] ConstantBuffer<ClusterParams> cparams;       // buffer 4
+[[vk::binding(5)]] StructuredBuffer<uint>        lightGrid;      // buffer 5 : per-cluster count
+[[vk::binding(6)]] StructuredBuffer<uint>        lightIndices;   // buffer 6 : per-cluster light index list
 
 // ---- Textures: shadow map (texture/sampler 0) + bindless material table (texture 1..64, sampler 1)
-Texture2D    shadowMap;
-SamplerState shadowSamp;
-Texture2D    materialTextures[64];   // must match Device::kMaxBindlessTextures
-SamplerState materialSampler;
+// Bindings are PINNED (explicit) so slot assignment does NOT depend on which resources a given shader
+// uses — otherwise Slang strips unreferenced leading resources (e.g. the shadow map in a shader that
+// doesn't sample it) and shifts the material texture/sampler down a slot, sampling the wrong slot.
+[[vk::binding(0)]] Texture2D    shadowMap;
+[[vk::binding(0)]] SamplerState shadowSamp;
+[[vk::binding(1)]] Texture2D    materialTextures[64];   // must match Device::kMaxBindlessTextures
+[[vk::binding(1)]] SamplerState materialSampler;
 
 // ---- Vertex I/O (matches render::coreVertexLayout) -----------------------------------------------
 struct VSInput {

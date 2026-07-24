@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <thread>
+#include <vector>
 
 namespace engine::geo {
 
@@ -84,12 +86,29 @@ MeshData meshCapsules(std::span<const Capsule> capsules, const MesherParams& par
     auto cornerPos = [&](int i, int j, int k) { return origin + voxel * glm::vec3(i, j, k); };
     auto fIdx = [&](int i, int j, int k) { return i + nx * (j + ny * k); };
 
-    // Sample the field at every corner.
+    // Sample the field at every corner (parallel over z-slabs — the dominant bake cost).
     std::vector<float> f(static_cast<std::size_t>(corners));
-    for (int k = 0; k < nz; ++k)
-        for (int j = 0; j < ny; ++j)
-            for (int i = 0; i < nx; ++i)
-                f[fIdx(i, j, k)] = field(cornerPos(i, j, k));
+    {
+        const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+        const int nthreads = std::min<int>(static_cast<int>(hw), std::max(1, nz));
+        auto sampleSlab = [&](int kBegin, int kEnd) {
+            for (int k = kBegin; k < kEnd; ++k)
+                for (int j = 0; j < ny; ++j)
+                    for (int i = 0; i < nx; ++i)
+                        f[fIdx(i, j, k)] = field(cornerPos(i, j, k));
+        };
+        if (nthreads <= 1) {
+            sampleSlab(0, nz);
+        } else {
+            std::vector<std::thread> pool;
+            const int per = (nz + nthreads - 1) / nthreads;
+            for (int t = 0; t < nthreads; ++t) {
+                const int kb = t * per, ke = std::min(nz, kb + per);
+                if (kb < ke) pool.emplace_back(sampleSlab, kb, ke);
+            }
+            for (auto& th : pool) th.join();
+        }
+    }
 
     // Gradient (central differences) → outward normal.
     const float ge = 0.5f * voxel;
