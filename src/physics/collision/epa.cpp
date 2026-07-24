@@ -101,6 +101,15 @@ EpaResult epaPenetration(const SupportShape& a, const SupportShape& b, const Sim
         const Real pd = glm::dot(p, n);
         if (pd - d < Real(1e-4)) return { n, d, true };   // converged to the surface
 
+        // Degeneracy guard: EPA blows up on the flat, coplanar faces of box/hull Minkowski surfaces
+        // (a non-manifold horizon multiplies faces each iteration). Stop if the support point is
+        // already in the polytope (no farther surface to reach) or the polytope grew pathologically —
+        // return the current closest face, which is the best penetration estimate so far.
+        bool duplicate = false;
+        for (const Vec3& v : verts)
+            if (glm::dot(p - v, p - v) < Real(1e-8)) { duplicate = true; break; }
+        if (duplicate || faces.size() > 128) return { n, d, true };
+
         // Remove every face the new point can see; collect the horizon edges.
         const int vi = static_cast<int>(verts.size());
         verts.push_back(p);
