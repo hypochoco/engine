@@ -124,6 +124,12 @@ public:
     // `GraphicsPipelineDesc.sampleCount`** (the engine builds no pipelines).
     void setMSAA(uint32_t sampleCount);
 
+    // Dynamic resolution: render the scene at `scale`× the view size, upscaled to the full-res target
+    // by the FXAA pass. Only takes effect when FXAA is enabled (setFXAA) — FXAA is the upscale. Clamped
+    // to [0.5, 1.0]. Fill-bound cost scales ~scale²; 1.0 = native (default). Thin wrapper over
+    // GraphicsConfig::renderScale.
+    void setRenderScale(float scale);
+
     // Enable FXAA post anti-aliasing. Pass a fullscreen pipeline built from fxaa.metallib (color
     // format = the FINAL/present target's) and a linear-clamp sampler. When set, the pre-FXAA stage
     // (tonemap if HDR, else the forward pass) writes to an intermediate RGBA8 LDR texture, then FXAA

@@ -303,6 +303,10 @@ void Renderer::setMSAA(uint32_t sampleCount) {
     impl_->config_.aa.msaaSamples = sampleCount < 1 ? 1 : sampleCount;
 }
 
+void Renderer::setRenderScale(float scale) {
+    impl_->config_.renderScale = std::clamp(scale, 0.5f, 1.0f);
+}
+
 void Renderer::setFXAA(rhi::PipelineHandle fxaaPipeline, rhi::SamplerHandle sampler) {
     impl_->resources_.fxaa        = fxaaPipeline;
     impl_->resources_.fxaaSampler = sampler;
@@ -320,7 +324,15 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
     RenderGraph graph(*I.device);
 
     for (const auto& view : views) {
-        I.ensureDepth(view.width, view.height);
+        // Dynamic resolution: render the scene at renderScale× and let the FXAA pass upscale it to the
+        // full-res view target (FXAA samples the scaled intermediate → upscale + AA in one). Only
+        // active when FXAA is on (it is the upscale); scale==1 or no FXAA ⇒ full-res (unchanged).
+        const bool  dynFxaa  = I.config_.aa.fxaa && I.resources_.fxaa.valid();
+        const float rscale   = std::clamp(I.config_.renderScale, 0.5f, 1.0f);
+        const bool  dynRes   = dynFxaa && rscale < 0.999f;
+        const uint32_t rw = dynRes ? std::max(1u, static_cast<uint32_t>(std::lround(view.width  * rscale))) : view.width;
+        const uint32_t rh = dynRes ? std::max(1u, static_cast<uint32_t>(std::lround(view.height * rscale))) : view.height;
+        I.ensureDepth(rw, rh);
 
         // Clustered forward+ active for this view? (Must be known BEFORE uploading the camera
         // uniform, since it sets params.y which the forward shader reads.)
@@ -422,7 +434,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
             const float zn = P[3][2] / P[2][2];
             const float zf = P[2][2] * zn / (1.0f + P[2][2]);
             cpp.frustum = glm::vec4(tanH, aspect, zn, zf);
-            cpp.screen  = glm::vec4(float(view.width), float(view.height), 0.0f, 0.0f);
+            cpp.screen  = glm::vec4(float(rw), float(rh), 0.0f, 0.0f);
             cpp.gridDim = glm::uvec4(cluster::CX, cluster::CY, cluster::CZ, cluster::MAX_PER);
             cpp.misc    = glm::uvec4(static_cast<uint32_t>(view.pointLights.size()), 0, 0, 0);
             cparamsA = I.ring.upload(&cpp, 1);
@@ -453,8 +465,8 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
 
         const bool hdr = I.config_.hdr && I.resources_.tonemap.valid();
         const bool fxaaOn = I.config_.aa.fxaa && I.resources_.fxaa.valid();
-        if (hdr) I.ensureHDR(view.width, view.height);
-        if (fxaaOn) I.ensureLDR(view.width, view.height);
+        if (hdr) I.ensureHDR(rw, rh);
+        if (fxaaOn) I.ensureLDR(rw, rh);
 
         // Output chain: forward[+MSAA resolve] -> [tonemap] -> [FXAA] -> view.target.
         // The stage before FXAA writes `preRT` (an intermediate LDR texture when FXAA is on).
@@ -468,7 +480,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         // the pre-FXAA target). With MSAA this becomes the resolve destination.
         const rhi::RenderTargetHandle singleRT  = hdr ? I.hdrRT  : preRT;
         const rhi::TextureHandle      singleTex = hdr ? I.hdrTex : preTex;
-        if (msaa) I.ensureMSAA(view.width, view.height, samples,
+        if (msaa) I.ensureMSAA(rw, rh, samples,
                                hdr ? rhi::Format::RGBA16Float : rhi::Format::RGBA8Unorm);
 
         RenderGraph::ColorTarget color;
@@ -514,7 +526,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         rhi::PipelineHandle meshPipe = I.resources_.mesh;
 
         graph.addRasterPass(
-            "forward", color, depth, view.width, view.height, forwardReads,
+            "forward", color, depth, rw, rh, forwardReads,
             [geom, vtx, idx, items, cam, inst, mat, lights, clustered, cparamsA, gridA, idxA,
              shadows, shadowTex, shadowSamp, matSampler, skyOn, skyPipe, skyA, meshPipe](rhi::CommandList& cl) {
                 std::array<rhi::BufferBinding, 7> binds{};
@@ -578,7 +590,7 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
             tmColor.load = rhi::LoadOp::DontCare;   // fullscreen triangle writes every pixel
             RenderGraph::DepthTarget noDepth;       // used = false
             graph.addRasterPass(
-                "tonemap", tmColor, noDepth, view.width, view.height, /*reads=*/{ hdrTex },
+                "tonemap", tmColor, noDepth, rw, rh, /*reads=*/{ hdrTex },
                 [tmPipe, tmSamp, hdrTex](rhi::CommandList& cl) {
                     cl.bindPipeline(tmPipe);
                     rhi::TextureBinding tb{ .binding = 0, .texture = hdrTex };

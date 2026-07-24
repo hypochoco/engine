@@ -819,6 +819,13 @@ Design notes: [salvage](../investigations/path-tracing/2026-07-06-path-tracer-sa
       **+0.29/+1.2 ms** @4k/16k instances (4× coverage raster, on-tile resolve); FXAA **~0.01 ms**.
       Wired into `atmosphere_scene` (M/X toggles). Deferred: TAA/MetalFX temporal, SMAA, custom
       tonemap-weighted HDR MSAA resolve, alpha-to-coverage.
+      **Dynamic resolution DONE (2026-07-24)** — `GraphicsConfig::renderScale` (+ `Renderer::setRenderScale`,
+      clamped [0.5,1.0]). The scene (forward/MSAA/HDR/depth + tonemap + cluster screen) renders at
+      renderScale× the view size; the **FXAA pass runs at full res and upscales** the scaled LDR
+      intermediate to the view target (reuses FXAA as the upscale — only active when FXAA is on).
+      Fill-bound cost scales ~renderScale². Driven by the sim-2 grass profiling (fill/overdraw-bound;
+      0.7×→~1.8× on the worst-case low-angle grass view). Test `graphics.dynamic_resolution` (full +
+      0.5× both fill the full-res target). Suite 197/0. Deferred: a non-FXAA upscale/blit path.
       **Graphics config system DONE (2026-07-05)** — the scattered `Renderer::setX()` toggles +
       tuning knobs are centralized into a value-type `GraphicsConfig` (nested Shadow/Sky/Fog/AA/
       Cluster + hdr) split from a `RenderResources` handle bundle (feature active = config.enabled &&

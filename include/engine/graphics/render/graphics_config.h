@@ -86,6 +86,10 @@ struct ClusterConfig {
 // The single renderer-global config surface. Value-type: copy it, tweak it, hand it to the renderer.
 struct GraphicsConfig {
     bool          hdr = false;   // HDR render target + tone-map resolve (needs RenderResources.tonemap)
+    // Dynamic resolution: render the scene at renderScale× the view size, then the FXAA pass upscales
+    // it to the full-res view target (FXAA samples the scaled intermediate). Fill-bound cost scales
+    // ~renderScale². Clamped to [0.5, 1.0]; only takes effect when FXAA is enabled (it's the upscale).
+    float         renderScale = 1.0f;
     ShadowConfig  shadow;
     SkyConfig     sky;
     FogConfig     fog;
