@@ -542,20 +542,23 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
                 }
                 rhi::ResourceBindings rb;
                 rb.buffers = std::span<const rhi::BufferBinding>(binds.data(), n);
-                rhi::TextureBinding tb{ .binding = 0, .texture = shadowTex };
+                rhi::TextureBinding tb{ .binding = 64, .texture = shadowTex };   // shadow map past the 64-wide table
                 std::array<rhi::SamplerBinding, 2> sampBinds{};
                 uint32_t ns = 0;
                 if (shadows) {
                     rb.textures = std::span<const rhi::TextureBinding>(&tb, 1);
-                    sampBinds[ns++] = { .binding = 0, .sampler = shadowSamp };
+                    sampBinds[ns++] = { .binding = 1, .sampler = shadowSamp };
                 }
-                // Material sampler at slot 1 drives the bindless material textures (albedo/normal).
-                if (matSampler.valid()) sampBinds[ns++] = { .binding = 1, .sampler = matSampler };
+                // Material sampler at slot 0 drives the bindless material textures (albedo/normal).
+                if (matSampler.valid()) sampBinds[ns++] = { .binding = 0, .sampler = matSampler };
                 if (ns) rb.samplers = std::span<const rhi::SamplerBinding>(sampBinds.data(), ns);
 
                 cl.bindResources(rb);
-                // Bindless material textures occupy fragment texture slots [1..N] (slot 0 = shadow map).
-                if (matSampler.valid()) cl.bindBindlessTextures(1);
+                // Bindless material textures occupy fragment texture slots [0..N-1]; the shadow map is
+                // at slot 64. Declaring the table first in engine_mesh.slang keeps it at slot 0 in every
+                // shader that samples it (Slang can't pin a texture ARRAY on Metal), independent of
+                // whether that shader references the shadow map.
+                if (matSampler.valid()) cl.bindBindlessTextures(0);
                 cl.bindVertexBuffer(vtx, 0);
                 cl.bindIndexBuffer(idx, rhi::IndexType::Uint32);
                 // Per-item pipeline: an item may override the default mesh pipeline with a variant

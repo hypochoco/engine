@@ -44,6 +44,7 @@ if(APPLE)
         TARGET       tst_shaders
         OUT_DIR      "${CMAKE_BINARY_DIR}/tst-shaders"
         SOURCES      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/app_data_probe.slang"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_probe.slang"
         INCLUDE_DIRS "${ENGINE_SHADER_INCLUDE_DIR}"
         DEPENDS      "${ENGINE_SHADER_INCLUDE_DIR}/engine_mesh.slang")
     add_dependencies(tests tst_shaders)

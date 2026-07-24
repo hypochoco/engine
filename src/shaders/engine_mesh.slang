@@ -85,14 +85,17 @@ struct ClusterParams {
 [[vk::binding(5)]] StructuredBuffer<uint>        lightGrid;      // buffer 5 : per-cluster count
 [[vk::binding(6)]] StructuredBuffer<uint>        lightIndices;   // buffer 6 : per-cluster light index list
 
-// ---- Textures: shadow map (texture/sampler 0) + bindless material table (texture 1..64, sampler 1)
-// Bindings are PINNED (explicit) so slot assignment does NOT depend on which resources a given shader
-// uses — otherwise Slang strips unreferenced leading resources (e.g. the shadow map in a shader that
-// doesn't sample it) and shifts the material texture/sampler down a slot, sampling the wrong slot.
-[[vk::binding(0)]] Texture2D    shadowMap;
-[[vk::binding(0)]] SamplerState shadowSamp;
-[[vk::binding(1)]] Texture2D    materialTextures[64];   // must match Device::kMaxBindlessTextures
-[[vk::binding(1)]] SamplerState materialSampler;
+// ---- Textures/samplers -------------------------------------------------------------------------
+// The bindless material table is declared FIRST so it occupies texture slots 0..63 in EVERY shader
+// that samples it, regardless of whether the shader also references the shadow map. (Slang honors
+// [[vk::binding]] for scalar resources but NOT for the texture ARRAY on Metal, so the array's slot is
+// determined by declaration order among USED textures — declaring it first pins it to 0.) The shadow
+// map is pinned to a high slot (64, just past the 64-wide table) via its scalar binding. Samplers:
+// material = 0, shadow = 1. The renderer binds to match (bindBindlessTextures base 0; shadow at 64).
+[[vk::binding(0)]] Texture2D    materialTextures[64];   // must match Device::kMaxBindlessTextures
+[[vk::binding(0)]] SamplerState materialSampler;
+[[vk::binding(64)]] Texture2D    shadowMap;
+[[vk::binding(1)]]  SamplerState shadowSamp;
 
 // ---- Vertex I/O (matches render::coreVertexLayout) -----------------------------------------------
 struct VSInput {
