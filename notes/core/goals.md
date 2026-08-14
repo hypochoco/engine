@@ -120,6 +120,24 @@ first, then a reduced-coordinate `PhysicsWorld` backend, plus a separate **diffe
 engine. See architecture.md (physics reduced/diff sections) + the reduced-coordinate/differentiable
 investigation docs.
 
+## Active milestone: "a small, performant outdoor arena scene"
+
+Full plan: investigations/realtime-rendering/2026-07-23-outdoor-arena-milestone.md.
+
+> A **small outdoor arena** — grassy ground with dirt patches + small rocks, a little local
+> atmosphere, and a tree with **leaves and grass waving in the wind** — rendered well and
+> **performantly**, built as a **separate game repo** that consumes this engine as a dependency.
+
+This is the **first real game-on-engine**, and the first consumer to exercise the "engine ↔
+application split" for rendering: the **engine provides mechanisms** (RHI, render graph, ECS,
+materials, culling, asset loading) and the **game provides content + shaders** (the arena, its
+textures/meshes, and the grass/wind/ground-blend pipelines). It pushes the renderer past colored
+primitives into **textured, authored content** — the biggest missing piece — while staying small
+and bounded so quality + performance can be chased without scope creep. It's deliberately an
+**arena for (later) fighting characters**, so the static scene must leave a large frame budget for
+animated, simulated characters on top. Non-goals here: the characters themselves (skinned mesh +
+animation), non-flat terrain collision, networking.
+
 ## Direction: engine ↔ simulation split
 
 This repo is the **engine** (a library). Once it has "enough" for the humanoid milestone

@@ -52,6 +52,41 @@ Real faceAlign(const Vec3& c, const Mat3& R, const Vec3& h, const Vec3& dir) {
     return best;
 }
 
+// Separating-axis test for two oriented boxes. Returns false if a separating axis exists (no overlap);
+// otherwise sets `n` (minimum-translation direction, oriented A -> B, unit) and `depth` (> 0). Boxes are
+// the degenerate case for GJK/EPA (coplanar Minkowski faces), so we solve the normal analytically over
+// the 15 candidate axes (3 + 3 face normals, 9 edge-edge cross products) — robust and O(1).
+bool satBoxBox(const Vec3& ca, const Mat3& Ra, const Vec3& ha,
+               const Vec3& cb, const Mat3& Rb, const Vec3& hb, Vec3& n, Real& depth) {
+    const Vec3 t = cb - ca;
+    Real minPen = 1e30f;
+    Vec3 best(0);
+    bool have = false;
+    auto test = [&](Vec3 axis) -> bool {
+        const Real len2 = glm::dot(axis, axis);
+        if (len2 < Real(1e-8)) return true;                 // parallel edges ⇒ skip this axis
+        axis /= std::sqrt(len2);
+        Real ra = 0, rb = 0;
+        for (int k = 0; k < 3; ++k) {
+            ra += ha[k] * std::fabs(glm::dot(Ra[k], axis));
+            rb += hb[k] * std::fabs(glm::dot(Rb[k], axis));
+        }
+        const Real dist = glm::dot(t, axis);
+        const Real overlap = ra + rb - std::fabs(dist);
+        if (overlap < 0) return false;                      // separating axis ⇒ no collision
+        if (overlap < minPen) { minPen = overlap; best = (dist < 0) ? -axis : axis; have = true; }  // A -> B
+        return true;
+    };
+    for (int k = 0; k < 3; ++k) if (!test(Ra[k])) return false;
+    for (int k = 0; k < 3; ++k) if (!test(Rb[k])) return false;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            if (!test(glm::cross(Ra[i], Rb[j]))) return false;
+    if (!have) return false;
+    n = best; depth = minPen;
+    return true;
+}
+
 // Sutherland-Hodgman: keep the part of `poly` on the inside half-space dot(n,p) <= offset.
 void clip(std::vector<Vec3>& poly, const Vec3& n, Real offset) {
     std::vector<Vec3> out;
@@ -76,14 +111,22 @@ void clip(std::vector<Vec3>& poly, const Vec3& n, Real offset) {
 
 int boxVsBox(const Vec3& ca, const Quat& qa, const Box& a,
              const Vec3& cb, const Quat& qb, const Box& b, Contact out[4]) {
-    const auto sa = SupportShape::box(ca, qa, a.halfExtents);
-    const auto sb = SupportShape::box(cb, qb, b.halfExtents);
-    Contact epa;
-    if (!convexVsConvex(sa, sb, epa)) return 0;
-    const Vec3 n = epa.normal;   // A -> B
-
     const Mat3 Ra = glm::mat3_cast(qa);
     const Mat3 Rb = glm::mat3_cast(qb);
+
+    Vec3 n; Real depth;
+    if (!satBoxBox(ca, Ra, a.halfExtents, cb, Rb, b.halfExtents, n, depth)) return 0;   // separated
+
+    // Single-point fallback + the normal/depth for the clip below (mirrors the old EPA contact).
+    Contact epa;
+    epa.normal = n;
+    epa.separation = -depth;
+    {
+        const auto sa = SupportShape::box(ca, qa, a.halfExtents);
+        const auto sb = SupportShape::box(cb, qb, b.halfExtents);
+        epa.point = (sa.support(n) + sb.support(-n)) * Real(0.5);
+    }
+    epa.touching = true;
 
     // Reference = box whose face is most parallel to the normal; incident = the other.
     const bool refIsA = faceAlign(ca, Ra, a.halfExtents, n) >= faceAlign(cb, Rb, b.halfExtents, n);

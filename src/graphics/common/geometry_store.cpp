@@ -26,6 +26,7 @@ rhi::VertexLayout coreVertexLayout() {
         { 1, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(Vertex, normal)) },
         { 2, rhi::VertexFormat::Float2, static_cast<uint32_t>(offsetof(Vertex, uv)) },
         { 3, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(Vertex, color)) },
+        { 4, rhi::VertexFormat::Float4, static_cast<uint32_t>(offsetof(Vertex, tangent)) },
     };
     return v;
 }

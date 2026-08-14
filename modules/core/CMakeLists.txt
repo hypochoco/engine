@@ -37,4 +37,8 @@ target_link_libraries(engine_core
 # aggregate stays graphics-dependency-free.
 if(NOT ENGINE_TRAINING_ONLY)
     target_link_libraries(engine_core PUBLIC tinyobjloader stb::stb)
+    # Gates the asset-loader translation units (image.cpp / obj_loader.cpp) that need the
+    # header-only stb + tinyobjloader. Headers stay dependency-free; a headless training build
+    # (no stb/tinyobj) compiles the loaders to invalid-result stubs instead.
+    target_compile_definitions(engine_core PUBLIC ENGINE_ASSET_LOADERS)
 endif()

@@ -101,9 +101,18 @@ public:
     void  unmap(BufferHandle);
 
     // --- bindless textures ---
-    // Registers a texture in the global bindless table and returns its shader-visible index.
+    // The Device keeps a global table mapping a small integer index → a sampled texture. A
+    // material stores that index (see render::MaterialGPU::baseColorTexture) and the shader looks
+    // the texture up in a fixed-size table (bound at CommandList::bindBindlessTextures). Up to
+    // kMaxBindlessTextures entries. Registering returns the table index; unregister frees it.
+    static constexpr uint32_t kMaxBindlessTextures = 64;
     uint32_t registerBindlessTexture(TextureHandle);
     void     unregisterBindlessTexture(uint32_t index);
+
+    // Generates the full mip chain for a texture from its populated mip 0, on the GPU (blit). The
+    // texture must have been created with mipLevels > 1 and be shader-readable + render-usable
+    // (a color format). Runs on a one-shot command buffer and blocks until complete.
+    void generateMipmaps(TextureHandle);
 
     // --- deferred, fence-gated destruction ---
     void destroy(BufferHandle);

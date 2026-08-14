@@ -58,6 +58,8 @@ Working notes for the engine project.
 - [`2026-07-05-atmosphere-aerial-perspective.md`](investigations/realtime-rendering/2026-07-05-atmosphere-aerial-perspective.md) — aerial-perspective + height fog (RF6 atmosphere)
 - [`2026-07-05-antialiasing-msaa-fxaa.md`](investigations/realtime-rendering/2026-07-05-antialiasing-msaa-fxaa.md) — MSAA + optional FXAA anti-aliasing (RF6 AA)
 - [`2026-07-05-graphics-config-system.md`](investigations/realtime-rendering/2026-07-05-graphics-config-system.md) — centralized GraphicsConfig + RenderResources (G1–G3)
+- [`2026-07-23-outdoor-arena-milestone.md`](investigations/realtime-rendering/2026-07-23-outdoor-arena-milestone.md) — **active milestone**: a small performant outdoor arena scene (grass/dirt/rocks, atmosphere, wind) as a game-on-engine; gap analysis + phased plan
+- [`2026-07-23-backface-culling-winding.md`](investigations/realtime-rendering/2026-07-23-backface-culling-winding.md) — finding: `RasterState.cull` is advertised but NOT applied; enabling it needs a project-wide winding-convention audit (deferred)
 
 ### `investigations/path-tracing/`
 

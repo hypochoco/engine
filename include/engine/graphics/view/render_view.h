@@ -34,6 +34,10 @@ struct RenderItem {
     MeshHandle mesh;
     uint32_t   firstInstance = 0;
     uint32_t   instanceCount = 0;
+    // Optional per-item pipeline override (e.g. a foliage/wind or terrain variant built via
+    // Renderer::createMeshPipeline). Invalid ⇒ the renderer's default mesh pipeline. Lets opaque,
+    // foliage, and other variants coexist in one view without the app touching backend code.
+    rhi::PipelineHandle pipeline;
 };
 
 // Per-instance record, SoA-friendly, uploaded into the per-frame instance storage buffer.
@@ -45,11 +49,32 @@ struct InstanceData {
     uint32_t  _pad[3]       = {0, 0, 0};
 };
 
-// GPU material record (matches the shader's Material). Indexed by InstanceData::materialIndex.
+// Material feature flags (MaterialGPU::flags bitfield). General, content-agnostic surface
+// properties — domain effects like vegetation wind belong in game shaders, not the engine.
+enum MaterialFlags : uint32_t {
+    MaterialFlagNone        = 0u,
+    MaterialFlagAlphaCutout = 1u << 0,   // discard fragments whose albedo alpha < alphaCutoff
+    MaterialFlagDoubleSided = 1u << 1,   // two-sided LIGHTING: flip the normal to face the viewer on
+                                         // back faces (pair with a CullMode::None pipeline for foliage)
+};
+
+// GPU material record (matches the shader's Material — metallic-roughness workflow). Indexed by
+// InstanceData::materialIndex. All textures are bindless-table slots (-1 = none). Defaults describe
+// a plain opaque Lambert surface (metallic 0, roughness 1, no emissive) so untextured materials
+// render exactly as before.
 struct MaterialGPU {
-    glm::vec4 baseColorFactor{1.0f};
-    int32_t   baseColorTexture = -1;   // bindless-table index (-1 = none); unused until bindless
-    uint32_t  _pad[3]          = {0, 0, 0};
+    glm::vec4 baseColorFactor{1.0f};             // rgba
+    glm::vec4 emissiveFactor{0.0f};              // rgb (a unused)
+    float     metallicFactor  = 0.0f;
+    float     roughnessFactor = 1.0f;
+    float     alphaCutoff     = 0.5f;
+    uint32_t  flags           = MaterialFlagNone;
+    int32_t   baseColorTexture         = -1;
+    int32_t   normalTexture            = -1;
+    int32_t   metallicRoughnessTexture = -1;     // glTF pack: G = roughness, B = metallic
+    int32_t   emissiveTexture          = -1;
+    int32_t   occlusionTexture         = -1;     // R channel
+    int32_t   _pad[3]                  = {0, 0, 0};
 };
 
 // A directional (sun) light + ambient term for simple Lambert shading. Plain data set per
@@ -80,6 +105,12 @@ struct RenderView {
     uint32_t  height = 0;
     float     clearColor[4] = {0.08f, 0.10f, 0.14f, 1.0f};
     DirectionalLight light{};                 // world directional (sun) + ambient for this view
+
+    // Opaque per-view app data, uploaded verbatim into the shader Globals (read as globals.appData).
+    // The engine never interprets it — game shaders (foliage/water/custom variants) decide its
+    // meaning (e.g. x = elapsed time; yzw = wind direction/strength). Keeps domain effects like
+    // vegetation wind in game shaders, not the engine ("the game decides what it passes").
+    glm::vec4 appData{0.0f};
 
     std::span<const RenderItem>   items;      // pre-sorted by mesh → material
     std::span<const InstanceData> instances;  // indexed by RenderItem instance ranges

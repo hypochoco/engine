@@ -97,6 +97,12 @@ Implemented E1, E2, E4-host, and the E3 refactor; sim-1 work deferred. Full CPU/
   `src/physics_env/cuda/cuda_vec_env.cu` rewritten to call `diff::actionToTau`/`diff::packDefaultObs`
   (deleted the duplicated device kernels' bodies + anon-ns helpers) and adds `resetMasked` (+ device
   init/mask buffers in the header). Realizes E1's single-source benefit on the GPU side too.
+- **#5 env selection/coherence DONE (2026-07-08)** — added `physics::Backend::Diff` (CPU diff ABA);
+  a common `IVecEnv` interface (`include/engine/physics_env/vec_env_base.h`) implemented by `VecEnv`,
+  `DiffVecEnv`, and `CudaVecEnv`; and `createVecEnv(numEnvs, config, pool) → unique_ptr<IVecEnv>`
+  (`env_factory.{h,cpp}`) dispatching on `sim.backend` (Realtime/Reduced→VecEnv, Diff→DiffVecEnv,
+  Cuda→CudaVecEnv, throwing without `ENGINE_CUDA`). Test `physics_env.env_factory` confirms Reduced and
+  Diff agree on `actDim=21`/`obsDim=69` (contract coherence) and Cuda throws on the Mac. Suite 185/0.
 
 **Learned:** stiff PD (`kp=150`) + `float` + smoothed contact is stability-sensitive under actuation
 over long horizons (the humanoid NaNs past ~1 s; the GPU path shares this — it only ever validated
@@ -107,7 +113,8 @@ the algorithmic lever is the `SemiImplicit` (IMEX) contact to allow fewer subste
 generalized-state reconstruction — needed for tracking/getup; do with the sim-1 binding when the
 signature is fixed); seeded per-env domain-randomization init (both envs currently do deterministic
 authored init, matching CPU `VecEnv` without a hook); the **E4 device** parity test (`CudaVecEnv` vs
-`DiffVecEnv<float>`, Linux only); E5 SoA layout + `CudaVecEnv` config fidelity.
+`DiffVecEnv<float>`, Linux only); E5 SoA `DiffState` layout + `CudaVecEnv` config fidelity (honor
+`DiffContact` selection / substeps default instead of hardcoding).
 
 
 ## E6 — (optional) `CudaVecEnv` step-without-host-download for the zero-copy path

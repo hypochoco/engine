@@ -36,6 +36,19 @@ if(APPLE)
     target_link_libraries(tests PRIVATE engine::scene engine::render engine::pathtracer)
     add_dependencies(tests shaders)
     target_compile_definitions(tests PRIVATE ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
+
+    # Test-only shaders built against the shared engine contract (engine_mesh.slang) via the SAME
+    # helper consumers use — proves the consumer shader-compile path and the appData channel.
+    include(EngineShaders)
+    engine_compile_shaders(
+        TARGET       tst_shaders
+        OUT_DIR      "${CMAKE_BINARY_DIR}/tst-shaders"
+        SOURCES      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/app_data_probe.slang"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/material_probe.slang"
+        INCLUDE_DIRS "${ENGINE_SHADER_INCLUDE_DIR}"
+        DEPENDS      "${ENGINE_SHADER_INCLUDE_DIR}/engine_mesh.slang")
+    add_dependencies(tests tst_shaders)
+    target_compile_definitions(tests PRIVATE TST_SHADER_DIR="${CMAKE_BINARY_DIR}/tst-shaders")
 endif()
 
 foreach(module core ecs physics graphics pathtracer input controls physics_env)
@@ -47,7 +60,7 @@ add_executable(benchmarks ${HARNESS} ${BENCH_SRC} ${GFX_BENCH_SRC})
 target_include_directories(benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(benchmarks PRIVATE engine::physics_ecs engine::physics_env)
 if(APPLE)
-    target_link_libraries(benchmarks PRIVATE engine::render)
+    target_link_libraries(benchmarks PRIVATE engine::scene engine::render)
     add_dependencies(benchmarks shaders)
     target_compile_definitions(benchmarks PRIVATE ENGINE_SHADER_DIR="${ENGINE_SHADER_DIR}")
 endif()
