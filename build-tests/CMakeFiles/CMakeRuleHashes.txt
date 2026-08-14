@@ -1,0 +1,15 @@
+# Hashes of file build rules.
+b9ff701b3b6f1a02021849311e1f839e external/glfw/src/CMakeFiles/update_mappings
+1ff888d09bf496d6359229c32a99520f external/tinyobjloader/CMakeFiles/uninstall
+83a48426ed68a4b29d10ff15128bddac shaders/cluster.metallib
+42c2b807fd62db3cb7833e33989ffd76 shaders/compute_smoke.metallib
+495a6efdc532d9f4384f49f23577187c shaders/fxaa.metallib
+ceb53cdda9de41d661fedc03885a5db4 shaders/mesh.metallib
+4c3d52be14f7c2b868f42437db03ef44 shaders/shadow.metallib
+d33aa20b5c04b89f3990b6f72447adfa shaders/sky.metallib
+dc5532d5461b4ba2a331df21c9925d19 shaders/tonemap.metallib
+b6ca2d67f2a0c8d3c18fd51ea031e15a shaders/triangle.metallib
+420309508658bac7244f689f3fabaed0 src/shaders/CMakeFiles/shaders
+14a43d91f266398cec2060404da4cf64 tst-shaders/app_data_probe.metallib
+944820dbafc170dc31d6838c7e4a50cf tst-shaders/material_probe.metallib
+9a24392381d4180672a49ea7402445b3 tst/CMakeFiles/tst_shaders

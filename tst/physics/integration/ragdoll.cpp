@@ -1,4 +1,5 @@
 //
+#include <cstdlib>
 //  ragdoll.cpp
 //  engine::tst / physics / integration
 //
@@ -25,6 +26,12 @@ TST_CASE(physics, integration, ragdoll_settles) {
     wd.substeps = 4;
     wd.linearDamping = 0.2f;    // mild drag so free/undamped joint DOFs settle
     wd.angularDamping = 0.8f;
+    if (const char* s = std::getenv("PHYS_TGS")) wd.contactSolver =
+        std::atoi(s) ? ContactSolver::TGSSoft : ContactSolver::SequentialImpulse;
+    if (const char* s = std::getenv("PHYS_WARM")) wd.contactWarmStart = std::atoi(s) != 0;
+    if (const char* s = std::getenv("PHYS_SPLIT")) wd.splitImpulse = std::atoi(s) != 0;
+    if (const char* s = std::getenv("PHYS_BAUM")) wd.solver.contactBaumgarte = std::atof(s);
+    if (const char* s = std::getenv("PHYS_SLOP")) wd.solver.contactSlop = std::atof(s);
     auto w = createPhysicsWorld(Backend::Realtime, wd);
 
     // Ground plane (default category ⇒ collides with the humanoid limbs).

@@ -56,7 +56,21 @@ public:
 
     using RecordFn = std::function<void(rhi::CommandList&)>;
 
+    // A recorded per-pass timestamp assignment (filled during execute() when timestamps are on):
+    // the pass sampled a GPU timestamp into pool slot `begin` at its start and `end` at its finish.
+    // `name` is the pass's (static) name. Resolve the pool → duration = out[end] - out[begin].
+    struct PassSample { const char* name; uint32_t begin; uint32_t end; };
+
     explicit RenderGraph(rhi::Device& device) : device_(&device) {}
+
+    // Enable per-pass GPU timing for this frame: each RASTER pass samples the GPU timestamp counter
+    // at its boundaries into two slots of `pool` (assigned in execute() in registration order, up to
+    // `capacity` samples). After the frame completes, resolve `pool` and pair the values with
+    // sampledPasses(). Compute passes are not timed (deferred).
+    void enableTimestamps(rhi::TimestampPoolHandle pool, uint32_t capacity) {
+        tsPool_ = pool; tsCapacity_ = capacity;
+    }
+    const std::vector<PassSample>& sampledPasses() const { return sampledPasses_; }
 
     // A raster pass: the graph binds `color` (+ optional `depth`), sets a full-target viewport,
     // then invokes `record` to issue draws (record must NOT call begin/endRendering). `reads`
@@ -87,6 +101,8 @@ public:
     void execute(rhi::FrameContext& frame) {
         rhi::CommandList cl = device_->commandList(frame);
         std::vector<rhi::ResourceTransition> transitions;
+        sampledPasses_.clear();
+        uint32_t tsSlot = 0;   // next free timestamp sample slot (2 per timed raster pass)
 
         for (const auto& p : passes_) {
             transitions.clear();
@@ -124,6 +140,15 @@ public:
                 rtd.depth = p.depth.used ? &da : nullptr;
                 rtd.width = p.width; rtd.height = p.height;
 
+                // Per-pass GPU timing: assign two timestamp slots and record the mapping.
+                if (tsPool_.valid() && tsSlot + 2 <= tsCapacity_) {
+                    rtd.timestampPool  = tsPool_;
+                    rtd.timestampBegin = tsSlot;
+                    rtd.timestampEnd   = tsSlot + 1;
+                    sampledPasses_.push_back({ p.name, tsSlot, tsSlot + 1 });
+                    tsSlot += 2;
+                }
+
                 cl.beginRendering(rtd);
                 cl.setViewport(0, 0, float(p.width), float(p.height));
                 if (p.record) p.record(cl);
@@ -137,7 +162,7 @@ public:
         device_->submit(frame, cl);
     }
 
-    void reset() { passes_.clear(); state_.clear(); }
+    void reset() { passes_.clear(); state_.clear(); sampledPasses_.clear(); tsPool_ = {}; tsCapacity_ = 0; }
     size_t passCount() const { return passes_.size(); }
 
 private:
@@ -167,6 +192,9 @@ private:
     rhi::Device*                                  device_ = nullptr;
     std::vector<Pass>                             passes_;
     std::unordered_map<uint32_t, rhi::ResourceState> state_;   // texture index → last known state
+    rhi::TimestampPoolHandle                      tsPool_;      // per-frame GPU timing pool (or invalid)
+    uint32_t                                      tsCapacity_ = 0;  // pool sample capacity
+    std::vector<PassSample>                       sampledPasses_;  // filled during execute() when timing
 };
 
 } // namespace engine::render

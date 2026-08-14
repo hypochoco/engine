@@ -53,10 +53,36 @@ struct BodyDef {
 
 enum class BroadphaseKind { SweepAndPrune, UniformGrid };
 
+// Realtime contact solver selection. SequentialImpulse = the original PGS velocity solver (+ the
+// split-impulse / warm-start flags below). TGSSoft = substepped Temporal Gauss-Seidel with soft
+// constraints, 2-axis block friction, warm-starting, and manifolds built ONCE per step and reused
+// across substeps — the robust path for deep stacks (see 2026-08-01 contact-stability investigation).
+enum class ContactSolver { SequentialImpulse, TGSSoft };
+
 struct WorldDef {
     Vec3               gravity{0, Real(-9.81), 0};
     int                velocityIterations = 8;
     int                substeps = 1;
+    // Split-impulse position-correction sweeps per substep (realtime backend). Penetration is
+    // resolved on a SEPARATE pseudo-velocity that moves positions but is discarded afterwards, so it
+    // never feeds the real velocity (no Baumgarte energy injection). A few sweeps depenetrate well;
+    // 0 disables the position pass (falls back to no penetration correction). Contacts only — joints
+    // keep their own Baumgarte bias.
+    int                positionIterations = 4;
+    // Contact warm-starting: seed each contact's normal impulse from the previous substep/step's
+    // solved value (persistent per-contact cache) and apply it before iterating. Improves convergence
+    // for tall clean stacks, BUT as implemented the key is (bodyA,bodyB,contactIdx) — a positional
+    // index that misapplies impulses when a manifold's point order shifts (moving/articulated bodies),
+    // which regresses ragdoll settling (see 2026-08-01 contact-stability investigation). Default OFF
+    // until the key uses stable feature IDs / point-matching. Opt-in via this flag.
+    bool               contactWarmStart = false;
+    // Contact solver selection (realtime backend). Default SequentialImpulse (with the split-impulse
+    // + warm-start flags); set TGSSoft to use the substepped soft-constraint solver.
+    ContactSolver      contactSolver = ContactSolver::SequentialImpulse;
+    // Split-impulse position correction (SequentialImpulse path, #1): true = depenetrate on a
+    // discarded pseudo-velocity (no Baumgarte energy injection); false = legacy Baumgarte push-out
+    // folded into the real velocity solve (energy-injecting, but stiffer). Ignored by TGSSoft.
+    bool               splitImpulse = true;
     BroadphaseKind     broadphase = BroadphaseKind::UniformGrid;
 
     // Optional velocity damping (models drag; per second). 0 = none (default). Applied to dynamic

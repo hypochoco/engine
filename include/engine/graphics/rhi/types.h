@@ -31,6 +31,7 @@ struct SamplerTag;
 struct ShaderTag;
 struct PipelineTag;
 struct RenderTargetTag;
+struct TimestampPoolTag;
 
 using BufferHandle       = Handle<BufferTag>;
 using TextureHandle      = Handle<TextureTag>;
@@ -38,6 +39,9 @@ using SamplerHandle      = Handle<SamplerTag>;
 using ShaderHandle       = Handle<ShaderTag>;
 using PipelineHandle     = Handle<PipelineTag>;
 using RenderTargetHandle = Handle<RenderTargetTag>;
+// A pool of GPU timestamp samples (backend query pool / counter sample buffer). Used to time
+// individual passes at their boundaries; resolved on the CPU after the frame completes.
+using TimestampPoolHandle = Handle<TimestampPoolTag>;
 
 // -----------------------------------------------------------------------------
 // Shader stages (bitmask)

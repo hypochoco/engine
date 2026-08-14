@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_ecs.a CMakeFiles/engine_ecs.dir/__/__/src/ecs/world.cpp.o
+/usr/bin/ranlib libengine_ecs.a

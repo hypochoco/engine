@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_input_glfw.a CMakeFiles/engine_input_glfw.dir/__/__/src/input_glfw/glfw_input.cpp.o
+/usr/bin/ranlib libengine_input_glfw.a

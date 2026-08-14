@@ -133,6 +133,29 @@ public:
     // layer sizes its per-frame ring allocators to this.
     uint32_t     framesInFlight() const;
 
+    // GPU busy time (milliseconds) of the most recently COMPLETED frame's command buffer, measured
+    // from the backend's GPU timestamps (Metal GPUStartTime/GPUEndTime). This is the GPU's actual
+    // execution time for the frame and is INDEPENDENT of vsync/present pacing, so it is a reliable
+    // signal for GPU-bound cost even when the frame rate is capped. Returns 0 before any frame has
+    // completed or when the backend can't measure it. Updated asynchronously from the frame
+    // completion handler; cheap to poll each frame.
+    double       lastGpuFrameMs() const;
+
+    // --- GPU timestamps (per-pass timing) ---
+    // Whether the backend/device supports sampling GPU timestamps at pass boundaries (Metal:
+    // stage-boundary counter sampling; Vulkan: timestamp query pools). If false, timestamp pools
+    // still allocate but resolve to zeros and pass-timing attachments are ignored.
+    bool                gpuTimestampsSupported() const;
+    // Create a pool that can hold `sampleCapacity` GPU timestamp samples. Reference sample slots
+    // from RenderTargetDesc::timestampBegin/End, then resolve after the frame completes.
+    TimestampPoolHandle createTimestampPool(uint32_t sampleCapacity);
+    void                destroy(TimestampPoolHandle);
+    // Resolve the pool's samples into `out` (one value per slot, in the GPU timebase — nanoseconds
+    // on Apple Silicon). Compute a pass duration as out[end] - out[begin]. Only valid once the GPU
+    // work that wrote the samples has completed (e.g. gate on the frames-in-flight throttle).
+    // Returns false if unsupported or the handle is invalid. `out.size()` may be <= capacity.
+    bool                resolveTimestamps(TimestampPoolHandle, std::span<uint64_t> out) const;
+
     // Copy a render target / texture back to CPU (headless offline rendering).
     void readback(TextureHandle, std::span<std::byte> out);
 

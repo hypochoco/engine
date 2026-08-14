@@ -226,6 +226,30 @@ Qt/other later) and headless/ML use:
   Full reviewed plan (grounded in the solver + checked vs core goals) in the milestone plan
   §"Phase B — APPROVED PLAN". Joints = persistent velocity constraints in the same solver loop
   as contacts, warm-started across steps; **per-world, allocation-free, no statics** (VecEnv-safe).
+- [~] **Realtime CONTACT stability** (2026-08-01 investigation:
+      [2026-08-01-realtime-contact-stability.md](../investigations/physics/2026-08-01-realtime-contact-stability.md);
+      repro/gauge: `tst/physics/integration/{stack_energy,contact_quality}.cpp`,
+      `tst/physics/benchmark/box_stability.cpp`). Two root causes were proven in the realtime SI
+      contact solve: (1) **Baumgarte velocity bias injected energy** (a cube "thrown off" a rounded
+      rock at 2.48 m/s from nothing); (2) **contacts were not warm-started** → deep stacks collapse.
+      DELIVERED (all behind `WorldDef` flags):
+      - **[x] Split-impulse** (`splitImpulse`, DEFAULT ON): penetration resolved on a discarded
+        pseudo-velocity → no energy injection (rock launch 2.48→0.42, resting inject 2.0→0.0).
+      - **[x] Contact warm-starting** (`contactWarmStart`, DEFAULT OFF): helps tall clean stacks but
+        its `(a,b,contactIdx)` key misapplies impulses on moving manifolds → regresses ragdoll
+        (maxOmega 0.22→1.45); OFF until the key uses stable feature IDs / point-matching.
+      - **[x] TGS-Soft** (`contactSolver=TGSSoft`, OPT-IN): substepped soft-constraint solver,
+        manifold built once/step + reused (narrowphase-once). 100k pile **335 ms vs 700 baseline
+        (~2×)**; clean 10-stack rock-solid. NOT default — explodes the ragdoll (joints prepared
+        once, not per substep), worse on rounded contacts, unstable on the pathological dense 100k
+        pile. Follow-up: per-substep joint prep, dense-pile robustness, rounded-contact/friction.
+      - **[x] Tuning** (2026-08-01): `SolverConfig::contactBaumgarte` 0.2→**0.5** (split-impulse makes
+        it energy-free) → depenetration recovers in ~2 frames instead of ~180, perf-neutral. Kept
+        `contactSlop` at 5 mm (tightening relaunches edges/ragdoll).
+      REMAINING (TGS follow-up): stable-feature-ID warm-start key (→ re-enable #2), per-substep joints
+      + dense-pile robustness + 2-axis warm-started friction in TGS (→ deep stacks, rounded contacts,
+      residual tilt-landing drift), then gauge TGS as the default. 30-tall 1-wide column is partly
+      physical (metastable aspect ratio). **Engine changes uncommitted — awaiting commit/push.**
 - [x] **B1 Joint constraints core** ✅ (2026-07-03): `JointHandle`/`JointType{Ball,Revolute,Fixed}`/
       `JointDef` + `createJoint`/`destroyJoint` in `world.h`; persistent `joints_` store +
       serial warm-started solve (ball = point-to-point 3×3 K; hinge = point + 2 angular; fixed =
@@ -542,6 +566,59 @@ Scaling / ownership (from [2026-07-02-geometry-scaling.md](../investigations/cor
 - [ ] Later/at-scale: **vertex compression** (compact GPU layout, keep core::Vertex as the
       authoring format) and **distinct-geometry streaming/LOD**; decide CPU-retention policy
       (don't keep CPU vertex copies after upload except for collision/raycast).
+
+## Profiling / instrumentation
+
+General, reusable performance-measurement mechanisms (the engine provides the *mechanism*; games
+decide what to log). Added 2026-08-01 while investigating a "machine runs warm" report from sim-2.
+
+- [x] **`engine::prof` — scoped-zone CPU profiler** (`core/profile/profile.{h,cpp}`). RAII
+      `ENGINE_PROFILE_SCOPE("name")` records elapsed wall time into a named zone; per-zone windowed
+      stats (last / mean / min / max + **p50/p95/p99** over the last `kWindow`=128 samples, so
+      spikes like the grass "inside a clump" cliff are visible, not just averaged away).
+      `ENGINE_PROFILE_FRAME()` marks a frame → frame-time / fps series. `report()` snapshots,
+      `format()` pretty-prints. Thread-safe (mutex; a handful of records/frame). **Compile-gated by
+      `ENGINE_PROFILING`** — when undefined the macros expand to nothing (zero overhead) and
+      `prof::enabled()` is a `constexpr false` so consumers can `if constexpr` their whole reporting
+      block out. CMake `option(ENGINE_PROFILING ON)` defines it `PUBLIC` on `engine::core` (so it
+      propagates to consumers) **but auto-off in Release** (`$<$<NOT:$<CONFIG:Release>>:...>`), so
+      shipping builds carry no instrumentation. Tests: `tst/core/unit/profile.cpp` (zone stats +
+      percentile ordering, frame markers→fps, ScopedZone RAII, format). Core suite 15/0.
+- [x] **`Device::lastGpuFrameMs()` — true GPU busy-time query** (RHI, `rhi/device.h`). Returns the
+      most-recently-completed frame's GPU execution time. Metal backend reads
+      `GPUEndTime()-GPUStartTime()` in the frame command buffer's *already-installed*
+      frames-in-flight completion handler (`metal_backend.cpp`, `std::atomic<double> lastGpuMs`), so
+      it's ~free and needs no counter-sample-buffer setup. **Independent of vsync/present pacing** —
+      the key property: under vsync the CPU-side wall-clock frame time is pinned to the refresh
+      interval and hides GPU headroom, but this reports the actual GPU cost. Not gated (a cheap,
+      always-available capability); only the game-side *logging* that consumes it is gated. Test:
+      `tst/graphics/realtime/integration/gpu_timing.cpp` (headless triangle render → assert
+      `lastGpuFrameMs() > 0`; measured ~0.02 ms). graphics unit 7/0 (+ this integration case).
+      NOTE: only the Metal backend implements it; the parked Vulkan backend (doesn't build) will need
+      a `vkCmdWriteTimestamp` fill when it's ported behind the RHI.
+- [ ] **Per-pass GPU timestamps** (deferred). Whole-frame `lastGpuFrameMs()` answers "GPU- or
+      CPU-bound?"; if a per-pass breakdown (shadow / forward / sky / tonemap / FXAA) is needed,
+      add Metal `MTLCounterSampleBuffer` timestamps at pass boundaries. Larger, backend-specific —
+      only do it if whole-frame timing says rendering dominates and *which pass* is unclear.
+      **DONE (2026-08-01).** General RHI mechanism: `TimestampPoolHandle` +
+      `Device::{gpuTimestampsSupported,createTimestampPool,destroy,resolveTimestamps}` +
+      `RenderTargetDesc::{timestampPool,timestampBegin,timestampEnd}`. Metal backend samples the
+      "timestamp" counter set at STAGE boundaries via `MTLRenderPassDescriptor.sampleBufferAttachments`
+      (start-of-vertex = pass begin, end-of-fragment = pass end); resolved via `resolveCounterRange`
+      (values are nanoseconds on Apple Silicon). `RenderGraph::enableTimestamps(pool, capacity)`
+      assigns two slots per raster pass (registration order) and exposes `sampledPasses()`. The
+      `Renderer` keeps one pool per frame-in-flight and resolves a slot's PREVIOUS frame on reuse
+      (GPU-complete per the throttle) → `engine::prof::record("gpu.<pass>", ms)`, so pass times show
+      up in the same HUD as CPU zones; gated by `ENGINE_PROFILING` (`if constexpr`). Test:
+      `tst/graphics/realtime/integration/gpu_pass_timing.cpp`.
+      **TBDR CAVEAT (important):** on Apple tile GPUs the per-pass `[startVertex,endFragment]` spans
+      OVERLAP (the tiler front-loads every pass's vertex/tiling work), so naive `end-begin` makes each
+      pass look ~= the whole frame. The renderer instead attributes an **end-of-fragment TIMELINE**:
+      passes finish fragment in execution order, so each pass gets the delta since the previous pass's
+      end timestamp → clean, non-overlapping, and Σ(passes) ≈ `lastGpuFrameMs` (verified in sim-2:
+      forward ≈13.6 ms + fxaa ≈0.29 ms ≈ 14 ms frame). This also matches immediate-mode/Vulkan.
+      Compute passes are not timed yet (beginCompute has no descriptor; add a compute sample-buffer
+      attachment path when a compute pass needs timing).
 
 ## Graphics refactor pass (LATER — after core is solid)
 

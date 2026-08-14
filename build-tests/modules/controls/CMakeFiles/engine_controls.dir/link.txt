@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_controls.a CMakeFiles/engine_controls.dir/__/__/src/controls/fly_controller.cpp.o
+/usr/bin/ranlib libengine_controls.a

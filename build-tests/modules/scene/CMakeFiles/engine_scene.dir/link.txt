@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_scene.a CMakeFiles/engine_scene.dir/__/__/src/scene/extract.cpp.o
+/usr/bin/ranlib libengine_scene.a

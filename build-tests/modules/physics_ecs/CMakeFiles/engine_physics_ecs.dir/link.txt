@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_physics_ecs.a CMakeFiles/engine_physics_ecs.dir/__/__/src/physics_ecs/articulation.cpp.o CMakeFiles/engine_physics_ecs.dir/__/__/src/physics_ecs/systems.cpp.o
+/usr/bin/ranlib libengine_physics_ecs.a

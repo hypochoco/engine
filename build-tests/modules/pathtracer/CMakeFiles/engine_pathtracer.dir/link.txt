@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_pathtracer.a CMakeFiles/engine_pathtracer.dir/__/__/src/pathtracer/integrator.cpp.o CMakeFiles/engine_pathtracer.dir/__/__/src/pathtracer/scene.cpp.o
+/usr/bin/ranlib libengine_pathtracer.a

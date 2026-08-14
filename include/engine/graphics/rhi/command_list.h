@@ -39,6 +39,15 @@ struct RenderTargetDesc {
     const DepthAttachment*           depth = nullptr;
     uint32_t width  = 0;
     uint32_t height = 0;
+
+    // Optional GPU pass timing: when `timestampPool` is valid, the backend samples a GPU timestamp
+    // at the START of the pass into slot `timestampBegin` and at the END into `timestampEnd` (Metal:
+    // stage-boundary sample-buffer attachment start-of-vertex / end-of-fragment; Vulkan: vkCmdWrite-
+    // Timestamp TOP/BOTTOM). Resolve later via Device::resolveTimestamps. No effect if the device
+    // doesn't support timestamps. The two slot indices must be < the pool's capacity and unique.
+    TimestampPoolHandle timestampPool;
+    uint32_t            timestampBegin = 0;
+    uint32_t            timestampEnd   = 0;
 };
 
 // -----------------------------------------------------------------------------

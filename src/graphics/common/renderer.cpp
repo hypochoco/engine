@@ -19,11 +19,13 @@
 #include <cstddef>
 #include <cstring>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "engine/core/profile/profile.h"
 #include "engine/graphics/rhi/device.h"
 #include "engine/graphics/render/frame_ring.h"
 #include "engine/graphics/render/geometry_store.h"
@@ -186,6 +188,25 @@ struct Renderer::Impl {
         hdrRT = device->createRenderTarget(hdrTex);
         hdrW = w; hdrH = h;
     }
+
+    // Per-pass GPU timing (profiling builds only). One timestamp pool per frame-in-flight: the frame
+    // records pass boundaries into its slot's pool; the NEXT reuse of that slot (after the GPU has
+    // finished it, guaranteed by the frames-in-flight throttle) resolves the samples and feeds each
+    // pass duration to engine::prof as a `gpu.<pass>` zone. Cross-check: Σ passes ≈ lastGpuFrameMs.
+    static constexpr uint32_t kTsCapacity = 32;   // up to 16 timed raster passes per frame
+    struct TsFrame {
+        rhi::TimestampPoolHandle             pool;
+        std::vector<RenderGraph::PassSample> passes;
+        bool                                 pending = false;
+    };
+    std::vector<TsFrame> tsFrames;
+
+    void ensureTimestampPools() {
+        if (!tsFrames.empty() || !device->gpuTimestampsSupported()) return;
+        const uint32_t fif = std::max(device->framesInFlight(), 1u);
+        tsFrames.resize(fif);
+        for (auto& tf : tsFrames) tf.pool = device->createTimestampPool(kTsCapacity);
+    }
 };
 
 Renderer::Renderer(rhi::Device& device, GeometryStore& geometry) : impl_(std::make_unique<Impl>()) {
@@ -210,6 +231,8 @@ Renderer::~Renderer() {
         if (impl_->msaaDepthRT.valid())  impl_->device->destroy(impl_->msaaDepthRT);
         if (impl_->ldrTex.valid()) impl_->device->destroy(impl_->ldrTex);
         if (impl_->ldrRT.valid())  impl_->device->destroy(impl_->ldrRT);
+        for (auto& tf : impl_->tsFrames)
+            if (tf.pool.valid()) impl_->device->destroy(tf.pool);
     }
 }
 
@@ -631,7 +654,52 @@ void Renderer::render(rhi::FrameContext& frame, std::span<const RenderView> view
         }
     }
 
+    // Per-pass GPU timing (profiling only): resolve THIS slot's previous frame (GPU-complete per the
+    // frames-in-flight throttle waited in beginFrame) → engine::prof gpu.<pass> zones, then arm timing
+    // for the frame we're about to record. Compiled out entirely in Release.
+    if constexpr (prof::enabled()) {
+        if (I.device->gpuTimestampsSupported()) {
+            I.ensureTimestampPools();
+            const uint32_t fi = frame.frameIndex();
+            if (fi < I.tsFrames.size() && I.tsFrames[fi].pool.valid()) {
+                Impl::TsFrame& tf = I.tsFrames[fi];
+                if (tf.pending) {
+                    std::array<uint64_t, Impl::kTsCapacity> vals{};
+                    if (!tf.passes.empty() &&
+                        I.device->resolveTimestamps(tf.pool, std::span<uint64_t>(vals.data(), vals.size()))) {
+                        // Attribute per-pass GPU time as an END-OF-FRAGMENT TIMELINE rather than each
+                        // pass's (end-begin). On Apple TBDR the per-pass [startVertex,endFragment]
+                        // spans OVERLAP (the tiler front-loads every pass's vertex work), so end-begin
+                        // over-counts (each pass looks ~= the whole frame). Passes finish fragment in
+                        // registration/execution order, so the incremental time between consecutive
+                        // end timestamps is that pass's real GPU cost — and Σ ≈ lastGpuFrameMs. This
+                        // also matches immediate-mode/Vulkan (non-overlapping) behavior.
+                        uint64_t prev = vals[tf.passes.front().begin];   // frame GPU start
+                        for (const auto& ps : tf.passes) {
+                            const uint64_t end = vals[ps.end];
+                            const double ms = (end > prev) ? static_cast<double>(end - prev) * 1e-6 : 0.0;
+                            prof::record(std::string("gpu.") + ps.name, ms);
+                            prev = end;
+                        }
+                    }
+                    tf.pending = false;
+                }
+                graph.enableTimestamps(tf.pool, Impl::kTsCapacity);
+            }
+        }
+    }
+
     graph.execute(frame);
+
+    if constexpr (prof::enabled()) {
+        if (I.device->gpuTimestampsSupported() && !I.tsFrames.empty()) {
+            const uint32_t fi = frame.frameIndex();
+            if (fi < I.tsFrames.size() && I.tsFrames[fi].pool.valid()) {
+                I.tsFrames[fi].passes  = graph.sampledPasses();
+                I.tsFrames[fi].pending = true;
+            }
+        }
+    }
 }
 
 } // namespace engine::render

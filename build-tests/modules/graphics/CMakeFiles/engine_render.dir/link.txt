@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_render.a CMakeFiles/engine_render.dir/__/__/src/graphics/common/geometry_store.cpp.o CMakeFiles/engine_render.dir/__/__/src/graphics/common/renderer.cpp.o
+/usr/bin/ranlib libengine_render.a

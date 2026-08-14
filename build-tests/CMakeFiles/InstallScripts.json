@@ -1,0 +1,25 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/external/tinyobjloader/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/external/glfw/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/external/glfw/src/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/external/glfw/docs/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/core/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/physics/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/physics_env/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/input/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/input_glfw/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/ecs/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/controls/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/graphics/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/scene/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/pathtracer/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/modules/physics_ecs/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/src/shaders/cmake_install.cmake",
+		"/Users/dseocho/Projects/research/sim-2/external/engine/build-tests/tst/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

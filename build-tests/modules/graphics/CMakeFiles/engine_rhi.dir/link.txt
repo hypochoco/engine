@@ -1,0 +1,2 @@
+/usr/bin/ar qc libengine_rhi.a CMakeFiles/engine_rhi.dir/__/__/src/graphics/metal/metal_backend.cpp.o CMakeFiles/engine_rhi.dir/__/__/src/graphics/metal/metal_window.mm.o
+/usr/bin/ranlib libengine_rhi.a

@@ -22,11 +22,25 @@ namespace engine::physics {
 // Solver tuning knobs, formerly hardcoded `constexpr` in the backend .cpp files.
 struct SolverConfig {
     // --- Realtime (maximal-coordinate sequential-impulse) backend ---
-    Real contactBaumgarte = Real(0.2);      // contact position-correction fraction
-    Real contactSlop      = Real(0.005);    // allowed penetration before correction (m)
+    // contactBaumgarte was 0.2 under the legacy Baumgarte-in-velocity scheme (higher = energy
+    // injection). With split-impulse (WorldDef::splitImpulse, default on) the position push-out is a
+    // DISCARDED pseudo-velocity, so a higher rate is energy-free and makes depenetration snappy —
+    // penetration recovers in ~2 frames instead of ~180, perf-neutral, with no launch/energy
+    // regressions. (contactSlop is intentionally kept at 5 mm: tightening it to 2-3 mm reintroduces
+    // launches off edges/curved contacts. See the 2026-08-01 contact-stability investigation.)
+    Real contactBaumgarte = Real(0.5);      // contact position-correction fraction (split-impulse)
+    Real contactSlop      = Real(0.005);    // allowed resting penetration before correction (m)
     Real maxCorrection    = Real(2);        // cap on Baumgarte correction velocity (m/s)
     Real aabbMargin       = Real(0.01);     // broadphase AABB fattening (m)
     Real jointBaumgarte   = Real(0.2);      // joint position-drift correction fraction (no slop)
+
+    // --- Realtime TGS-Soft contact solver (WorldDef::contactSolver == TGSSoft) ---
+    // Soft-constraint contact params (Box2D-v3-style): the normal constraint behaves like a stiff
+    // spring at `contactHertz` with `contactDampingRatio`, giving stable, energy-free push-out that a
+    // relax pass removes bias energy from. `maxContactBiasVel` caps the depenetration speed.
+    Real contactHertz        = Real(30);
+    Real contactDampingRatio = Real(10);
+    Real maxContactBiasVel   = Real(4);
 
     // --- Reduced (Featherstone/ABA + PGS contact) backend ---
     int  pgsIterations          = 12;       // PGS sweeps for the reduced contact solve

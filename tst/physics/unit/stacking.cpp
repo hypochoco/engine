@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,9 @@ std::unique_ptr<PhysicsWorld> makeWorld() {
     wd.gravity = Vec3(0, -18.0f, 0);
     wd.substeps = 4;
     wd.velocityIterations = 8;
+    if (const char* s = std::getenv("PHYS_BAUM")) wd.solver.contactBaumgarte = std::atof(s);
+    if (const char* s = std::getenv("PHYS_SLOP")) wd.solver.contactSlop = std::atof(s);
+    if (const char* s = std::getenv("PHYS_SUBSTEPS")) wd.substeps = std::atoi(s);
     auto w = createPhysicsWorld(Backend::Realtime, wd);
     BodyDef ground;
     ground.type = BodyType::Static;

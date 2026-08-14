@@ -34,6 +34,12 @@ option(ENGINE_TRAINING_ONLY "Build only the headless training surface (core+phys
 # (point CMake at the toolkit via -DCMAKE_CUDA_COMPILER=/path/to/nvcc or -DCUDAToolkit_ROOT=...).
 option(ENGINE_CUDA "Build the CUDA physics backend (NVIDIA only; gated if(NOT APPLE))" OFF)
 
+# Profiling instrumentation (engine::prof scoped zones + Device GPU frame-time logging). When ON,
+# the ENGINE_PROFILING macro is defined on engine::core (and propagates to consumers), so the
+# ENGINE_PROFILE_SCOPE/ENGINE_PROFILE_FRAME macros emit code. Auto-disabled in Release regardless
+# of this option (see modules/core/CMakeLists.txt) so shipping builds carry zero profiling overhead.
+option(ENGINE_PROFILING "Enable profiling instrumentation (scoped zones; auto-off in Release)" ON)
+
 # Build the engine's own tests/benchmarks/visuals. Defaults ON when the engine is the top-level
 # project (its own dev build) and OFF when it's consumed via add_subdirectory (a game/tool doesn't
 # want the engine's test suite in its build). Consumers can force it on with -DENGINE_BUILD_TESTS=ON.

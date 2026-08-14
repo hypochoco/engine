@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,6 +33,8 @@
 #include "engine/physics/dynamics/body.h"
 #include "engine/physics/dynamics/integrate.h"
 #include "engine/physics/world.h"
+
+#include "engine/core/profile/profile.h"   // ENGINE_PROFILE_SCOPE — phase timing (compiled out in Release)
 
 #include "../backends_internal.h"
 
@@ -63,6 +67,8 @@ struct Constraint {
     Real     restitutionBias = 0;
     Real     normalImpulse = 0;  // accumulated (within step)
     Real     tangentImpulse = 0;
+    Real     pseudoImpulse = 0;  // accumulated position-correction (split-impulse) impulse
+    uint64_t key = 0;            // stable (bodyA,bodyB,contactIdx) id for contact warm-starting
 };
 
 // Per-candidate-pair narrowphase output (written to its own slot → lock-free parallel fill).
@@ -271,6 +277,22 @@ public:
         kSubDt_ = h;
         events_.clear();
 
+        // Warm-start bookkeeping: a fresh stamp per step (all substeps write it); lazily drop cached
+        // contacts not seen for a few steps so the map doesn't accumulate dead keys over a long run.
+        ++contactStamp_;
+        if (def_.contactWarmStart && (contactStamp_ & 0x7F) == 0) {
+            for (auto it = contactCache_.begin(); it != contactCache_.end();)
+                it = (contactStamp_ - it->second.stamp > 4u) ? contactCache_.erase(it) : std::next(it);
+        }
+
+        // TGS-Soft path: separate substep loop (manifold built once + reused, soft constraints).
+        if (def_.contactSolver == ContactSolver::TGSSoft) {
+            stepTgsSubsteps(dt);
+            for (uint32_t i = 0; i < bodies_.size(); ++i) writeOutputs(i);
+            writeJointStates();
+            return;
+        }
+
         for (int s = 0; s < substeps; ++s) {
             // 0. Cache each body's world inverse inertia for this substep. Orientation is constant
             //    during the velocity solve (positions integrate in step 4), so this is computed
@@ -283,16 +305,31 @@ public:
             applyActuators(h);
 
             // 2. Broadphase + narrowphase -> constraints.
-            buildConstraints(h);
+            { ENGINE_PROFILE_SCOPE("phys.build"); buildConstraints(h); }
 
             // 2b. Joints: cache per-substep solve data + warm-start from accumulated impulses.
             prepareJoints(h);
 
             // 3. Sequential-impulse velocity solve. Joints solved serially (creation order,
             //    deterministic) before the graph-colored contacts each iteration.
-            for (int it = 0; it < def_.velocityIterations; ++it) {
-                solveJoints();
-                solveColored();
+            {
+                ENGINE_PROFILE_SCOPE("phys.solve");
+                warmStartColored();                    // seed contact impulses from the prior solution
+                for (int it = 0; it < def_.velocityIterations; ++it) {
+                    solveJoints();
+                    solveColored();
+                }
+                storeContactImpulses();                // cache solved impulses for next substep/step
+            }
+
+            // 3a. Split-impulse position correction: depenetrate on a separate pseudo-velocity
+            //     (biasLin_/biasAng_), reset each substep, that moves positions in step 4 but never
+            //     feeds the real velocity → no Baumgarte energy injection. Contacts only.
+            biasLin_.assign(bodies_.size(), Vec3(0));
+            biasAng_.assign(bodies_.size(), Vec3(0));
+            if (def_.splitImpulse && def_.positionIterations > 0 && !constraints_.empty()) {
+                ENGINE_PROFILE_SCOPE("phys.position");
+                for (int it = 0; it < def_.positionIterations; ++it) solvePositionColored();
             }
 
             // 3b. Optional velocity damping (drag) on dynamic bodies, so undamped DOFs settle.
@@ -302,12 +339,21 @@ public:
                 forEachDynamic([&](BodyData& b) { b.linVel *= ld; b.angVel *= ad; });
             }
 
-            // 4. Integrate positions + orientations (Dynamic + Kinematic; Kinematic advances by
-            //    its scripted velocity, unaffected by gravity/impulses).
-            forEachMoving([&](BodyData& b) {
-                b.position += b.linVel * h;
-                b.orientation = integrateOrientation(b.orientation, b.angVel, h);
-            });
+            // 4. Integrate positions + orientations (Dynamic + Kinematic). Dynamic bodies advance by
+            //    real velocity PLUS the discarded pseudo-velocity (split-impulse depenetration);
+            //    Kinematic advances by its scripted velocity (invMass 0 → zero bias).
+            {
+                ENGINE_PROFILE_SCOPE("phys.integrate");
+                const size_t nb = bodies_.size();
+                auto integrateOne = [&](size_t i) {
+                    BodyData& b = bodies_[i];
+                    if (!b.alive || b.type == BodyType::Static) return;
+                    b.position += (b.linVel + biasLin_[i]) * h;
+                    b.orientation = integrateOrientation(b.orientation, b.angVel + biasAng_[i], h);
+                };
+                if (pool_ && nb >= threshold_) pool_->parallelFor(nb, integrateOne, 1024);
+                else for (size_t i = 0; i < nb; ++i) integrateOne(i);
+            }
         }
 
         for (uint32_t i = 0; i < bodies_.size(); ++i) writeOutputs(i);
@@ -443,9 +489,9 @@ private:
         }
 
         if (def_.broadphase == BroadphaseKind::UniformGrid)
-            broadphase::uniformGrid(finiteAabb_, pairs_, pool_);
+            { ENGINE_PROFILE_SCOPE("phys.broadphase"); broadphase::uniformGrid(finiteAabb_, pairs_, pool_); }
         else
-            broadphase::sweepAndPrune(finiteAabb_, pairs_);
+            { ENGINE_PROFILE_SCOPE("phys.broadphase"); broadphase::sweepAndPrune(finiteAabb_, pairs_); }
 
         // Candidate body-index pairs: finite-finite (from broadphase) + plane-finite.
         candidatePairs_.clear();
@@ -468,8 +514,11 @@ private:
         auto doPair = [&](size_t k) {
             narrowphase(candidatePairs_[k].first, candidatePairs_[k].second, h, perPair_[k]);
         };
-        if (pool_ && m >= threshold_) pool_->parallelFor(m, doPair, 256);
-        else for (size_t k = 0; k < m; ++k) doPair(k);
+        {
+            ENGINE_PROFILE_SCOPE("phys.narrowphase");
+            if (pool_ && m >= threshold_) pool_->parallelFor(m, doPair, 256);
+            else for (size_t k = 0; k < m; ++k) doPair(k);
+        }
 
         for (size_t k = 0; k < m; ++k)
             for (int t = 0; t < perPair_[k].count; ++t) {
@@ -582,6 +631,10 @@ private:
             const Real vn = glm::dot(vrel, con.normal);
             const Real e = std::min(bodies_[a].material.restitution, bodies_[b].material.restitution);
             con.restitutionBias = (vn < Real(-1)) ? e * (-vn) : Real(0);
+            // Stable id for warm-starting: (bodyA, bodyB, contact-index-within-pair). Narrowphase is
+            // deterministic, so a resting contact keeps the same key across substeps/steps.
+            con.key = (static_cast<uint64_t>(a) << 40) | (static_cast<uint64_t>(b) << 8)
+                    | static_cast<uint64_t>(out.count & 0xFF);
             out.c[out.count] = con;
             out.e[out.count] = ContactEvent{
                 BodyHandle{ a, bodies_[a].generation }, BodyHandle{ b, bodies_[b].generation },
@@ -693,18 +746,24 @@ private:
                             - (A.linVel + glm::cross(A.angVel, rA));
             const Real vn = glm::dot(vrel, n);
             const Real kn = effectiveMass(A, B, IinvA, IinvB, rA, rB, n);
-            // Target normal velocity the solver drives toward:
-            //  * Overlapping → softened Baumgarte push-out plus any restitution rebound.
-            //  * Separated (speculative) → if the pair is bouncing (restitution active), aim for
-            //    the rebound velocity directly; adding the negative gap-closing bias here would
-            //    brake a fast approach to a near-standstill one substep before impact and
-            //    silently cancel restitution. Otherwise permit approach only up to the current
-            //    gap this substep (prevents tunnelling without floating).
+            // Target normal velocity the REAL-velocity solve drives toward. With split-impulse the
+            // penetration push-out is NOT applied here (it would inject energy — the outward bias
+            // velocity would persist); it is handled by the separate pseudo-velocity position pass
+            // (solvePositionColored). Here we only enforce non-penetration of velocity + restitution:
+            //  * Overlapping → target 0 (or the restitution rebound), NO Baumgarte term.
+            //  * Separated (speculative) → rebound if bouncing, else permit approach only up to the
+            //    current gap this substep (prevents tunnelling without floating).
             Real target;
             if (c.penetration >= Real(0)) {
-                const Real baumgarte = std::min((def_.solver.contactBaumgarte / kSubDt_) * std::max(c.penetration - def_.solver.contactSlop, Real(0)),
-                                                def_.solver.maxCorrection);
-                target = baumgarte + c.restitutionBias;
+                if (def_.splitImpulse) {
+                    target = c.restitutionBias;   // split-impulse: penetration handled in the position pass
+                } else {
+                    // Legacy Baumgarte: fold the softened, clamped push-out into the real velocity.
+                    const Real baumgarte = std::min(
+                        (def_.solver.contactBaumgarte / kSubDt_) * std::max(c.penetration - def_.solver.contactSlop, Real(0)),
+                        def_.solver.maxCorrection);
+                    target = baumgarte + c.restitutionBias;
+                }
             } else {
                 const Real speculative = c.penetration / kSubDt_;   // = -gap/h (negative)
                 target = (c.restitutionBias > Real(0)) ? c.restitutionBias : speculative;
@@ -738,6 +797,272 @@ private:
         }
     }
 
+    // Split-impulse position correction: resolve penetration on a SEPARATE pseudo-velocity
+    // (biasLin_/biasAng_) that moves positions during integration but is discarded afterward — so
+    // depenetration never adds to the body's real velocity (no Baumgarte energy injection). Uses the
+    // same effective mass + the softened, slop-tolerant, clamped push-out target as before.
+    void solvePositionConstraint(Constraint& c) {
+        if (c.penetration <= def_.solver.contactSlop) return;
+        BodyData& A = bodies_[c.a];
+        BodyData& B = bodies_[c.b];
+        const Vec3 rA = c.point - A.position;
+        const Vec3 rB = c.point - B.position;
+        const Mat3& IinvA = worldInvInertia_[c.a];
+        const Mat3& IinvB = worldInvInertia_[c.b];
+        const Vec3& n = c.normal;
+        const Vec3 vbias = (biasLin_[c.b] + glm::cross(biasAng_[c.b], rB))
+                         - (biasLin_[c.a] + glm::cross(biasAng_[c.a], rA));
+        const Real vn = glm::dot(vbias, n);
+        const Real kn = effectiveMass(A, B, IinvA, IinvB, rA, rB, n);
+        const Real target = std::min(
+            (def_.solver.contactBaumgarte / kSubDt_) * (c.penetration - def_.solver.contactSlop),
+            def_.solver.maxCorrection);
+        Real lambda = (kn > kEpsilon) ? (target - vn) / kn : Real(0);
+        const Real old = c.pseudoImpulse;
+        c.pseudoImpulse = std::max(old + lambda, Real(0));   // one-sided (push apart only)
+        lambda = c.pseudoImpulse - old;
+        const Vec3 P = lambda * n;
+        if (A.invMass != Real(0)) { biasLin_[c.a] -= A.invMass * P; biasAng_[c.a] -= IinvA * glm::cross(rA, P); }
+        if (B.invMass != Real(0)) { biasLin_[c.b] += B.invMass * P; biasAng_[c.b] += IinvB * glm::cross(rB, P); }
+    }
+
+    // One graph-colored Gauss-Seidel sweep of the position (pseudo-velocity) solve — same coloring
+    // and parallel structure as solveColored (disjoint dynamic bodies per color).
+    void solvePositionColored() {
+        for (uint32_t col = 0; col < numColors_; ++col) {
+            const uint32_t begin = colorStart_[col];
+            const uint32_t count = colorStart_[col + 1] - begin;
+            auto solveOne = [&](size_t t) { solvePositionConstraint(constraints_[ordered_[begin + t]]); };
+            if (pool_ && count >= threshold_) pool_->parallelFor(count, solveOne, 64);
+            else for (uint32_t t = 0; t < count; ++t) solveOne(t);
+        }
+    }
+
+    // Contact warm-starting: seed each contact's accumulated normal impulse from the persistent
+    // cache and APPLY it to the bodies before iterating, so the velocity solve starts from the prior
+    // solution (essential for stack convergence). Graph-colored for parallel safety. Normal-only
+    // (tangent restarts at 0 — its direction isn't cached). No-op when the flag is off.
+    void warmStartColored() {
+        if (!def_.contactWarmStart) return;
+        for (uint32_t col = 0; col < numColors_; ++col) {
+            const uint32_t begin = colorStart_[col];
+            const uint32_t count = colorStart_[col + 1] - begin;
+            auto one = [&](size_t t) {
+                Constraint& c = constraints_[ordered_[begin + t]];
+                auto it = contactCache_.find(c.key);
+                if (it == contactCache_.end()) return;
+                c.normalImpulse = it->second.n;
+                BodyData& A = bodies_[c.a];
+                BodyData& B = bodies_[c.b];
+                applyImpulse(A, B, worldInvInertia_[c.a], worldInvInertia_[c.b],
+                             c.point - A.position, c.point - B.position, c.normalImpulse * c.normal);
+            };
+            if (pool_ && count >= threshold_) pool_->parallelFor(count, one, 64);
+            else for (uint32_t t = 0; t < count; ++t) one(t);
+        }
+    }
+
+    // Store each contact's solved normal impulse back into the cache (stamped) for next-substep/step
+    // warm-starting. Serial (map writes); keyed, so order-independent.
+    void storeContactImpulses() {
+        if (!def_.contactWarmStart) return;
+        for (const Constraint& c : constraints_)
+            contactCache_[c.key] = CachedContact{ c.normalImpulse, contactStamp_ };
+    }
+
+    // ================= TGS-Soft contact solver (WorldDef::contactSolver == TGSSoft) =================
+    // Persistent per-contact record: body-local anchors + tangent basis + prepare-frame effective
+    // masses + warm-started impulses, reused across the step's substeps.
+    struct TgsContact {
+        uint32_t a = 0, b = 0;
+        Vec3 localAnchorA{0}, localAnchorB{0};    // contact point in each body's local frame (prepare)
+        Vec3 n{0, 1, 0}, t1{1, 0, 0}, t2{0, 0, 1}; // world normal + tangent basis (fixed for the step)
+        Real sep0 = 0;                            // separation at prepare (negative = penetrating)
+        Real nMass = 0, t1Mass = 0, t2Mass = 0;   // effective masses (prepare inertia + anchors)
+        Real nImp = 0, t1Imp = 0, t2Imp = 0;      // accumulated impulses (warm-started)
+        Real relVN0 = 0;                          // initial relative normal velocity (restitution)
+        Real e = 0, mu = 0;                       // restitution, friction
+        uint64_t key = 0;
+    };
+
+    // Build the persistent contact set ONCE per step from the narrowphase constraints. Stores body-
+    // local anchors + a tangent basis + prepare-frame effective masses; seeds impulses from the cache.
+    void prepareTgs(Real h) {
+        const Real hertz = std::min(def_.solver.contactHertz, Real(0.25) / std::max(h, Real(1e-6)));
+        const Real zeta  = def_.solver.contactDampingRatio;
+        const Real omega = Real(2) * Real(3.14159265358979323846) * hertz;
+        const Real c     = h * omega * (Real(2) * zeta + h * omega);
+        softBiasRate_     = (Real(2) * zeta + h * omega) > kEpsilon ? omega / (Real(2) * zeta + h * omega) : Real(0);
+        softMassScale_    = c / (Real(1) + c);
+        softImpulseScale_ = Real(1) / (Real(1) + c);
+
+        tgs_.assign(constraints_.size(), TgsContact{});
+        for (size_t i = 0; i < constraints_.size(); ++i) {
+            const Constraint& con = constraints_[i];
+            TgsContact& tc = tgs_[i];
+            BodyData& A = bodies_[con.a];
+            BodyData& B = bodies_[con.b];
+            tc.a = con.a; tc.b = con.b; tc.n = con.normal; tc.key = con.key;
+            basisPerp(tc.n, tc.t1, tc.t2);
+            tc.localAnchorA = glm::conjugate(A.orientation) * (con.point - A.position);
+            tc.localAnchorB = glm::conjugate(B.orientation) * (con.point - B.position);
+            tc.sep0 = -con.penetration;
+            const Vec3 rA = con.point - A.position;
+            const Vec3 rB = con.point - B.position;
+            const Mat3& IA = worldInvInertia_[con.a];
+            const Mat3& IB = worldInvInertia_[con.b];
+            const Real kn  = effectiveMass(A, B, IA, IB, rA, rB, tc.n);
+            const Real kt1 = effectiveMass(A, B, IA, IB, rA, rB, tc.t1);
+            const Real kt2 = effectiveMass(A, B, IA, IB, rA, rB, tc.t2);
+            tc.nMass  = kn  > kEpsilon ? Real(1) / kn  : Real(0);
+            tc.t1Mass = kt1 > kEpsilon ? Real(1) / kt1 : Real(0);
+            tc.t2Mass = kt2 > kEpsilon ? Real(1) / kt2 : Real(0);
+            const Vec3 vrel = (B.linVel + glm::cross(B.angVel, rB)) - (A.linVel + glm::cross(A.angVel, rA));
+            tc.relVN0 = glm::dot(vrel, tc.n);
+            tc.e  = std::min(A.material.restitution, B.material.restitution);
+            tc.mu = std::sqrt(A.material.friction * B.material.friction);
+            if (def_.contactWarmStart) {
+                auto it = contactCache_.find(tc.key);
+                if (it != contactCache_.end()) tc.nImp = it->second.n;
+            }
+        }
+    }
+
+    void warmStartTgs() {
+        for (uint32_t col = 0; col < numColors_; ++col) {
+            const uint32_t begin = colorStart_[col];
+            const uint32_t count = colorStart_[col + 1] - begin;
+            auto one = [&](size_t t) {
+                TgsContact& c = tgs_[ordered_[begin + t]];
+                BodyData& A = bodies_[c.a];
+                BodyData& B = bodies_[c.b];
+                const Vec3 rA = A.orientation * c.localAnchorA;
+                const Vec3 rB = B.orientation * c.localAnchorB;
+                const Vec3 P = c.nImp * c.n + c.t1Imp * c.t1 + c.t2Imp * c.t2;
+                applyImpulse(A, B, worldInvInertia_[c.a], worldInvInertia_[c.b], rA, rB, P);
+            };
+            if (pool_ && count >= threshold_) pool_->parallelFor(count, one, 64);
+            else for (uint32_t t = 0; t < count; ++t) one(t);
+        }
+    }
+
+    // One TGS contact sweep. useBias applies the soft position bias (penetration push-out); the relax
+    // pass runs with useBias=false so the bias-added velocity is removed (energy-free depenetration).
+    void solveTgsContact(TgsContact& c, bool useBias, Real h) {
+        BodyData& A = bodies_[c.a];
+        BodyData& B = bodies_[c.b];
+        const Mat3& IA = worldInvInertia_[c.a];
+        const Mat3& IB = worldInvInertia_[c.b];
+        const Vec3 rA = A.orientation * c.localAnchorA;
+        const Vec3 rB = B.orientation * c.localAnchorB;
+        const Real sep = c.sep0 + glm::dot((B.position + rB) - (A.position + rA), c.n);
+
+        {   // normal
+            const Vec3 vrel = (B.linVel + glm::cross(B.angVel, rB)) - (A.linVel + glm::cross(A.angVel, rA));
+            const Real vn = glm::dot(vrel, c.n);
+            Real bias = 0, mS = 1, iS = 0;
+            if (sep > Real(0)) {
+                bias = sep / h;                        // speculative: close the gap this substep
+            } else if (useBias) {
+                bias = std::max(softBiasRate_ * sep, -def_.solver.maxContactBiasVel);
+                mS = softMassScale_; iS = softImpulseScale_;
+            }
+            Real impulse = -c.nMass * mS * (vn + bias) - iS * c.nImp;
+            const Real newImp = std::max(c.nImp + impulse, Real(0));
+            impulse = newImp - c.nImp; c.nImp = newImp;
+            applyImpulse(A, B, IA, IB, rA, rB, impulse * c.n);
+        }
+        {   // friction (2-axis box, clamped to the current normal impulse)
+            const Real maxF = c.mu * c.nImp;
+            Vec3 vrel = (B.linVel + glm::cross(B.angVel, rB)) - (A.linVel + glm::cross(A.angVel, rA));
+            Real dl = -c.t1Mass * glm::dot(vrel, c.t1);
+            Real old = c.t1Imp; c.t1Imp = std::clamp(old + dl, -maxF, maxF); dl = c.t1Imp - old;
+            applyImpulse(A, B, IA, IB, rA, rB, dl * c.t1);
+            vrel = (B.linVel + glm::cross(B.angVel, rB)) - (A.linVel + glm::cross(A.angVel, rA));
+            dl = -c.t2Mass * glm::dot(vrel, c.t2);
+            old = c.t2Imp; c.t2Imp = std::clamp(old + dl, -maxF, maxF); dl = c.t2Imp - old;
+            applyImpulse(A, B, IA, IB, rA, rB, dl * c.t2);
+        }
+    }
+
+    void solveTgsColored(bool useBias, Real h) {
+        for (uint32_t col = 0; col < numColors_; ++col) {
+            const uint32_t begin = colorStart_[col];
+            const uint32_t count = colorStart_[col + 1] - begin;
+            auto one = [&](size_t t) { solveTgsContact(tgs_[ordered_[begin + t]], useBias, h); };
+            if (pool_ && count >= threshold_) pool_->parallelFor(count, one, 64);
+            else for (uint32_t t = 0; t < count; ++t) one(t);
+        }
+    }
+
+    void applyRestitutionTgs() {
+        for (TgsContact& c : tgs_) {
+            if (c.e <= Real(0) || c.relVN0 > Real(-1) || c.nImp <= Real(0)) continue;
+            BodyData& A = bodies_[c.a];
+            BodyData& B = bodies_[c.b];
+            const Vec3 rA = A.orientation * c.localAnchorA;
+            const Vec3 rB = B.orientation * c.localAnchorB;
+            const Vec3 vrel = (B.linVel + glm::cross(B.angVel, rB)) - (A.linVel + glm::cross(A.angVel, rA));
+            const Real vn = glm::dot(vrel, c.n);
+            Real impulse = -c.nMass * (vn + c.e * c.relVN0);
+            const Real newImp = std::max(c.nImp + impulse, Real(0));
+            impulse = newImp - c.nImp; c.nImp = newImp;
+            applyImpulse(A, B, worldInvInertia_[c.a], worldInvInertia_[c.b], rA, rB, impulse * c.n);
+        }
+    }
+
+    void storeTgsImpulses() {
+        if (!def_.contactWarmStart) return;
+        for (const TgsContact& c : tgs_) contactCache_[c.key] = CachedContact{ c.nImp, contactStamp_ };
+    }
+
+    // TGS-Soft step: manifold built once, then substep {integrate v, warm-start, solve(bias),
+    // integrate x, relax(no bias)}, then restitution. Positions advance each substep so contact
+    // separations are re-derived — the temporal Gauss-Seidel that makes deep stacks converge.
+    void stepTgsSubsteps(Real dt) {
+        const int substeps = def_.substeps > 0 ? def_.substeps : 1;
+        const Real h = dt / static_cast<Real>(substeps);
+        kSubDt_ = h;
+        computeWorldInvInertia();
+        { ENGINE_PROFILE_SCOPE("phys.build"); buildConstraints(dt); }
+        prepareJoints(h);
+        { ENGINE_PROFILE_SCOPE("phys.solve"); prepareTgs(h); }
+
+        for (int s = 0; s < substeps; ++s) {
+            forEachDynamic([&](BodyData& b) { b.linVel += def_.gravity * h; });
+            applyActuators(h);
+            {
+                ENGINE_PROFILE_SCOPE("phys.solve");
+                warmStartTgs();
+                solveJoints();
+                solveTgsColored(/*useBias=*/true, h);
+            }
+            {
+                ENGINE_PROFILE_SCOPE("phys.integrate");
+                const size_t nb = bodies_.size();
+                auto one = [&](size_t i) {
+                    BodyData& b = bodies_[i];
+                    if (!b.alive || b.type == BodyType::Static) return;
+                    b.position += b.linVel * h;
+                    b.orientation = integrateOrientation(b.orientation, b.angVel, h);
+                };
+                if (pool_ && nb >= threshold_) pool_->parallelFor(nb, one, 1024);
+                else for (size_t i = 0; i < nb; ++i) one(i);
+                // worldInvInertia_ intentionally NOT recomputed: TGS uses prepare-frame inertia for
+                // the whole step (matches the precomputed contact masses → energy-consistent).
+            }
+            { ENGINE_PROFILE_SCOPE("phys.solve"); solveTgsColored(/*useBias=*/false, h); }
+
+            if (def_.linearDamping > Real(0) || def_.angularDamping > Real(0)) {
+                const Real ld = std::max(Real(0), Real(1) - def_.linearDamping * h);
+                const Real ad = std::max(Real(0), Real(1) - def_.angularDamping * h);
+                forEachDynamic([&](BodyData& b) { b.linVel *= ld; b.angVel *= ad; });
+            }
+        }
+        { ENGINE_PROFILE_SCOPE("phys.solve"); applyRestitutionTgs(); storeTgsImpulses(); }
+    }
+
+    // Static Real effectiveMass ... (below)
     static Real effectiveMass(const BodyData& A, const BodyData& B, const Mat3& IinvA,
                               const Mat3& IinvB, const Vec3& rA, const Vec3& rB, const Vec3& dir) {
         const Vec3 rnA = glm::cross(rA, dir);
@@ -992,6 +1317,22 @@ private:
     std::vector<uint32_t>         jointFreeList_;
     std::vector<JointState>       jointStates_;   // bulk readback (B3), indexed by joint slot
     std::vector<Mat3>             worldInvInertia_;  // per-body cache, recomputed each substep (D0)
+    std::vector<Vec3>             biasLin_, biasAng_;  // split-impulse pseudo-velocities (per substep)
+
+    // Persistent contact-impulse cache for warm-starting: contact key → last solved normal impulse
+    // + a stamp (bumped each step) for lazy pruning of contacts that no longer exist. Keyed lookups
+    // only (never iterated to apply impulses), so determinism comes from the fixed constraint order.
+    // NOTE: a std::unordered_map is not allocation-free / VecEnv-ideal at 100k+ scale — a follow-up
+    // should replace it with an open-addressed per-world table (see the investigation doc).
+    struct CachedContact { Real n = 0; uint32_t stamp = 0; };
+    std::unordered_map<uint64_t, CachedContact> contactCache_;
+    uint32_t                      contactStamp_ = 0;
+
+    // TGS-Soft contact solver state. Manifolds are built ONCE per step (from constraints_) and reused
+    // across substeps: anchors are stored body-local so the world contact point + separation are
+    // recomputed each substep from the current body pose. (TgsContact defined above the TGS methods.)
+    std::vector<TgsContact> tgs_;
+    Real softBiasRate_ = 0, softMassScale_ = 1, softImpulseScale_ = 0;
     std::vector<engine::Transform> poses_;
     std::vector<Vec3>             linVelOut_;
     std::vector<Vec3>             angVelOut_;

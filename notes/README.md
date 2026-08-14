@@ -47,6 +47,7 @@ Working notes for the engine project.
 - [`2026-07-08-cuda-port-code-review.md`](investigations/physics/2026-07-08-cuda-port-code-review.md) — **independent post-implementation review**: design assessment + the contact-model/backend mismatch + integration gaps
 - [`2026-07-08-cuda-engine-next-steps.md`](investigations/physics/2026-07-08-cuda-engine-next-steps.md) — engine-side improvements (shared `ENGINE_HD` actuator/obs, CPU `DiffVecEnv`, `CudaVecEnv` feature parity, full-env parity tests)
 - [`2026-07-08-cuda-sim1-integration-next-steps.md`](investigations/physics/2026-07-08-cuda-sim1-integration-next-steps.md) — sim-1 integration (deferred): bind the env, PyTorch-GPU + zero-copy, on-GPU glue, the dynamics-switch/retrain
+- [`2026-08-01-realtime-contact-stability.md`](investigations/physics/2026-08-01-realtime-contact-stability.md) — **realtime contact solver: energy injection (Baumgarte) + tall-stack collapse (no contact warm-starting)**; repro tests + root causes + fix options (split-impulse, warm-starting, TGS-Soft)
 
 ### `investigations/realtime-rendering/`
 

@@ -22,6 +22,7 @@
 #include <dispatch/dispatch.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -152,6 +153,11 @@ struct Device::Impl {
     dispatch_semaphore_t frameSem = nullptr;
     uint64_t             frameCounter = 0;
 
+    // GPU busy time (ms) of the most recently completed frame, written from the frame's command
+    // buffer completion handler (GPUEndTime - GPUStartTime) and polled via Device::lastGpuFrameMs().
+    // Atomic because the completion handler runs on a Metal-owned thread.
+    std::atomic<double>  lastGpuMs{0.0};
+
     // Block until every in-flight frame's completion handler has signaled the throttle semaphore,
     // restoring it to its initial count. Windowed frames signal asynchronously, so this is needed
     // both as waitIdle() and before releasing the semaphore — libdispatch TRAPS if a semaphore is
@@ -164,6 +170,24 @@ struct Device::Impl {
     }
 
     ~Impl() { if (frameSem) { drainFramesInFlight(); dispatch_release(frameSem); } }
+
+    // Detect GPU timestamp support: find the "timestamp" counter set and confirm the device can
+    // sample it at stage boundaries (the portable path — attached to a render/compute pass desc).
+    void initTimestamps() {
+        if (!device) return;
+        if (!device->supportsCounterSampling(MTL::CounterSamplingPointAtStageBoundary)) return;
+        NS::Array* sets = device->counterSets();
+        if (!sets) return;
+        for (NS::UInteger i = 0; i < sets->count(); ++i) {
+            auto* cs = static_cast<MTL::CounterSet*>(sets->object(i));
+            if (cs && cs->name() && MTL::CommonCounterSetTimestamp &&
+                std::strcmp(cs->name()->utf8String(), MTL::CommonCounterSetTimestamp->utf8String()) == 0) {
+                timestampCounterSet = NS::RetainPtr(cs);
+                timestampsSupported = true;
+                return;
+            }
+        }
+    }
 
     // Windowed swapchain (CAMetalLayer); unused in headless mode.
     CA::MetalLayer* layer      = nullptr;   // retained by the .mm shim
@@ -187,6 +211,8 @@ struct Device::Impl {
                          uint32_t generation = 0; bool alive = false; };
     struct RenderTargetSlot { uint32_t textureIndex = 0; uint32_t generation = 0; bool alive = false; };
     struct SamplerSlot { NS::SharedPtr<MTL::SamplerState> sampler; uint32_t generation = 0; bool alive = false; };
+    struct TimestampPoolSlot { NS::SharedPtr<MTL::CounterSampleBuffer> buffer; uint32_t capacity = 0;
+                               uint32_t generation = 0; bool alive = false; };
 
     std::vector<BufferSlot>       buffers;
     std::vector<TextureSlot>      textures;
@@ -194,6 +220,12 @@ struct Device::Impl {
     std::vector<PipelineSlot>     pipelines;
     std::vector<RenderTargetSlot> renderTargets;
     std::vector<SamplerSlot>      samplers;
+    std::vector<TimestampPoolSlot> timestampPools;
+
+    // GPU timestamp support: the "timestamp" counter set + whether the device can sample it at
+    // render/compute stage boundaries (the portable path on Apple). Detected at device creation.
+    NS::SharedPtr<MTL::CounterSet> timestampCounterSet;
+    bool                           timestampsSupported = false;
 
     template <class Vec>
     static uint32_t acquire(Vec& pool, std::vector<uint32_t>& freeList) {
@@ -203,6 +235,7 @@ struct Device::Impl {
     }
     std::vector<uint32_t> freeBuffers, freeShaders, freePipelines, freeRenderTargets, freeSamplers;
     std::vector<uint32_t> freeTextures;
+    std::vector<uint32_t> freeTimestampPools;
 
     // Global bindless texture table: slot → texture pool index (0xFFFFFFFF = empty). Materials
     // store a slot; CommandList::bindBindlessTextures binds each alive slot's texture to the
@@ -261,6 +294,7 @@ Device Device::createHeadless(const DeviceConfig& config) {
         d.impl_->queue = NS::TransferPtr(d.impl_->device->newCommandQueue());
     }
     d.impl_->frameSem = dispatch_semaphore_create(std::max(config.framesInFlight, 1u));
+    d.impl_->initTimestamps();
     return d;
 }
 
@@ -271,6 +305,7 @@ Device Device::createWindowed(const WindowSurface& surface, const DeviceConfig& 
     d.impl_->device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
     d.impl_->queue  = NS::TransferPtr(d.impl_->device->newCommandQueue());
     d.impl_->frameSem = dispatch_semaphore_create(std::max(config.framesInFlight, 1u));
+    d.impl_->initTimestamps();
 
     // Attach a CAMetalLayer to the window (Objective-C++ shim) and reserve swapchain slots.
     void* layerPtr = engine_metal_create_layer(surface.nativeWindow, d.impl_->device.get(),
@@ -683,10 +718,14 @@ void Device::submit(FrameContext&, CommandList&) { /* Metal: recorded on the fra
 void Device::endFrame(FrameContext&& f) {
     if (!f.impl_) return;
     // Signal the frames-in-flight semaphore once the GPU finishes this frame's work, freeing the
-    // slot for reuse framesInFlight frames later.
+    // slot for reuse framesInFlight frames later. The same handler records the frame's GPU busy
+    // time (GPUEndTime - GPUStartTime) for Device::lastGpuFrameMs().
     if (f.impl_->cmd && impl_->frameSem) {
         dispatch_semaphore_t sem = impl_->frameSem;
-        f.impl_->cmd->addCompletedHandler([sem](MTL::CommandBuffer*) {
+        Impl* dev = impl_.get();   // outlives all in-flight frames (drainFramesInFlight in dtor/waitIdle)
+        f.impl_->cmd->addCompletedHandler([sem, dev](MTL::CommandBuffer* cb) {
+            const double gpuMs = (cb->GPUEndTime() - cb->GPUStartTime()) * 1000.0;
+            if (gpuMs > 0.0) dev->lastGpuMs.store(gpuMs, std::memory_order_relaxed);
             dispatch_semaphore_signal(sem);
         });
     }
@@ -707,6 +746,55 @@ void Device::waitIdle() {
 }
 
 uint32_t Device::framesInFlight() const { return std::max(impl_->config.framesInFlight, 1u); }
+
+double Device::lastGpuFrameMs() const { return impl_->lastGpuMs.load(std::memory_order_relaxed); }
+
+bool Device::gpuTimestampsSupported() const { return impl_ && impl_->timestampsSupported; }
+
+TimestampPoolHandle Device::createTimestampPool(uint32_t sampleCapacity) {
+    Impl& I = *impl_;
+    if (!I.timestampsSupported || !I.timestampCounterSet || sampleCapacity == 0) return {};
+    MTL::CounterSampleBufferDescriptor* desc = MTL::CounterSampleBufferDescriptor::alloc()->init();
+    desc->setCounterSet(I.timestampCounterSet.get());
+    desc->setStorageMode(MTL::StorageModeShared);
+    desc->setSampleCount(sampleCapacity);
+    NS::Error* err = nullptr;
+    MTL::CounterSampleBuffer* buf = I.device->newCounterSampleBuffer(desc, &err);
+    desc->release();
+    if (!buf) return {};   // e.g. out of memory; caller falls back to whole-frame timing
+    uint32_t idx = Impl::acquire(I.timestampPools, I.freeTimestampPools);
+    I.timestampPools[idx].buffer   = NS::TransferPtr(buf);
+    I.timestampPools[idx].capacity = sampleCapacity;
+    I.timestampPools[idx].alive    = true;
+    return TimestampPoolHandle{ idx, I.timestampPools[idx].generation };
+}
+
+void Device::destroy(TimestampPoolHandle h) {
+    if (!h.valid() || !impl_ || h.index >= impl_->timestampPools.size()) return;
+    auto& s = impl_->timestampPools[h.index];
+    if (!s.alive || s.generation != h.generation) return;
+    s.buffer.reset();
+    s.alive = false;
+    s.capacity = 0;
+    ++s.generation;
+    impl_->freeTimestampPools.push_back(h.index);
+}
+
+bool Device::resolveTimestamps(TimestampPoolHandle h, std::span<uint64_t> out) const {
+    const Impl& I = *impl_;
+    if (!I.timestampsSupported || !h.valid() || h.index >= I.timestampPools.size()) return false;
+    const auto& s = I.timestampPools[h.index];
+    if (!s.alive || s.generation != h.generation || !s.buffer) return false;
+    const uint32_t n = std::min(static_cast<uint32_t>(out.size()), s.capacity);
+    if (n == 0) return true;
+    NS::Data* data = s.buffer->resolveCounterRange(NS::Range(0, n));
+    if (!data || !data->bytes()) return false;
+    const auto* results = reinterpret_cast<const MTL::CounterResultTimestamp*>(data->bytes());
+    const NS::UInteger avail = data->length() / sizeof(MTL::CounterResultTimestamp);
+    for (uint32_t i = 0; i < n; ++i)
+        out[i] = (i < avail) ? results[i].timestamp : 0ull;
+    return true;
+}
 
 Swapchain* Device::swapchain() { return nullptr; }
 
@@ -743,6 +831,19 @@ void CommandList::beginRendering(const RenderTargetDesc& desc) {
         da->setLoadAction(toMTLLoad(desc.depth->load));
         da->setStoreAction(toMTLStore(desc.depth->store));
         da->setClearDepth(desc.depth->clearDepth);
+    }
+    // Optional GPU pass timing: sample the timestamp counter at the pass's stage boundaries into the
+    // pool (start-of-vertex = pass begin, end-of-fragment = pass end). Resolve later on the CPU.
+    if (desc.timestampPool.valid() && desc.timestampPool.index < dev->timestampPools.size()) {
+        const auto& ts = dev->timestampPools[desc.timestampPool.index];
+        if (ts.alive && ts.generation == desc.timestampPool.generation && ts.buffer) {
+            auto* sba = rp->sampleBufferAttachments()->object(0);
+            sba->setSampleBuffer(ts.buffer.get());
+            sba->setStartOfVertexSampleIndex(desc.timestampBegin);
+            sba->setEndOfFragmentSampleIndex(desc.timestampEnd);
+            sba->setEndOfVertexSampleIndex(MTL::CounterDontSample);
+            sba->setStartOfFragmentSampleIndex(MTL::CounterDontSample);
+        }
     }
     impl_->encoder = impl_->cmd->renderCommandEncoder(rp);   // autoreleased
 }

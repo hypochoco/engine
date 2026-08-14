@@ -32,6 +32,13 @@ target_link_libraries(engine_core
         Threads::Threads
 )
 
+# Profiling instrumentation macro. Defined (PUBLIC → propagates to consumers) only when the
+# ENGINE_PROFILING option is ON *and* the build config is not Release, so shipping/Release builds
+# compile all ENGINE_PROFILE_SCOPE/ENGINE_PROFILE_FRAME instrumentation out to nothing.
+if(ENGINE_PROFILING)
+    target_compile_definitions(engine_core PUBLIC $<$<NOT:$<CONFIG:Release>>:ENGINE_PROFILING>)
+endif()
+
 # tinyobjloader (.obj mesh loader) and stb (image loader) are used only by the graphics module,
 # not by core itself — link them only in a full (non-training) build so the headless training
 # aggregate stays graphics-dependency-free.
