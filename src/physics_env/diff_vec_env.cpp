@@ -11,6 +11,11 @@
 
 namespace engine::physics_env {
 
+namespace {
+// Per-body quaternion (wxyz) → rotation matrix (shared convention; see diff/linalg.h).
+inline diff::M3<float> quatWXYZToM3(const float* q) { return diff::m3FromQuatWXYZ(q[0], q[1], q[2], q[3]); }
+} // namespace
+
 DiffVecEnv::DiffVecEnv(size_t numEnvs, const EnvConfig& config, engine::core::ThreadPool* pool)
     : pool_(pool) {
     const physics::SimConfig& sim = config.sim;
@@ -66,6 +71,27 @@ void DiffVecEnv::reset(uint64_t /*seed*/) {
 void DiffVecEnv::resetMasked(std::span<const uint8_t> mask, uint64_t /*seed*/) {
     forEachEnv([&](size_t i) {
         if (i < mask.size() && mask[i]) { states_[i] = init_; packObs(i); }
+    });
+}
+
+void DiffVecEnv::setArticulationState(std::span<const float> pos, std::span<const float> quat,
+                                      std::span<const float> lin, std::span<const float> ang) {
+    const size_t N = states_.size();
+    const size_t B = static_cast<size_t>(numLinks_);
+    if (pos.size() < N * B * 3 || quat.size() < N * B * 4 || lin.size() < N * B * 3 || ang.size() < N * B * 3)
+        return;   // malformed batch — leave state untouched (matches the reduced VecEnv guard)
+    forEachEnv([&](size_t i) {
+        diff::V3<float> p[diff::kMaxLinks], lv[diff::kMaxLinks], av[diff::kMaxLinks];
+        diff::M3<float> R[diff::kMaxLinks];
+        for (size_t k = 0; k < B; ++k) {
+            const size_t b = i * B + k;
+            p[k]  = { pos[b * 3 + 0], pos[b * 3 + 1], pos[b * 3 + 2] };
+            lv[k] = { lin[b * 3 + 0], lin[b * 3 + 1], lin[b * 3 + 2] };
+            av[k] = { ang[b * 3 + 0], ang[b * 3 + 1], ang[b * 3 + 2] };
+            R[k]  = quatWXYZToM3(&quat[b * 4]);
+        }
+        states_[i] = diff::diffStateFromWorld<diff::DiffModel, float>(model_, p, R, lv, av);
+        packObs(i);
     });
 }
 

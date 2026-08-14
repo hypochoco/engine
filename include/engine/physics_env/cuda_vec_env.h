@@ -58,10 +58,24 @@ public:
     void resetMasked(std::span<const uint8_t> mask, uint64_t seed = 0) override;  // reset only flagged envs
     void step() override;                                         // actions() -> tau -> substeps -> pack obs
 
+    // RSI / full-state-set (set-all): reconstruct every env's DiffState from per-body WORLD states —
+    // pos[N*nbody*3], quat[N*nbody*4] (wxyz), lin/ang[N*nbody*3] (link-indexed). Host-reconstructs via
+    // diff::diffStateFromWorld, uploads to device, refreshes obs. See 2026-07-17-diff-cuda-rsi-state-set-plan.
+    void setArticulationState(std::span<const float> pos, std::span<const float> quat,
+                              std::span<const float> lin, std::span<const float> ang);
+
+    // Per-body world-state readout (host mirrors), lazily synced from device via a FK pack kernel on
+    // first access after a step/reset/set. Layout [N, nbody, ·], quats wxyz — matches DiffVecEnv/VecEnv.
+    std::span<const float> bodyPos();
+    std::span<const float> bodyQuat();
+    std::span<const float> bodyLinvel();
+    std::span<const float> bodyAngvel();
+
 private:
     void uploadActions();
     void applyActionsToTau();     // action -> tau kernel (Torque / PDTarget)
     void packObs();               // obs kernel -> dObs_ -> obs_ (host)
+    void syncBodyState();         // FK pack kernel -> device body SoA -> host mirrors (memoized per step)
 
     size_t numEnvs_ = 0, actDim_ = 0, obsDim_ = 0;
     int    numLinks_ = 0, numDof_ = 0;
@@ -81,6 +95,13 @@ private:
     float* dObs_     = nullptr;   // device [N*obsDim]
     diff::DiffState<float>* dInit_ = nullptr;   // device [N] authored init (for reset / reset_masked)
     uint8_t*                dMask_ = nullptr;   // device [N] reset mask
+    // Per-body world-state readout (device SoA + host mirrors), filled lazily by syncBodyState().
+    float* dBodyPos_    = nullptr;   // device [N*nbody*3]
+    float* dBodyQuat_   = nullptr;   // device [N*nbody*4] (wxyz)
+    float* dBodyLinvel_ = nullptr;   // device [N*nbody*3]
+    float* dBodyAngvel_ = nullptr;   // device [N*nbody*3]
+    std::vector<float> bodyPos_, bodyQuat_, bodyLinvel_, bodyAngvel_;   // host mirrors [N, nbody, ·]
+    bool   bodyDirty_ = true;        // mirrors stale until the next syncBodyState()
     std::vector<float> actions_;  // host mirror [N*actDim]
     std::vector<float> obs_;      // host mirror [N*obsDim]
     std::vector<diff::DiffState<float>> initStates_;  // host initial state (per env), for reset
