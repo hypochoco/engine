@@ -48,6 +48,13 @@ public:
     void resetMasked(std::span<const uint8_t> mask, uint64_t seed);  // reset only flagged envs
     void step();                                                 // actions → tau → substeps → obs
 
+    // RSI / full-state-set (set-all): reconstruct every env's DiffState from per-body WORLD states —
+    // pos[N*nbody*3], quat[N*nbody*4] (wxyz), lin/ang[N*nbody*3] (link-indexed). The inverse of the
+    // body_pos/quat/linvel/angvel readout (diff::diffStateFromWorld); refreshes obs. Set-all: pass the
+    // current readout for envs you don't want to move. See 2026-07-17-diff-cuda-rsi-state-set-plan.
+    void setArticulationState(std::span<const float> pos, std::span<const float> quat,
+                              std::span<const float> lin, std::span<const float> ang);
+
     // Escape hatch (tests / RSI): the per-env diff state.
     const diff::DiffState<float>& state(size_t i) const { return states_[i]; }
     diff::DiffState<float>&       state(size_t i)       { return states_[i]; }

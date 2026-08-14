@@ -557,4 +557,44 @@ std::vector<LinkWorld<S>> linkWorld(const DiffModel& md, const DiffState<S>& st)
     return out;
 }
 
+// Inverse of linkWorldInto: reconstruct the generalized DiffState from target per-body WORLD states
+// (link-indexed: pos = COM world, rot = world orientation, linVel/angVel = world). This is the RSI /
+// full-state-set primitive (2026-07-17-diff-cuda-rsi-state-set-plan). Exact for the floating base +
+// revolute/ball joints, mirroring featherstone_world.cpp::setArticulationState:
+//   R_cp   = rotᵀ[parent]·rot[child]  (child-in-parent);  linkRot = restRelᵀ·R_cp  (strip the rest)
+//   ωRel_c = rotᵀ[child]·(angVel[child] − angVel[parent]);  qd[d]  = axes[d] · ωRel_c
+// Only the ROOT pos/linVel are consumed — child COM positions/linear-vels are redundant (the chain +
+// restRel/anchors fix them once the rotations are set), so the input must be consistent with the rig
+// (guaranteed by retarget_to_rig, the same precondition the reduced backend relies on). Templated on
+// M so it serves DiffModel (host) and FlatModel (host-side reconstruction for the CUDA path).
+template <class M, class S>
+DiffState<S> diffStateFromWorld(const M& md, const V3<S>* pos, const M3<S>* rot,
+                                const V3<S>* linVel, const V3<S>* angVel) {
+    const int n = hdNumLinks(md);
+    assert(n <= kMaxLinks && hdNumDof(md) <= kMaxDof);
+    DiffState<S> st;
+    st.numLinks = n;
+    st.numDof   = hdNumDof(md);
+    for (int i = 0; i < n; ++i) st.linkRot[i] = identity3<S>();   // qd[] is zero-initialized
+    const bool floating = hdFloating(md);
+    for (int i = 0; i < n; ++i) {
+        const HDLink L = hdLink(md, i);
+        if (L.parent < 0) {                                       // (floating) base
+            st.basePos = pos[i];
+            st.baseRot = rot[i];
+            if (floating) {
+                const M3<S> Rt = transpose(rot[i]);               // world → base frame
+                st.baseTwist = makeV6(Rt * angVel[i], Rt * linVel[i]);
+            }
+        } else {                                                  // jointed child
+            const M3<S> R_cp = transpose(rot[L.parent]) * rot[i];
+            st.linkRot[i]    = transpose(lift<S>(*L.restRel)) * R_cp;
+            const V3<S> wRelC = transpose(rot[i]) * (angVel[i] - angVel[L.parent]);
+            for (int d = 0; d < L.dof; ++d)
+                st.qd[L.qIndex + d] = dot(lift<S>(L.axes[d]), wRelC);
+        }
+    }
+    return st;
+}
+
 } // namespace engine::physics::diff

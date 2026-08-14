@@ -54,6 +54,26 @@ __global__ void resetMaskedKernel(diff::DiffState<float>* states, const diff::Di
     if (mask[e]) states[e] = init[e];
 }
 
+// Per-body world-state readout: one thread per env runs the shared FK (linkWorldInto) on its DiffState
+// and writes the per-link world pos / quat(wxyz) / linVel / angVel into SoA device buffers. Mirrors
+// packObsKernel; leaner than downloading full DiffState blobs (writes only nBody*13 floats/env).
+__global__ void bodyStateKernel(const diff::FlatModel* md, const diff::DiffState<float>* states,
+                                float* pos, float* quat, float* lin, float* ang, int nEnv, int nBody) {
+    const int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= nEnv) return;
+    diff::LinkWorld<float> lw[diff::kMaxLinks];
+    diff::linkWorldInto(*md, states[e], lw);
+    for (int k = 0; k < nBody; ++k) {
+        const diff::LinkWorld<float>& L = lw[k];
+        const size_t o3 = (static_cast<size_t>(e) * nBody + k) * 3;
+        const size_t o4 = (static_cast<size_t>(e) * nBody + k) * 4;
+        pos[o3 + 0] = L.pos.x;    pos[o3 + 1] = L.pos.y;    pos[o3 + 2] = L.pos.z;
+        lin[o3 + 0] = L.linVel.x; lin[o3 + 1] = L.linVel.y; lin[o3 + 2] = L.linVel.z;
+        ang[o3 + 0] = L.angVel.x; ang[o3 + 1] = L.angVel.y; ang[o3 + 2] = L.angVel.z;
+        diff::quatWXYZFromM3(L.rot, &quat[o4]);
+    }
+}
+
 } // namespace
 
 CudaVecEnv::CudaVecEnv(size_t numEnvs, const EnvConfig& config) : numEnvs_(numEnvs) {
@@ -91,6 +111,15 @@ CudaVecEnv::CudaVecEnv(size_t numEnvs, const EnvConfig& config) : numEnvs_(numEn
     cudaCheck(cudaMalloc(&dMask_,    sizeof(uint8_t) * numEnvs_), "cudaMalloc mask");
     cudaCheck(cudaMemcpy(dInit_, initStates_.data(), sizeof(diff::DiffState<float>) * numEnvs_,
                          cudaMemcpyHostToDevice), "upload init");
+    // Per-body world-state readout buffers (device SoA + host mirrors), filled lazily by syncBodyState().
+    cudaCheck(cudaMalloc(&dBodyPos_,    sizeof(float) * numEnvs_ * static_cast<size_t>(numLinks_) * 3), "cudaMalloc bodyPos");
+    cudaCheck(cudaMalloc(&dBodyQuat_,   sizeof(float) * numEnvs_ * static_cast<size_t>(numLinks_) * 4), "cudaMalloc bodyQuat");
+    cudaCheck(cudaMalloc(&dBodyLinvel_, sizeof(float) * numEnvs_ * static_cast<size_t>(numLinks_) * 3), "cudaMalloc bodyLinvel");
+    cudaCheck(cudaMalloc(&dBodyAngvel_, sizeof(float) * numEnvs_ * static_cast<size_t>(numLinks_) * 3), "cudaMalloc bodyAngvel");
+    bodyPos_.assign(numEnvs_ * static_cast<size_t>(numLinks_) * 3, 0.0f);
+    bodyQuat_.assign(numEnvs_ * static_cast<size_t>(numLinks_) * 4, 0.0f);
+    bodyLinvel_.assign(numEnvs_ * static_cast<size_t>(numLinks_) * 3, 0.0f);
+    bodyAngvel_.assign(numEnvs_ * static_cast<size_t>(numLinks_) * 3, 0.0f);
     actions_.assign(numEnvs_ * actDim_, 0.0f);
     obs_.assign(numEnvs_ * obsDim_, 0.0f);
 
@@ -102,6 +131,10 @@ CudaVecEnv::~CudaVecEnv() {
     cudaFree(dObs_);
     cudaFree(dInit_);
     cudaFree(dMask_);
+    cudaFree(dBodyPos_);
+    cudaFree(dBodyQuat_);
+    cudaFree(dBodyLinvel_);
+    cudaFree(dBodyAngvel_);
 }
 
 void CudaVecEnv::uploadActions() {
@@ -127,6 +160,7 @@ void CudaVecEnv::reset(uint64_t /*seed*/) {
     bf_->setStates(initStates_);                 // all envs to the authored initial state
     std::fill(actions_.begin(), actions_.end(), 0.0f);
     cudaCheck(cudaMemset(dActions_, 0, sizeof(float) * actions_.size()), "reset actions");
+    bodyDirty_ = true;
     packObs();
     bf_->synchronize();
 }
@@ -139,6 +173,7 @@ void CudaVecEnv::resetMasked(std::span<const uint8_t> mask, uint64_t /*seed*/) {
     const int block = 128, grid = (static_cast<int>(numEnvs_) + block - 1) / block;
     resetMaskedKernel<<<grid, block>>>(bf_->deviceStates(), dInit_, dMask_, static_cast<int>(numEnvs_));
     cudaCheck(cudaGetLastError(), "resetMaskedKernel");
+    bodyDirty_ = true;
     packObs();
     bf_->synchronize();
 }
@@ -154,6 +189,51 @@ void CudaVecEnv::step() {
         applyActionsToTau();
         bf_->step(1, h_, g);
     }
+    bodyDirty_ = true;
+    packObs();
+    bf_->synchronize();
+}
+
+void CudaVecEnv::syncBodyState() {
+    if (!bodyDirty_) return;
+    const int block = 128, grid = (static_cast<int>(numEnvs_) + block - 1) / block;
+    bodyStateKernel<<<grid, block>>>(bf_->deviceModel(), bf_->deviceStates(),
+                                     dBodyPos_, dBodyQuat_, dBodyLinvel_, dBodyAngvel_,
+                                     static_cast<int>(numEnvs_), numLinks_);
+    cudaCheck(cudaGetLastError(), "bodyStateKernel");
+    cudaCheck(cudaMemcpy(bodyPos_.data(),    dBodyPos_,    sizeof(float) * bodyPos_.size(),    cudaMemcpyDeviceToHost), "download bodyPos");
+    cudaCheck(cudaMemcpy(bodyQuat_.data(),   dBodyQuat_,   sizeof(float) * bodyQuat_.size(),   cudaMemcpyDeviceToHost), "download bodyQuat");
+    cudaCheck(cudaMemcpy(bodyLinvel_.data(), dBodyLinvel_, sizeof(float) * bodyLinvel_.size(), cudaMemcpyDeviceToHost), "download bodyLinvel");
+    cudaCheck(cudaMemcpy(bodyAngvel_.data(), dBodyAngvel_, sizeof(float) * bodyAngvel_.size(), cudaMemcpyDeviceToHost), "download bodyAngvel");
+    bf_->synchronize();
+    bodyDirty_ = false;
+}
+
+std::span<const float> CudaVecEnv::bodyPos()    { syncBodyState(); return bodyPos_; }
+std::span<const float> CudaVecEnv::bodyQuat()   { syncBodyState(); return bodyQuat_; }
+std::span<const float> CudaVecEnv::bodyLinvel() { syncBodyState(); return bodyLinvel_; }
+std::span<const float> CudaVecEnv::bodyAngvel() { syncBodyState(); return bodyAngvel_; }
+
+void CudaVecEnv::setArticulationState(std::span<const float> pos, std::span<const float> quat,
+                                      std::span<const float> lin, std::span<const float> ang) {
+    const size_t N = numEnvs_, B = static_cast<size_t>(numLinks_);
+    if (pos.size() < N * B * 3 || quat.size() < N * B * 4 || lin.size() < N * B * 3 || ang.size() < N * B * 3)
+        return;   // malformed batch — leave state untouched
+    std::vector<diff::DiffState<float>> st(N);
+    for (size_t i = 0; i < N; ++i) {
+        diff::V3<float> p[diff::kMaxLinks], lv[diff::kMaxLinks], av[diff::kMaxLinks];
+        diff::M3<float> R[diff::kMaxLinks];
+        for (size_t k = 0; k < B; ++k) {
+            const size_t b = i * B + k;
+            p[k]  = { pos[b * 3 + 0], pos[b * 3 + 1], pos[b * 3 + 2] };
+            lv[k] = { lin[b * 3 + 0], lin[b * 3 + 1], lin[b * 3 + 2] };
+            av[k] = { ang[b * 3 + 0], ang[b * 3 + 1], ang[b * 3 + 2] };
+            R[k]  = diff::m3FromQuatWXYZ(quat[b * 4 + 0], quat[b * 4 + 1], quat[b * 4 + 2], quat[b * 4 + 3]);
+        }
+        st[i] = diff::diffStateFromWorld<diff::FlatModel, float>(*model_, p, R, lv, av);
+    }
+    bf_->setStates(st);              // host → device (all envs)
+    bodyDirty_ = true;
     packObs();
     bf_->synchronize();
 }

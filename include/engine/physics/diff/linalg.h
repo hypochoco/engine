@@ -69,6 +69,41 @@ template <class S> ENGINE_HD M3<S> rodrigues(const V3<S>& axis, const S& angle) 
     return identity3<S>() + scaled(K, s) + scaled(K * K, omc);
 }
 
+// Quaternion (w,x,y,z, assumed unit) → rotation matrix (row-major m[row][col], maps local→world;
+// matches glm::mat3_cast). Shared by CPU + CUDA so the RSI state-set uses one convention everywhere.
+template <class S> ENGINE_HD M3<S> m3FromQuatWXYZ(S w, S x, S y, S z) {
+    const S xx = x * x, yy = y * y, zz = z * z, xy = x * y, xz = x * z, yz = y * z, wx = w * x, wy = w * y, wz = w * z;
+    M3<S> R;
+    R.m[0][0] = S(1) - S(2) * (yy + zz); R.m[0][1] = S(2) * (xy - wz);       R.m[0][2] = S(2) * (xz + wy);
+    R.m[1][0] = S(2) * (xy + wz);        R.m[1][1] = S(1) - S(2) * (xx + zz); R.m[1][2] = S(2) * (yz - wx);
+    R.m[2][0] = S(2) * (xz - wy);        R.m[2][1] = S(2) * (yz + wx);        R.m[2][2] = S(1) - S(2) * (xx + yy);
+    return R;
+}
+
+// Rotation matrix (local→world) → quaternion (w,x,y,z) via Shepperd's method (stable across cases).
+// The exact inverse of m3FromQuatWXYZ; identical convention to engine_py.cpp::m3ToQuatWXYZ so the
+// CUDA per-body readout matches the CPU one bit-for-modulo-FMA.
+template <class S> ENGINE_HD void quatWXYZFromM3(const M3<S>& R, S* q) {
+    using std::sqrt;
+    const S m00 = R.m[0][0], m11 = R.m[1][1], m22 = R.m[2][2];
+    const S tr = m00 + m11 + m22;
+    S w, x, y, z;
+    if (tr > S(0)) {
+        const S s = sqrt(tr + S(1)) * S(2);
+        w = S(0.25) * s; x = (R.m[2][1] - R.m[1][2]) / s; y = (R.m[0][2] - R.m[2][0]) / s; z = (R.m[1][0] - R.m[0][1]) / s;
+    } else if (m00 > m11 && m00 > m22) {
+        const S s = sqrt(S(1) + m00 - m11 - m22) * S(2);
+        w = (R.m[2][1] - R.m[1][2]) / s; x = S(0.25) * s; y = (R.m[0][1] + R.m[1][0]) / s; z = (R.m[0][2] + R.m[2][0]) / s;
+    } else if (m11 > m22) {
+        const S s = sqrt(S(1) + m11 - m00 - m22) * S(2);
+        w = (R.m[0][2] - R.m[2][0]) / s; x = (R.m[0][1] + R.m[1][0]) / s; y = S(0.25) * s; z = (R.m[1][2] + R.m[2][1]) / s;
+    } else {
+        const S s = sqrt(S(1) + m22 - m00 - m11) * S(2);
+        w = (R.m[1][0] - R.m[0][1]) / s; x = (R.m[0][2] + R.m[2][0]) / s; y = (R.m[1][2] + R.m[2][1]) / s; z = S(0.25) * s;
+    }
+    q[0] = w; q[1] = x; q[2] = y; q[3] = z;
+}
+
 // ---------------------------------------------------------------- 6D spatial -------------------
 template <class S> struct V6 { S d[6]{}; };            // [ω(0..2); v(3..5)]
 template <class S> struct M6 { S m[6][6]{}; };
